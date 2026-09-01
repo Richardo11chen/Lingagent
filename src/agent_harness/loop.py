@@ -2,6 +2,7 @@
 
 from typing import Callable
 from .llm import LLM, Action
+from .sensors import run_sensors
 
 MAX_STEPS = 20
 Tool = Callable[..., str]
@@ -22,6 +23,7 @@ def agent_loop(
     llm: LLM,
     tools: dict[str, Tool],
     system_prompt: str,
+    sensor: Callable[[], str] | None = None, 
     history: list[tuple[str, str]] | None = None,
     max_steps: int = MAX_STEPS,
 ) -> tuple[str, list[tuple[str, str]]]:
@@ -56,6 +58,11 @@ def agent_loop(
         else:
             result = "未知动作类型。"
             history.append(("user", result))
+
+        if action.changed_code and sensor:
+            report = sensor()
+            history.append(("user", report))
+
     if answer is None:
         answer = "已达到最大步数，停机。"
 
