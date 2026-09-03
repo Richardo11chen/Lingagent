@@ -3,6 +3,7 @@
 from typing import Callable
 from .llm import LLM, Action
 from .sensors import run_sensors
+from .guardrail import is_dangerous_command
 
 MAX_STEPS = 20
 Tool = Callable[..., str]
@@ -24,6 +25,7 @@ def agent_loop(
     tools: dict[str, Tool],
     system_prompt: str,
     sensor: Callable[[], str] | None = None, 
+    approver: Callable[[str], bool] | None = None,
     history: list[tuple[str, str]] | None = None,
     max_steps: int = MAX_STEPS,
 ) -> tuple[str, list[tuple[str, str]]]:
@@ -47,14 +49,25 @@ def agent_loop(
             break
         elif action.type == "call_tool":
             tool_func = tools.get(action.tool)
-            if tool_func:
+            if action.tool == "run_shell" and is_dangerous_command(action.args.get("command", "")):
+                # 治理护栏：危险命令，先问人——批准才真执行，其余路径都到此为止
+                if approver is None:
+                    result = "无批准者，命令被策略拦截：危险命令不执行。"
+                elif approver(action.args["command"]):
+                    try:
+                        result = tool_func(**action.args)      # 批准 → 真执行
+                    except Exception as e:
+                        result = f"{action.tool}工具调用失败。"
+                else:
+                    result = "命令被驳回，未执行。"
+            elif tool_func:
                 try:
                     result = tool_func(**action.args)
                 except Exception as e:
                     result = f"{action.tool}工具调用失败。"
             else:
-                result = "工具不存在。"
-            history.append(("user", result)) 
+                result = f"工具不存在：未知工具 {action.tool}。"
+            history.append(("user", result))   # 只回灌一次
         else:
             result = "未知动作类型。"
             history.append(("user", result))
