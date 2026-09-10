@@ -1,6 +1,6 @@
 """S2 单测：反馈校验器（判红绿）+ 触发接线（changed_code）。规格硬标准：脱离 LLM 可验证。"""
 
-from agent_harness.llm import Action, LLM
+from agent_harness.llm import Action, ScriptLLM
 from agent_harness.loop import agent_loop
 from agent_harness.sensors import run_sensors
 from agent_harness.tools import write_file
@@ -22,19 +22,19 @@ def test_2():  # 动态截断：绿报告不贴输出；红 + 长输出只留尾
     assert len(red_long.splitlines()) <= 21  # 标题 1 行 + 尾部 20 行
 
 
-def test_3(tmp_path):  # changed_code=True → 触发 sensor，报告进历史
-    sensor = lambda: "SENSOR_REPORT"
-    tools = {"write_file": write_file}
-    llm = LLM(
-        [Action("call_tool", "write_file", {"path": str(tmp_path / "x.py"), "content": "y"}, changed_code=True)]
-    )
-    _, history = agent_loop("干活", llm, tools, "sys", sensor=sensor)
-    assert any("SENSOR_REPORT" in c for r, c in history if r == "user")
+def test_3(tmp_path):  # run_tests 工具（决策 B）：调用后绿报告回灌进历史
+    from agent_harness.sensors import run_tests
+    (tmp_path / "test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    tools = {"run_tests": run_tests}
+    llm = ScriptLLM([Action("run_tests", {"path": str(tmp_path)})])
+    _, history = agent_loop("干活", llm, tools, "sys")
+    assert any("测试全部通过" in m.content for m in history if m.role == "user")
 
 
-def test_4(tmp_path):  # 反向：不声明 changed_code → 不触发
-    sensor = lambda: "SENSOR_REPORT"
-    tools = {"write_file": write_file}
-    llm = LLM([Action("call_tool", "write_file", {"path": str(tmp_path / "x.py"), "content": "y"})])
-    _, history = agent_loop("干活", llm, tools, "sys", sensor=sensor)
-    assert not any("SENSOR_REPORT" in c for r, c in history)
+def test_4(tmp_path):  # run_tests：失败测试 → 红报告（结构化提取）回灌
+    from agent_harness.sensors import run_tests
+    (tmp_path / "test_bad.py").write_text("def test_bad():\n    assert False\n", encoding="utf-8")
+    tools = {"run_tests": run_tests}
+    llm = ScriptLLM([Action("run_tests", {"path": str(tmp_path)})])
+    _, history = agent_loop("干活", llm, tools, "sys")
+    assert any("测试失败" in m.content for m in history if m.role == "user")

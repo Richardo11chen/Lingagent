@@ -6,7 +6,7 @@
 from pathlib import Path
 
 from agent_harness.guardrail import is_dangerous_command
-from agent_harness.llm import Action, LLM
+from agent_harness.llm import Action, ScriptLLM
 from agent_harness.loop import agent_loop
 from agent_harness.tools import run_shell, write_file
 
@@ -27,28 +27,28 @@ def test_guardrail_detects_dangerous():  # 危险命令判定：rm -rf / del /s 
 
 def test_approver_approves_executes_command(tmp_path):  # approver 批准 → 危险命令真执行（回灌执行输出，无驳回语）
     target = tmp_path / "demo_trash"
-    llm = LLM([Action("call_tool", "run_shell", {"command": f"rm -rf {target}"})])
+    llm = ScriptLLM([Action("run_shell", {"command": f"rm -rf {target}"})])
     _, history = agent_loop("干活", llm, make_tools(), "sys", approver=lambda cmd: True)
     # 没有驳回语；回灌的是 run_shell 的执行输出（退出码开头）——证明命令真执行了
-    assert not any("被驳回" in c for r, c in history if r == "user")
-    assert any("退出码" in c for r, c in history if r == "user")
+    assert not any("被驳回" in m.content for m in history if m.role == "user")
+    assert any("退出码" in m.content for m in history if m.role == "user")
 
 
 def test_approver_rejects_blocks_command(tmp_path):  # approver 驳回 → 回灌驳回语，命令不执行
     target = tmp_path / "demo_trash"
-    llm = LLM([Action("call_tool", "run_shell", {"command": f"rm -rf {target}"})])
+    llm = ScriptLLM([Action("run_shell", {"command": f"rm -rf {target}"})])
     _, history = agent_loop("干活", llm, make_tools(), "sys", approver=lambda cmd: False)
-    assert any("命令被驳回" in c for r, c in history if r == "user")
+    assert any("命令被驳回" in m.content for m in history if m.role == "user")
     # 没有任何执行输出（退出码）——命令没跑
-    assert not any("退出码" in c for r, c in history if r == "user")
+    assert not any("退出码" in m.content for m in history if m.role == "user")
 
 
 def test_no_approver_blocks_dangerous(tmp_path):  # approver=None → 危险命令被策略拦截，不执行
     target = tmp_path / "demo_trash"
-    llm = LLM([Action("call_tool", "run_shell", {"command": f"rm -rf {target}"})])
+    llm = ScriptLLM([Action("run_shell", {"command": f"rm -rf {target}"})])
     _, history = agent_loop("干活", llm, make_tools(), "sys")
-    assert any("被策略拦截" in c for r, c in history if r == "user")
-    assert not any("退出码" in c for r, c in history if r == "user")
+    assert any("被策略拦截" in m.content for m in history if m.role == "user")
+    assert not any("退出码" in m.content for m in history if m.role == "user")
 
 
 def test_in_workspace_resolves_traversal(tmp_path):  # 路径穿越判定：../ 解析后越界是 False，界内是 True
@@ -73,7 +73,7 @@ def test_safe_tool_blocks_outside_workspace(tmp_path):  # safe_tool：界外拦�
 def test_agent_loop_fence_blocks_traversal(tmp_path):  # 接线：剧本写 ../ 路径 → 越界拦截进历史
     from agent_harness.guardrail import safe_tool
     tools = {"write_file": safe_tool(write_file, tmp_path)}
-    llm = LLM([Action("call_tool", "write_file", {"path": str(tmp_path / ".." / "evil.txt"), "content": "hack"})])
+    llm = ScriptLLM([Action("write_file", {"path": str(tmp_path / ".." / "evil.txt"), "content": "hack"})])
     _, history = agent_loop("干活", llm, tools, "sys")
-    assert any("越界拦截" in c for r, c in history if r == "user")
+    assert any("越界拦截" in m.content for m in history if m.role == "user")
     assert not (tmp_path.parent / "evil.txt").exists()
