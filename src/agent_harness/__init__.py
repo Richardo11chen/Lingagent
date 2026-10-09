@@ -36,25 +36,37 @@ def choose_session(workspace: Path) -> tuple[str, list[Msg]]:
     return s["id"], load_session(workspace, s["id"])
 
 def main() -> None:
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Agent Harness CLI")
+    ap.add_argument("--model", help="模型 profile 名（配置 [models.*]；缺省用 default）")
+    args = ap.parse_args()
+
     base_prompt = build_system_prompt()
-    DeepSeekllm, settings = load_settings_and_llm(base_prompt)  # 按配置文件构造（流式）
+    llm, settings = load_settings_and_llm(base_prompt, args.model)  # 可切换门面（流式）
     approver = lambda cmd: tui.show_approval(cmd).strip().lower() == "y"
 
     session_id, history = choose_session(WORKSPACE)
-    tui.show_banner(session_id, len(history))
+    tui.show_banner(session_id, len(history), llm.current)
     if history:
         tui.show_history(history)  # 恢复的会话：把历史渲染出来
     while True:
         goal = tui.ask().strip()
         if goal in ("exit", "quit"):
             break
+        if goal == "/model":  # 运行时切换模型
+            tui.show_models(llm.profiles, llm.current_profile)
+            pick = tui.ask().strip()
+            if pick.isdigit() and 1 <= int(pick) <= len(llm.profiles):
+                tui.show_note(f"已切换到 {llm.switch(llm.profiles[int(pick) - 1])}")
+            continue
         if not goal:
             continue
         tui.show_user(goal)
         tui.begin_stream()
         old_len = len(history)
         reply, history = agent_loop(
-            goal, DeepSeekllm, tools, base_prompt,
+            goal, llm, tools, base_prompt,
             approver=approver, history=history,
             on_text=tui.stream_chunk, on_tool=tui.show_tool,
             on_reasoning=tui.reasoning_chunk,

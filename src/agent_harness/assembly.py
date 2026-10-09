@@ -44,22 +44,70 @@ def list_visible_sessions() -> list[dict]:
     return [s for s in list_sessions(WORKSPACE) if s["first_user_msg"]]
 
 
-def load_settings_and_llm(system_prompt: str):
-    """按 ~/.agent_harness.toml 配置构造真模型适配器——返回 (llm, settings)。"""
-    from .llm import DeepSeekLLM
+class SwitchableLLM:
+    """可运行时切换的模型门面（对主循环透明——接口与 LLM 一致）。
+
+    /model 换的是内部持有的适配器实例；history、会话全不受影响。
+    """
+
+    def __init__(self, system_prompt: str, settings, name: str | None = None):
+        self._sp = system_prompt
+        self._settings = settings
+        self._name = name or settings.default_model
+        self._inner = self._build(self._name)
+
+    def _build(self, name: str):
+        from .llm import DeepSeekLLM
+
+        p = self._settings.model(name)
+        return DeepSeekLLM(
+            self._sp,
+            model=p.name,
+            base_url=p.base_url,
+            api_key_env=p.api_key_env,
+            temperature=p.temperature,
+            compact_threshold=self._settings.compact_threshold,
+            keep_last=self._settings.keep_last,
+            snip_keep_groups=self._settings.snip_keep_groups,
+            thinking=p.thinking,
+            reasoning_effort=p.reasoning_effort,
+        )
+
+    def switch(self, name: str) -> str:
+        """切到某个 profile——返回实际模型名（供界面提示）。名字未知抛 KeyError。"""
+        if name not in self._settings.models:
+            raise KeyError(name)
+        self._name = name
+        self._inner = self._build(name)
+        return self.current
+
+    @property
+    def current(self) -> str:
+        """当前实际模型名（如 deepseek-v4-pro）。"""
+        return self._settings.model(self._name).name
+
+    @property
+    def current_profile(self) -> str:
+        """当前 profile 名（如 flash）。"""
+        return self._name
+
+    @property
+    def profiles(self) -> list[str]:
+        return list(self._settings.models)
+
+    def __call__(self, messages, tools, on_text=None, on_reasoning=None):
+        return self._inner(messages, tools, on_text=on_text, on_reasoning=on_reasoning)
+
+
+def load_settings_and_llm(system_prompt: str, model_name: str | None = None):
+    """按 ~/.agent_harness.toml 构造可切换模型门面——返回 (llm, settings)。
+
+    model_name：初始 profile（None = 配置的 default）。
+    """
     from .settings import load_settings
 
     s = load_settings()
-    llm = DeepSeekLLM(
-        system_prompt,
-        model=s.model_name,
-        base_url=s.model_base_url,
-        api_key_env=s.model_api_key_env,
-        temperature=s.temperature,
-        compact_threshold=s.compact_threshold,
-        keep_last=s.keep_last,
-        snip_keep_groups=s.snip_keep_groups,
-        thinking=s.thinking,
-        reasoning_effort=s.reasoning_effort,
-    )
-    return llm, s
+    if model_name and model_name not in s.models:
+        # fail fast：名字打错就当场说，别静默回退到别的模型
+        raise SystemExit(f"未知模型 profile：{model_name}（可用：{', '.join(s.models)}）")
+    return SwitchableLLM(system_prompt, s, model_name), s

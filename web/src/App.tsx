@@ -11,6 +11,8 @@ type Ev =
   | { type: 'assistant_done'; text: string }
   | { type: 'tool'; name: string; detail?: string }
   | { type: 'reasoning'; text: string }
+  | { type: 'models'; list: string[]; current: string }
+  | { type: 'model_switched'; model: string; error?: string }
   | { type: 'approval_request'; command: string }
 
 type Msg =
@@ -28,6 +30,8 @@ function App() {
   const [approval, setApproval] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
   const [sessions, setSessions] = useState<{ id: string; preview: string }[] | null>(null)
+  const [modelName, setModelName] = useState('')
+  const [modelPicker, setModelPicker] = useState<{ list: string[]; current: string } | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -51,6 +55,15 @@ function App() {
         )
       } else if (ev.type === 'sessions') {
         if (ev.list.length > 0) setSessions(ev.list)
+      } else if (ev.type === 'models') {
+        setModelPicker({ list: ev.list, current: ev.current })
+      } else if (ev.type === 'model_switched') {
+        if (ev.model) {
+          setModelName(ev.model)
+          setMsgs((ms) => [...ms, { kind: 'tool', name: `已切换到 ${ev.model}` }])
+        } else {
+          setMsgs((ms) => [...ms, { kind: 'tool', name: ev.error || '切换失败' }])
+        }
       } else if (ev.type === 'assistant_chunk') {
         setMsgs((ms) => {
           const last = ms[ms.length - 1]
@@ -91,6 +104,11 @@ function App() {
   const send = () => {
     const text = input.trim()
     if (!text || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+    if (text === '/model') {
+      wsRef.current.send(JSON.stringify({ type: 'models_request' }))
+      setInput('')
+      return
+    }
     wsRef.current.send(JSON.stringify({ type: 'user', text }))
     setMsgs((ms) => [...ms, { kind: 'user', text }])
     setInput('')
@@ -106,6 +124,7 @@ function App() {
       <header>
         <strong>Agent Harness</strong>
         {sessionId && <span className="sid">{sessionId}</span>}
+        {modelName && <span className="sid">{modelName}</span>}
         <span className={connected ? 'dot ok' : 'dot'}>●</span>
       </header>
       <main>
@@ -148,6 +167,26 @@ function App() {
           ))}
           <button className="new" onClick={() => setSessions(null)}>
             开新会话
+          </button>
+        </div>
+      )}
+      {modelPicker !== null && (
+        <div className="session-picker">
+          <h3>选择模型（输入 /model 呼出）</h3>
+          {modelPicker.list.map((n) => (
+            <button
+              key={n}
+              onClick={() => {
+                wsRef.current?.send(JSON.stringify({ type: 'switch_model', name: n }))
+                setModelPicker(null)
+              }}
+            >
+              {n}
+              {n === modelPicker.current ? ' ●' : ''}
+            </button>
+          ))}
+          <button className="new" onClick={() => setModelPicker(null)}>
+            取消
           </button>
         </div>
       )}

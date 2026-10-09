@@ -30,7 +30,7 @@ def _no_save(workspace, session_id, msgs):  # 测试不落盘
 
 
 def test_ws_streaming_and_done(monkeypatch):  # 基本流：session → chunk → done
-    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp: (FakeLLM(), Settings()))
+    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None: (FakeLLM(), Settings()))
     monkeypatch.setattr(server, "save_messages", _no_save)
     c = TestClient(server.app)
     with c.websocket_connect("/ws") as ws:
@@ -51,7 +51,7 @@ def test_ws_streaming_and_done(monkeypatch):  # 基本流：session → chunk �
 
 
 def test_ws_approval_approved(monkeypatch):  # 批准路径：命令真执行（run_shell 被调）
-    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp: (FakeLLM(), Settings()))
+    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None: (FakeLLM(), Settings()))
     monkeypatch.setattr(server, "save_messages", _no_save)
     ran = {}
 

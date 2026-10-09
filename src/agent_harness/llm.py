@@ -102,8 +102,8 @@ class DeepSeekLLM:
         compact_threshold: int = 70_000,
         keep_last: int = 5,
         snip_keep_groups: int = 3,
-        thinking: bool = True,
-        reasoning_effort: str = "high",
+        thinking: str = "off",
+        reasoning_effort: str = "off",
     ):
         self._client = OpenAI(api_key=os.environ[api_key_env], base_url=base_url)
         self._model = model
@@ -121,15 +121,20 @@ class DeepSeekLLM:
         on_text / on_reasoning：文本与思考增量回调（界面显示用；可为 None）。
         raw_tool_calls：按 index 拼装完整的 dict 列表（id/type/function——请求侧格式）。
         """
-        stream = self._client.chat.completions.create(
-            model=self._model,
-            messages=api_messages,
-            tools=tools or None,
-            temperature=self._temperature,
-            reasoning_effort=self._reasoning_effort,
-            extra_body={"thinking": {"type": "enabled" if self._thinking else "disabled"}},
-            stream=True,
-        )
+        # thinking / reasoning_effort 是 DeepSeek 私有参数：值为 "off" 时**不传**
+        # （跨厂商安全——别的 OpenAI 兼容端点收到未知参数可能 400）
+        kwargs: dict = {
+            "model": self._model,
+            "messages": api_messages,
+            "tools": tools or None,
+            "temperature": self._temperature,
+            "stream": True,
+        }
+        if self._thinking != "off":
+            kwargs["extra_body"] = {"thinking": {"type": self._thinking}}
+        if self._reasoning_effort != "off":
+            kwargs["reasoning_effort"] = self._reasoning_effort
+        stream = self._client.chat.completions.create(**kwargs)
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
         acc: dict[int, dict] = {}  # index → 拼装中的调用（分片按 index 归位）

@@ -47,10 +47,11 @@ def _session_get() -> PromptSession:
     return _session
 
 
-def show_banner(session_id: str, n_history: int) -> None:
+def show_banner(session_id: str, n_history: int, model_name: str = "") -> None:
+    tag = f" · [magenta]{model_name}[/]" if model_name else ""
     console.print(
         Panel(
-            f"会话 [cyan]{session_id}[/] · {n_history} 条历史 · [dim]exit 退出[/]",
+            f"会话 [cyan]{session_id}[/] · {n_history} 条历史{tag} · [dim]exit 退出[/]",
             title="Agent Harness",
             border_style="blue",
         )
@@ -150,6 +151,16 @@ def end_stream() -> None:
     if _live:
         _live.stop()  # 停 Live——内容留在屏幕
         _live = None
+
+
+def show_models(profiles: list[str], current: str) -> None:
+    """列可选模型（/model 时显示——● 标当前）。"""
+    lines = [f"  {i}. {n}{'  ●' if n == current else ''}" for i, n in enumerate(profiles, 1)]
+    console.print(Panel("\n".join(lines), title="选择模型（输入序号，回车取消）", border_style="magenta"))
+
+
+def show_note(text: str) -> None:
+    console.print(f"[magenta]{text}[/]")
 
 
 def show_tool(name: str, args: dict | None = None) -> None:

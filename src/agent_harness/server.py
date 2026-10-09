@@ -31,7 +31,7 @@ async def ws_endpoint(ws: WebSocket):
     loop = asyncio.get_running_loop()
     session_id = new_session_id(WORKSPACE)
     history: list[Msg] = []
-    llm, settings = load_settings_and_llm(build_system_prompt())
+    llm, settings = load_settings_and_llm(build_system_prompt(), _CLI_MODEL)
     approval: dict = {}  # 审批等待槽：{"event": Event, "result": bool}
     user_task: asyncio.Task | None = None
 
@@ -94,6 +94,18 @@ async def ws_endpoint(ws: WebSocket):
                 if ev:
                     approval["result"] = bool(msg.get("approved"))
                     ev.set()
+            elif mtype == "models_request":  # 列可选模型（/model）
+                await ws.send_json(
+                    {"type": "models", "list": llm.profiles, "current": llm.current_profile}
+                )
+            elif mtype == "switch_model":  # 运行时切换模型
+                name = str(msg.get("name", ""))
+                try:
+                    await ws.send_json({"type": "model_switched", "model": llm.switch(name)})
+                except KeyError:
+                    await ws.send_json(
+                        {"type": "model_switched", "model": "", "error": f"未知 profile：{name}"}
+                    )
             elif mtype == "sessions_request":  # 列历史会话（前端启动时问）
                 items = [
                     {"id": s["id"], "preview": s["first_user_msg"]}
@@ -123,10 +135,22 @@ async def ws_endpoint(ws: WebSocket):
 
 
 def main() -> None:
+    import argparse
+
     from .settings import load_settings
 
+    ap = argparse.ArgumentParser(description="Agent Harness Web")
+    ap.add_argument("--model", help="模型 profile 名（配置 [models.*]；缺省用 default）")
+    args = ap.parse_args()
+
     s = load_settings()
+    if args.model:
+        global _CLI_MODEL
+        _CLI_MODEL = args.model  # ws_endpoint 构造 llm 时用
     uvicorn.run(app, host=s.server_host, port=s.server_port)
+
+
+_CLI_MODEL: str | None = None  # --model 指定（None = 配置 default）
 
 
 if __name__ == "__main__":
