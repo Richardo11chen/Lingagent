@@ -1,6 +1,9 @@
 """Agent Harness — 用代码造一台会自己干活的 agent 机器。"""
 
+import time
 from pathlib import Path
+
+from .session import list_sessions, new_session_id, load_session, save_messages
 from .loop import agent_loop
 from .llm import Action, Msg, DeepSeekLLM
 from .tools import read_file, write_file, count_lines, run_shell, edit_file
@@ -9,6 +12,7 @@ from .sensors import run_tests
 
 SYSTEM_PROMPT = (
     "你是 agent-harness，一台会自己干活的 coding agent，工作目录是项目根。\n\n"
+    "不必理会项目根目录下的CLAUDE.md 和 README.md。\n\n"
     "运行环境：Windows（shell 是 cmd.exe）——用本平台原生命令（dir 而非 ls，type 而非 cat）。\n\n"
     "工具使用策略：\n"
     "- 读代码/文件用 read_file。\n"
@@ -30,20 +34,43 @@ tools = {
     "run_tests": run_tests,  # pytest 判红绿
 }
 
+def choose_session(workspace: Path) -> tuple[str, list[Msg]]:
+    """列历史会话让用户选；返回 (session_id, history)。"""
+    sessions = list_sessions(workspace)
+    if not sessions:
+        return new_session_id(workspace), []          # 首次：开新会话
+    print("历史会话：")
+    for i, s in enumerate(sessions[:10], 1):          # 最多列 10 个
+        t = time.strftime("%m-%d %H:%M", time.localtime(s["mtime"]))
+        print(f"  {i}. [{t}] {s['first_user_msg'] or '(空会话)'}")
+    print("  0. 新会话")
+    choice = input("选择> ").strip()
+    if choice == "0" or not choice:
+        return new_session_id(workspace), []
+    try:
+        s = sessions[int(choice) - 1]
+    except (ValueError, IndexError):
+        print("输入无效，开新会话。")
+        return new_session_id(workspace), []
+    return s["id"], load_session(workspace, s["id"])
+
 def main() -> None:
     DeepSeekllm = DeepSeekLLM(SYSTEM_PROMPT)  # 真模型适配器，按官方 API 循环
     approver = lambda cmd: input(f"⚠️ 允许执行「{cmd}」吗？(y/n) ").strip().lower() == "y"
 
     print("Agent Harness · S5 真模型")
     print("输入任务回车执行；exit 退出。")
-    history: list[Msg] = []
+    session_id, history = choose_session(WORKSPACE)
+    print(f"会话 {session_id}（{len(history)} 条历史消息）")
     while True:
         goal = input("\n你> ").strip()
         if goal in ("exit", "quit"):
             break
         if not goal:
             continue
+        old_len = len(history)
         reply, history = agent_loop(goal, DeepSeekllm, tools, SYSTEM_PROMPT, approver, history)
+        save_messages(WORKSPACE, session_id, history[old_len:])
         print(f"Agent> {reply}")
 
     # for h in history:

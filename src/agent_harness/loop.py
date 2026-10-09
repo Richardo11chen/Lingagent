@@ -26,6 +26,7 @@ def agent_loop(
         text, actions = llm(history, TOOL_SCHEMAS)
         if not actions:
             answer = text
+            history.append(Msg("assistant", text))
             break
         # 一条 assistant 带全部原始 tool_calls（API 要求 N 个调用 → N 条 tool 回应，严格配对）
         history.append(Msg("assistant", text, tool_calls=actions[0].tool_calls))

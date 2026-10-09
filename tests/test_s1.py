@@ -23,8 +23,8 @@ def test_1(tmp_path):  # 剧本驱动：工具结果作为 user 消息回灌进�
     reply, history = agent_loop("做点事", llm, make_tools(), SYSTEM_PROMPT)
     assert reply == "任务完成。"
     roles = [m.role for m in history]
-    # 首条 = goal 入史；done 轮（空动作列表）不产生 assistant 消息
-    assert roles == ["user", "assistant", "user", "assistant", "user"]
+    # 首条 = goal 入史；停机轮的 assistant 回复也入史（会话持久化要求——继续会话时模型能看到自己说过什么）
+    assert roles == ["user", "assistant", "user", "assistant", "user", "assistant"]
     # 工具结果作为 user 消息回灌：read 的内容、write 的确认都进了历史
     assert "hello" in history[2].content
     assert "写入文件" in history[4].content

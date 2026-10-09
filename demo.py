@@ -1,2 +1,3 @@
 def add(a, b):
-    return a + b  # 修对了
+    """返回 a 与 b 的和。"""
+    return a + b

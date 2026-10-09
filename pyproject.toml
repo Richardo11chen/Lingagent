@@ -8,7 +8,9 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "fastapi>=0.141.1",
     "openai>=3.8.0",
+    "uvicorn>=0.53.0",
 ]
 
 [project.scripts]
