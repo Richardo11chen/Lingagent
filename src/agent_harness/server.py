@@ -145,6 +145,8 @@ def main() -> None:
 
     s = load_settings()
     if args.model:
+        if args.model not in s.models:  # fail fast：别等 WS 连上才在 handler 里炸（前端只看到连接即断）
+            raise SystemExit(f"未知模型 profile：{args.model}（可用：{', '.join(s.models)}）")
         global _CLI_MODEL
         _CLI_MODEL = args.model  # ws_endpoint 构造 llm 时用
     uvicorn.run(app, host=s.server_host, port=s.server_port)

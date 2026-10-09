@@ -71,3 +71,23 @@ def test_ws_approval_approved(monkeypatch):  # 批准路径：命令真执行（
             if m["type"] == "assistant_done":
                 break
     assert ran.get("cmd") == "rm -rf test_dir"  # 批准后真执行
+
+
+def test_server_cli_model_fail_fast(tmp_path):
+    # 启动期就拦住打错的 profile 名（别等 WS 连上才在 handler 里炸——前端只看到连接即断）
+    import os
+    import subprocess
+    import sys
+
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[models.a]\nname = "m"\n', encoding="utf-8")
+    r = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.argv=['server', '--model', 'nope'];"
+         "from agent_harness.server import main; main()"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env={**os.environ, "AGENT_HARNESS_CONFIG": str(cfg), "PYTHONIOENCODING": "utf-8"},
+        timeout=120,
+    )
+    assert r.returncode == 1
+    assert "未知模型 profile" in r.stderr
