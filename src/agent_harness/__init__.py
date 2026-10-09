@@ -17,6 +17,8 @@ from .llm import Msg, DeepSeekLLM
 
 def choose_session(workspace: Path) -> tuple[str, list[Msg]]:
     """列历史会话让用户选；返回 (session_id, history)。"""
+    if not tui.interactive():
+        return new_session_id(workspace), []          # 非终端（管道喂任务）：选择没意义，直接新会话
     sessions = list_visible_sessions()
     if not sessions:
         return new_session_id(workspace), []          # 首次：开新会话
@@ -25,7 +27,10 @@ def choose_session(workspace: Path) -> tuple[str, list[Msg]]:
         t = time.strftime("%m-%d %H:%M", time.localtime(s["mtime"]))
         print(f"  {i}. [{t}] {s['first_user_msg'] or '(空会话)'}")
     print("  0. 新会话")
-    choice = input("选择> ").strip()
+    try:
+        choice = input("选择> ").strip()
+    except EOFError:                                   # 终端读尽（Ctrl+Z 回车）——开新会话
+        return new_session_id(workspace), []
     if choice == "0" or not choice:
         return new_session_id(workspace), []
     try:
@@ -51,7 +56,10 @@ def main() -> None:
     if history:
         tui.show_history(history)  # 恢复的会话：把历史渲染出来
     while True:
-        goal = tui.ask().strip()
+        try:
+            goal = tui.ask().strip()
+        except EOFError:
+            break  # 输入读尽（管道喂完 / Ctrl+Z 回车）——收工退出，不是错误
         if goal in ("exit", "quit"):
             break
         if goal == "/model":  # 运行时切换模型

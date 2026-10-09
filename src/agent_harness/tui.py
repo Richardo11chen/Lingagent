@@ -26,7 +26,7 @@ _text_buf = ""
 _in_reasoning = False
 
 
-def _interactive() -> bool:
+def interactive() -> bool:
     """——管道/重定向时降级为普通 input（prompt_toolkit 要真 console）。"""
     return sys.stdin.isatty() and sys.stdout.isatty()
 
@@ -61,7 +61,7 @@ def show_banner(session_id: str, n_history: int, model_name: str = "") -> None:
 def ask() -> str:
     """底部输入：上线 + ❯ 输入行 + 下线（bottom_toolbar）。非终端环境降级。"""
     console.print() # 输出空行
-    if not _interactive():
+    if not interactive():
         return input("❯ ")
     text = _session_get().prompt()
     _erase_input_echo(text)  # 擦掉输入回显——避免与「用户」面板重复
@@ -178,6 +178,9 @@ def show_tool(name: str, args: dict | None = None) -> None:
 
 def show_approval(command: str) -> str:
     prompt_text = f"⚠️ 允许执行「{command}」吗？(y/n) "
-    if not _interactive():
-        return input(prompt_text)
-    return _session_get().prompt(message=[("fg:ansiyellow bold", prompt_text + "❯ ")])
+    try:
+        if not interactive():
+            return input(prompt_text)
+        return _session_get().prompt(message=[("fg:ansiyellow bold", prompt_text + "❯ ")])
+    except EOFError:
+        return "n"  # 输入读尽（管道喂完 / Ctrl+Z）——无声即驳回（安全默认）
