@@ -8,7 +8,7 @@ import json
 import time
 from pathlib import Path
 
-from .llm import Msg
+from .messages import Msg
 
 # 存档根在用户目录（Claude Code 形态）——项目目录干净、工具（含 shell 猜路径）够不着
 SESSION_ROOT = Path.home() / ".agent_harness_sessions"
@@ -51,6 +51,8 @@ def session_path(workspace: Path, session_id: str) -> Path:
 def _msg_to_dict(m: Msg) -> dict:
     """Msg → JSON 原生 dict（tool_calls 的 pydantic 对象用 model_dump 转纯 dict）。"""
     d: dict = {"role": m.role, "content": m.content}
+    if m.tool_name:
+        d["tool_name"] = m.tool_name
     if m.tool_call_id:
         d["tool_call_id"] = m.tool_call_id
     if m.tool_calls:
@@ -64,6 +66,7 @@ def _dict_to_msg(d: dict) -> Msg:
     return Msg(
         role=d["role"],
         content=d.get("content", ""),
+        tool_name=d.get("tool_name"),
         tool_call_id=d.get("tool_call_id"),
         tool_calls=d.get("tool_calls"),
     )

@@ -1,7 +1,8 @@
 """主循环：组织上下文 → 调模型 → 解析动作 → 分发执行 → 回灌结果 → 停机判断。"""
 
 from typing import Callable
-from .llm import LLM, Action, Msg
+from .llm import LLM, Action
+from .messages import Msg
 from .sensors import run_sensors
 from .guardrail import is_dangerous_command
 from .schema import TOOL_SCHEMAS
@@ -50,7 +51,12 @@ def agent_loop(
                     result = f"{action.tool}工具调用失败。"
             else:
                 result = f"工具不存在：未知工具 {action.tool}。"
-            history.append(Msg("tool" if action.tool_call_id else "user", result, tool_call_id=action.tool_call_id))  # 只回灌一次
+
+            if action.tool_call_id:
+                # 回灌 tool 消息：模型发出的原始 tool_calls → 解析成 Action → 执行 → 回灌结果
+                history.append(Msg("tool", result, tool_name=action.tool, tool_call_id=action.tool_call_id))  # 只回灌一次
+            else:
+                history.append(Msg("user", result, tool_name=action.tool, tool_call_id=action.tool_call_id))  # 假模型
 
     if answer is None:
         answer = "已达到最大步数，停机。"

@@ -9,18 +9,12 @@ from dataclasses import dataclass, field
 from typing import Protocol
 import json
 import os
+import time
 
-from openai import OpenAI
+from openai import APIStatusError, OpenAI
 
-
-@dataclass
-class Msg:
-    """一条历史消息。role: user / assistant / tool。tool 消息必须带 tool_call_id。"""
-
-    role: str
-    content: str = ""
-    tool_call_id: str | None = None  # tool 消息：关联到那次模型调用
-    tool_calls: list | None = None  # assistant 消息：模型发出的原始 tool_calls（重发时原样带回）
+from .messages import Msg  # 重新导出——兼容从 llm 导入 Msg 的既有代码
+from .compact import microcompact, microcompact_if_needed, snip
 
 
 @dataclass
@@ -94,12 +88,29 @@ class DeepSeekLLM:
         self._model = model
         self._system_prompt = system_prompt
 
-    def __call__(self, messages: list[Msg], tools: list[dict]) -> tuple[str, list[Action]]:
-        api_messages = to_api_messages(self._system_prompt, messages)
-
-        resp = self._client.chat.completions.create(
+    def _request(self, api_messages: list[dict], tools: list[dict]):
+        """发一次请求（薄封装——首次与 reactive 重试共用同一调用点）。"""
+        return self._client.chat.completions.create(
             model=self._model, messages=api_messages, tools=tools or None
         )
+
+    def __call__(self, messages: list[Msg], tools: list[dict]) -> tuple[str, list[Action]]:
+        # 在调用 API 前进行上下文压缩（投影——不改 history）
+        messages = microcompact_if_needed(messages)
+        api_messages = to_api_messages(self._system_prompt, messages)
+
+        try:
+            resp = self._request(api_messages, tools)
+        except APIStatusError as e:
+            if e.status_code != 413:  # 非超限（401/500 等）——重试无意义，直接抛
+                raise
+            # Reactive 兜底：退避（疑限流）→ 加压（全清旧结果）→ 重试一次；
+            # 第二次不在 try 内——结构上不可能有第三次（无需 has_attempted 标志）
+            time.sleep(3)
+            # 两刀：丢中间（砍大头）+ 清存活段的胖结果
+            pressed = microcompact(snip(messages), keep_last=0)
+            resp = self._request(to_api_messages(self._system_prompt, pressed), tools)
+
         msg = resp.choices[0].message
 
         if not msg.tool_calls:  # 无工具调用 = 最终答案 = done（官方停机条件）
