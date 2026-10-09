@@ -25,7 +25,7 @@
 ## 架构 / 形状（方向性，施工期细化）
 
 - 后端：Python。前端：TypeScript（后期阶段才上）。
-- 界面演进：先终端后画面（S1 终端可见闭环 → S5 浏览器实时画面）。
+- 界面演进：先终端后画面（S1 终端可见闭环 → S6a 终端 TUI → S6b 浏览器实时画面）。
 - 六个维度分工：治理、反馈闭环 = 主攻做深；决策（主循环）= S1 地基，一上来就完整；工具、记忆、配置 = 最低实现，后期可拓展。
 
 ## 开发流程（2026-09-22 定 · 后续阶段标准模板）
@@ -67,7 +67,7 @@
 
 **决策（2026-09-22 用户拍板）**：前端 = **React + TS**（AI 样本最多）｜通信 = **WebSocket**（双向单通道：轨迹流 + 审批回传）｜后端 web = **FastAPI + uvicorn**
 
-**验证**：依赖冒烟 ✅（fastapi 0.141.1 / uvicorn 0.53.0 / starlette 1.6.0 装于 Python 3.14.7，WS 端点定义通过）；**真握手 demo 留 S6 开工**（那时写代码，一并验证）
+**验证**：依赖冒烟 ✅（fastapi 0.141.1 / uvicorn 0.53.0 / starlette 1.6.0 装于 Python 3.14.7，WS 端点定义通过）；真握手 + 审批桥接 + 流式均已在 S6a/S6b 落地验证（2026-10-09 补；详见学习记录 S6b）
 
 **已知架构难点**：harness 现在同步阻塞（`approver=input()`、`subprocess`）——web 化要解决 ①approver 跨进程（后端推问题 → 阻塞等前端答案）②agent_loop 进后台线程（不阻塞 web 循环）。建议拆 S6a 只读实时流 → S6b 双向审批
 
@@ -78,7 +78,7 @@
 | **Write** | S4a 会话存档（JSONL 追加）+ **约定/偏好改走配置形态**（手写 `AGENTS.md` + harness 自动注入 → S4c 配置维）；模型提取器已取消（2026-09-22 转向：继续会话=完全相同、新开=无关，自动记忆无立足点） | Claude Code CLAUDE.md / Codex AGENTS.md；nanobot MEMORY.md |
 | **Select** | 记忆全量注入（库小）+ 工具按需读（7 工具，在业界 5-8 上限内）；**不做 RAG**；记忆 >200 行时再评估分文件 + grep | 混合形态：小常载核心 + RAG 其余（LangChain） |
 | **Compress** | 见下方细则（并入 S4b 阶段） | Claude Code 五档递进：工具结果预算 → 剪裁 → **微压缩** → 塌缩 → 全量摘要；另有 reactive 413 兜底 |
-| **Isolate** | 推迟 S7（子 agent） | 多 agent 隔离上下文（Anthropic：性能更好但 token 15×） |
+| **Isolate** | 顺延为后续备选（子 agent）——原标「推迟 S7」，S7 号让位给多模型档（2026-10-09 编号注记） | 多 agent 隔离上下文（Anthropic：性能更好但 token 15×） |
 
 ### Compress 细则（拍板版）
 
@@ -96,10 +96,13 @@
 - 界面：先终端后画面（用户拍板，2026-08-28）。
 - 主攻维度：治理 + 反馈闭环两维都主攻（用户拍板 2026-08-28；规格原建议一维深入——用户决定两维，阶梯拆成 S2/S3 两阶段各承重）。
 - 实现边界（规格 A.4，用户原文）：主循环、LLM 抽象层（可 mock）必须自己实现；不建在现成 agent 编排框架的高层循环之上；反馈信号与危险动作拦截必须是代码机制（校验器 / 护栏函数），不是提示词。
+- S6 落地（2026-10-09）：拆两档——S6a TUI（rich + prompt_toolkit，Live 单通道流式）→ S6b Web（FastAPI + WebSocket 异步桥接 + React 前端）；审批跨进程 = `threading.Event` + 常驻收消息循环（关键架构点）。
+- S7 = 多模型档（2026-10-09，配置维做深）：每个模型一个 profile（**不做 provider 层**——YAGNI：连接信息重复两行，等「改一处要改多处」再抽象）；`thinking` / `reasoning_effort` 三态、默认不传（**翻案**：旧版无条件传 DeepSeek 私有参数——兼容面只盖协议骨架，不盖厂商扩展参数）；身份类配置错误 fail fast（`--model` 未知、`default` 不在 `[models.*]` 均当场退出）；双端 `/model` 运行时切换（`SwitchableLLM` 门面）。范围：只接 OpenAI 兼容面（用户拍板）。
+- 编号注记（2026-10-09）：S7 原为 Isolate / 子 agent 预留（见 CE 表），实际施工让位给多模型档；子 agent 顺延为后续候选。
 
 ## 终局参照：agent_loop 伪代码（用户规格材料 2026-08-28 提供）
 
-整台机器的终局形态。阶梯每阶段从中取一段真做：S1 取 while 核心骨架（context 组装 → LLM 一行 → action 分发 → 结果回灌 → done/MAX_STEPS 停机）；S2 取 run_sensors（反馈）；S3 取 guardrail + HITL；S4 取 memory（read/consolidate）；S6 取 MCP / skills 渐进披露 / spawn_subagent。
+整台机器的终局形态。阶梯每阶段从中取一段真做：S1 取 while 核心骨架（context 组装 → LLM 一行 → action 分发 → 结果回灌 → done/MAX_STEPS 停机）；S2 取 run_sensors（反馈）；S3 取 guardrail + HITL；S4 取 memory（read/consolidate）；S6a/S6b 取实时界面（TUI / Web 流式）；MCP / skills 渐进披露 / spawn_subagent 顺延为后续备选。
 
 ```python
 # ---------- ① 启动装配:跑在 while 之前,一次性 ----------

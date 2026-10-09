@@ -14,6 +14,7 @@
 
 ## 结构
 
-- `src/agent_harness/`：`llm`（模型适配器）· `loop`（主循环）· `tools`（工具）· `guardrail`（护栏/围栏）· `sensors`（反馈校验）· `session`（会话持久化）· `compact`（上下文压缩）· `config`（规则加载）· `messages`（Msg 结构）
-- `tests/`：`test_s1` ~ `test_s5`、`test_s4b`、`test_s4c`
+- `src/agent_harness/`：`llm`（模型适配器，OpenAI 兼容）· `loop`（主循环）· `tools`（工具）· `guardrail`（护栏/围栏）· `sensors`（反馈校验）· `session`（会话持久化）· `compact`（上下文压缩）· `config`（规则加载）· `messages`（Msg 结构）· `settings`（多模型配置）· `assembly`（公共装配 + SwitchableLLM）· `tui`（终端界面）· `server`（Web 服务）
+- `tests/`：`test_s1` ~ `test_s7`（含 `test_s4b` / `test_s4c` / `test_s6a` / `test_s6b`），61 条
+- 网页端：后端 `uv run agent-harness-web`（FastAPI，默认 127.0.0.1:8000）；前端 `cd web && npm run dev`（Vite + React）
 
