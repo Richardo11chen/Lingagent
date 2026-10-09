@@ -18,13 +18,15 @@ def agent_loop(
     approver: Callable[[str], bool] | None = None,
     history: list[Msg] | None = None,
     max_steps: int = MAX_STEPS,
+    on_text: Callable[[str], None] | None = None,  # 流式文本增量回调（透传给模型适配器）
+    on_tool: Callable[[str], None] | None = None,  # 工具执行提示回调（界面用）
 ) -> tuple[str, list[Msg]]:
     
     answer = None
     history = [Msg("user", goal)] if history is None else history + [Msg("user", goal)]
 
     for _ in range(max_steps):
-        text, actions = llm(history, TOOL_SCHEMAS)
+        text, actions = llm(history, TOOL_SCHEMAS, on_text=on_text)
         if not actions:
             answer = text
             history.append(Msg("assistant", text))
@@ -32,6 +34,8 @@ def agent_loop(
         # 一条 assistant 带全部原始 tool_calls（API 要求 N 个调用 → N 条 tool 回应，严格配对）
         history.append(Msg("assistant", text, tool_calls=actions[0].tool_calls))
         for action in actions:
+            if on_tool:
+                on_tool(action.tool)
             tool_func = tools.get(action.tool)
             if action.tool == "run_shell" and is_dangerous_command(action.args.get("command", "")):
                 # 治理护栏：危险命令，先问人——批准才真执行，其余路径都到此为止

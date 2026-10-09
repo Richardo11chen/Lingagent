@@ -28,9 +28,14 @@ class Action:
 
 
 class LLM(Protocol):
-    """模型接口：输入历史结构 + 工具 schema，输出 (text, action)。"""
+    """模型接口：输入历史结构 + 工具 schema，输出 (text, actions)。
 
-    def __call__(self, messages: list[Msg], tools: list[dict]) -> tuple[str, list[Action]]: ...
+    on_text：文本增量回调（流式显示用，可为 None）。
+    """
+
+    def __call__(
+        self, messages: list[Msg], tools: list[dict], on_text=None
+    ) -> tuple[str, list[Action]]: ...
 
 
 class ScriptLLM:
@@ -43,7 +48,9 @@ class ScriptLLM:
         self._script = list(script)
         self._fix_script = list(fix_script or [])
 
-    def __call__(self, messages: list[Msg], tools: list[dict]) -> tuple[str, list[Action]]:
+    def __call__(
+        self, messages: list[Msg], tools: list[dict], on_text=None
+    ) -> tuple[str, list[Action]]:
         last = messages[-1].content if messages else ""
         if "测试失败" in last:
             if self._fix_script:
@@ -88,19 +95,50 @@ class DeepSeekLLM:
         self._model = model
         self._system_prompt = system_prompt
 
-    def _request(self, api_messages: list[dict], tools: list[dict]):
-        """发一次请求（薄封装——首次与 reactive 重试共用同一调用点）。"""
-        return self._client.chat.completions.create(
-            model=self._model, messages=api_messages, tools=tools or None
-        )
+    def _request(self, api_messages: list[dict], tools: list[dict], on_text):
+        """流式发一次请求——返回 (text, raw_tool_calls)。
 
-    def __call__(self, messages: list[Msg], tools: list[dict]) -> tuple[str, list[Action]]:
+        on_text：每个文本增量回调（界面流式显示用；可为 None）。
+        raw_tool_calls：按 index 拼装完整的 dict 列表（id/type/function——请求侧格式）。
+        """
+        stream = self._client.chat.completions.create(
+            model=self._model, messages=api_messages, tools=tools or None, stream=True
+        )
+        text_parts: list[str] = []
+        acc: dict[int, dict] = {}  # index → 拼装中的调用（分片按 index 归位）
+        for chunk in stream:
+            if not chunk.choices:  # 部分 chunk 无 choices（usage 等）
+                continue
+            delta = chunk.choices[0].delta
+            if delta.content:
+                text_parts.append(delta.content)
+                if on_text:
+                    on_text(delta.content)
+            if delta.tool_calls:
+                for tcd in delta.tool_calls:
+                    slot = acc.setdefault(
+                        tcd.index,
+                        {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+                    )
+                    if tcd.id:
+                        slot["id"] = tcd.id
+                    if tcd.function:
+                        if tcd.function.name:
+                            slot["function"]["name"] = tcd.function.name
+                        if tcd.function.arguments:  # arguments 分片累积
+                            slot["function"]["arguments"] += tcd.function.arguments
+        raw = [acc[i] for i in sorted(acc)]  # 按 index 排序——与到达顺序无关
+        return "".join(text_parts), raw
+
+    def __call__(
+        self, messages: list[Msg], tools: list[dict], on_text=None
+    ) -> tuple[str, list[Action]]:
         # 在调用 API 前进行上下文压缩（投影——不改 history）
         messages = microcompact_if_needed(messages)
         api_messages = to_api_messages(self._system_prompt, messages)
 
         try:
-            resp = self._request(api_messages, tools)
+            text, raw = self._request(api_messages, tools, on_text)
         except APIStatusError as e:
             if e.status_code != 413:  # 非超限（401/500 等）——重试无意义，直接抛
                 raise
@@ -109,21 +147,19 @@ class DeepSeekLLM:
             time.sleep(3)
             # 两刀：丢中间（砍大头）+ 清存活段的胖结果
             pressed = microcompact(snip(messages), keep_last=0)
-            resp = self._request(to_api_messages(self._system_prompt, pressed), tools)
+            text, raw = self._request(to_api_messages(self._system_prompt, pressed), tools, on_text)
 
-        msg = resp.choices[0].message
-
-        if not msg.tool_calls:  # 无工具调用 = 最终答案 = done（官方停机条件）
-            return (msg.content or "", [])
+        if not raw:  # 无工具调用 = 最终答案 = done（官方停机条件）
+            return (text, [])
 
         actions: list[Action] = []
-        for tc in msg.tool_calls:
-            args = json.loads(tc.function.arguments)
+        for tc in raw:
+            args = json.loads(tc["function"]["arguments"])
             actions.append(Action(
-                tool=tc.function.name,
+                tool=tc["function"]["name"],
                 args=args,
-                tool_call_id=tc.id,
-                tool_calls=msg.tool_calls,  # 原始结构——assistant 消息重发时原样带回
+                tool_call_id=tc["id"],
+                tool_calls=raw,  # 原始结构——assistant 消息重发时原样带回
             ))
-            
-        return (msg.content or "", actions)
+
+        return (text, actions)

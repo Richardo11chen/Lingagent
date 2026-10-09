@@ -115,17 +115,22 @@ def _status_error(code: int) -> APIStatusError:
     return APIStatusError("err", response=httpx.Response(code, request=httpx.Request("POST", "http://x")), body=None)
 
 
-class _FakeMsg:
-    content = "ok"
-    tool_calls = None
+class _FakeDelta:
+    def __init__(self, content=None):
+        self.content = content
+        self.tool_calls = None
 
 
-class _FakeChoice:
-    message = _FakeMsg()
+class _FakeChunk:
+    def __init__(self, content):
+        class _Choice:
+            delta = _FakeDelta(content)
+
+        self.choices = [_Choice()]
 
 
-class _FakeResponse:
-    choices = [_FakeChoice()]
+def _fake_stream(text: str = "ok"):  # 逐字符 chunk——模拟流式响应
+    return [_FakeChunk(ch) for ch in text]
 
 
 def _fake_llm(monkeypatch, failures: int = 0):
@@ -141,7 +146,7 @@ def _fake_llm(monkeypatch, failures: int = 0):
             calls.append(kw)
             if len(calls) <= failures:
                 raise _status_error(413)
-            return _FakeResponse()
+            return _fake_stream()
 
     llm._client = type("F", (), {"chat": type("C", (), {"completions": FakeCompletions()})()})()
     return llm, calls

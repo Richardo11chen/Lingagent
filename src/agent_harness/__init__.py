@@ -5,6 +5,7 @@ from pathlib import Path
 
 from agent_harness.config import load_rules
 
+from . import tui
 from .session import list_sessions, new_session_id, load_session, save_messages
 from .loop import agent_loop
 from .llm import Action, Msg, DeepSeekLLM
@@ -58,25 +59,26 @@ def choose_session(workspace: Path) -> tuple[str, list[Msg]]:
 
 def main() -> None:
     base_prompt = SYSTEM_PROMPT + "\n\n" + load_rules(WORKSPACE)
-    DeepSeekllm = DeepSeekLLM(base_prompt)  # 真模型适配器，按官方 API 循环
-    approver = lambda cmd: input(f"⚠️ 允许执行「{cmd}」吗？(y/n) ").strip().lower() == "y"
+    DeepSeekllm = DeepSeekLLM(base_prompt)  # 真模型适配器（流式）
+    approver = lambda cmd: tui.show_approval(cmd).strip().lower() == "y"
 
-    print("Agent Harness · S5 真模型")
-    print("输入任务回车执行；exit 退出。")
     session_id, history = choose_session(WORKSPACE)
-    print(f"会话 {session_id}（{len(history)} 条历史消息）")
+    tui.show_banner(session_id, len(history))
     while True:
-        goal = input("\n你> ").strip()
+        goal = tui.ask().strip()
         if goal in ("exit", "quit"):
             break
         if not goal:
             continue
+        tui.show_user(goal)
+        tui.begin_stream()
         old_len = len(history)
-        reply, history = agent_loop(goal, DeepSeekllm, tools, SYSTEM_PROMPT, approver, history)
+        reply, history = agent_loop(
+            goal, DeepSeekllm, tools, SYSTEM_PROMPT,
+            approver=approver, history=history,
+            on_text=tui.stream_chunk, on_tool=tui.show_tool,
+        )
+        tui.end_stream()
         save_messages(WORKSPACE, session_id, history[old_len:])
-        print(f"Agent> {reply}")
-
-    # for h in history:
-    #     print(f"{h.role}> {h.content}\n {h.tool_call_id or ''}\n {h.tool_calls or ''}")
 
 
