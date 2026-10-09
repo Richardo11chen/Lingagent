@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import './App.css'
 
 type Ev =
@@ -9,12 +10,14 @@ type Ev =
   | { type: 'assistant_chunk'; text: string }
   | { type: 'assistant_done'; text: string }
   | { type: 'tool'; name: string; detail?: string }
+  | { type: 'reasoning'; text: string }
   | { type: 'approval_request'; command: string }
 
 type Msg =
   | { kind: 'user'; text: string }
   | { kind: 'assistant'; text: string; streaming?: boolean }
   | { kind: 'tool'; name: string; detail?: string }
+  | { kind: 'reasoning'; text: string }
 
 const WS_URL = 'ws://127.0.0.1:8000/ws'
 
@@ -64,6 +67,14 @@ function App() {
           }
           return [...ms, { kind: 'assistant', text: ev.text }]
         })
+      } else if (ev.type === 'reasoning') {
+        setMsgs((ms) => {
+          const last = ms[ms.length - 1]
+          if (last && last.kind === 'reasoning') {
+            return [...ms.slice(0, -1), { kind: 'reasoning', text: last.text + ev.text }]
+          }
+          return [...ms, { kind: 'reasoning', text: ev.text }]
+        })
       } else if (ev.type === 'tool') {
         setMsgs((ms) => [...ms, { kind: 'tool', name: ev.name, detail: ev.detail }])
       } else if (ev.type === 'approval_request') {
@@ -104,9 +115,17 @@ function App() {
               ⚙ {m.name}
               {m.detail ? `: ${m.detail}` : ''}
             </div>
+          ) : m.kind === 'reasoning' ? (
+            <div key={i} className="reasoning">
+              💭 {m.text}
+            </div>
           ) : (
             <div key={i} className={`bubble ${m.kind}`}>
-              {m.kind === 'assistant' ? <ReactMarkdown>{m.text}</ReactMarkdown> : m.text}
+              {m.kind === 'assistant' ? (
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+              ) : (
+                m.text
+              )}
             </div>
           ),
         )}
