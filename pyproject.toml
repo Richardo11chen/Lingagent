@@ -13,10 +13,12 @@ dependencies = [
     "prompt-toolkit>=3.0.53",
     "rich>=15.0.0",
     "uvicorn>=0.53.0",
+    "websockets>=17.2",
 ]
 
 [project.scripts]
 agent-harness = "agent_harness:main"
+agent-harness-web = "agent_harness.server:main"
 
 [build-system]
 requires = ["uv_build>=0.12.7,<0.13.0"]

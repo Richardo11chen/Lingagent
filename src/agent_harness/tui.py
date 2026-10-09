@@ -1,6 +1,6 @@
-"""TUI 层（S6a）：prompt_toolkit 输入（底部 ❯ + 上下线条）+ rich 流式 Markdown 渲染。
+"""TUI 层（S6a）：prompt_toolkit 输入（底部 ❯）+ rich 流式 Markdown 渲染。
 
-分工：prompt_toolkit 管交互（输入行、下边框）；rich 管渲染（消息面板、流式 Markdown、工具提示）。
+分工：prompt_toolkit 管交互（输入行）；rich 管渲染（消息面板、流式 Markdown、工具提示）。
 """
 
 import shutil
@@ -14,7 +14,6 @@ from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.text import Text
 
 console = Console()
 
@@ -24,7 +23,7 @@ _buf: list[str] = []
 
 
 def _interactive() -> bool:
-    """真终端吗？——管道/重定向时降级为普通 input（prompt_toolkit 要真 console）。"""
+    """——管道/重定向时降级为普通 input（prompt_toolkit 要真 console）。"""
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
@@ -56,9 +55,9 @@ def show_banner(session_id: str, n_history: int) -> None:
 
 def ask() -> str:
     """底部输入：上线 + ❯ 输入行 + 下线（bottom_toolbar）。非终端环境降级。"""
+    console.print() # 输出空行
     if not _interactive():
         return input("❯ ")
-    console.print(Text("─" * _width(), style="bright_black"))
     text = _session_get().prompt()
     _erase_input_echo(text)  # 擦掉输入回显——避免与「用户」面板重复
     return text
@@ -75,7 +74,20 @@ def _erase_input_echo(text: str) -> None:
 
 
 def show_user(text: str) -> None:
+    console.print() # 输出空行
     console.print(Panel(text, title="用户", title_align="left", border_style="cyan"))
+    console.print() # 输出空行
+
+
+def show_history(messages) -> None:
+    """恢复会话时把历史渲染出来（形态与实时一致：用户框 / ● 回复 / ⚙ 工具）。"""
+    for m in messages:
+        if m.role == "user":
+            show_user(m.content)
+        elif m.role == "assistant" and (m.content or "").strip():
+            console.print(Markdown("● " + m.content))
+        elif m.role == "tool":
+            show_tool(m.tool_name or "工具结果")
 
 
 def begin_stream() -> None:
@@ -99,8 +111,11 @@ def end_stream() -> None:
         _live = None
 
 
-def show_tool(name: str) -> None:
-    console.print(f"[dim]⚙ {name}[/]")
+def show_tool(name: str, args: dict | None = None) -> None:
+    detail = str((args or {}).get("command") or (args or {}).get("path") or "")
+    if len(detail) > 50:
+        detail = detail[:50] + "…"
+    console.print(f"[dim]⚙ {name}{': ' + detail if detail else ''}[/]")
 
 
 def show_approval(command: str) -> str:
