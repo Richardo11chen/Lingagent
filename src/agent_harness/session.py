@@ -59,6 +59,8 @@ def _msg_to_dict(m: Msg) -> dict:
         d["tool_calls"] = [
             tc.model_dump() if hasattr(tc, "model_dump") else tc for tc in m.tool_calls
         ]
+    if m.reasoning_content:
+        d["reasoning_content"] = m.reasoning_content
     return d
 
 
@@ -69,6 +71,7 @@ def _dict_to_msg(d: dict) -> Msg:
         tool_name=d.get("tool_name"),
         tool_call_id=d.get("tool_call_id"),
         tool_calls=d.get("tool_calls"),
+        reasoning_content=d.get("reasoning_content"),
     )
 
 

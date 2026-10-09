@@ -59,12 +59,12 @@ def microcompact(messages: list[Msg], keep_last: int = KEEP_LAST) -> list[Msg]:
 
 
 def microcompact_if_needed(
-    messages: list[Msg], threshold: int = DEFAULT_THRESHOLD
+    messages: list[Msg], threshold: int = DEFAULT_THRESHOLD, keep_last: int = KEEP_LAST
 ) -> list[Msg]:
     """超阈值才压（软估）——否则原样返回。"""
     if estimate_tokens(messages) <= threshold:
         return messages
-    return microcompact(messages)
+    return microcompact(messages, keep_last)
 
 
 def snip(messages: list[Msg], keep_groups: int = 3) -> list[Msg]:

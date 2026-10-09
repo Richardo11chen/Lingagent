@@ -42,3 +42,24 @@ def list_visible_sessions() -> list[dict]:
     from .session import list_sessions
 
     return [s for s in list_sessions(WORKSPACE) if s["first_user_msg"]]
+
+
+def load_settings_and_llm(system_prompt: str):
+    """按 ~/.agent_harness.toml 配置构造真模型适配器——返回 (llm, settings)。"""
+    from .llm import DeepSeekLLM
+    from .settings import load_settings
+
+    s = load_settings()
+    llm = DeepSeekLLM(
+        system_prompt,
+        model=s.model_name,
+        base_url=s.model_base_url,
+        api_key_env=s.model_api_key_env,
+        temperature=s.temperature,
+        compact_threshold=s.compact_threshold,
+        keep_last=s.keep_last,
+        snip_keep_groups=s.snip_keep_groups,
+        thinking=s.thinking,
+        reasoning_effort=s.reasoning_effort,
+    )
+    return llm, s

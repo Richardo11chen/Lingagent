@@ -4,7 +4,13 @@ import time
 from pathlib import Path
 
 from . import tui
-from .assembly import WORKSPACE, build_system_prompt, list_visible_sessions, tools
+from .assembly import (
+    WORKSPACE,
+    build_system_prompt,
+    list_visible_sessions,
+    load_settings_and_llm,
+    tools,
+)
 from .session import list_sessions, new_session_id, load_session, save_messages
 from .loop import agent_loop
 from .llm import Msg, DeepSeekLLM
@@ -31,7 +37,7 @@ def choose_session(workspace: Path) -> tuple[str, list[Msg]]:
 
 def main() -> None:
     base_prompt = build_system_prompt()
-    DeepSeekllm = DeepSeekLLM(base_prompt)  # 真模型适配器（流式）
+    DeepSeekllm, settings = load_settings_and_llm(base_prompt)  # 按配置文件构造（流式）
     approver = lambda cmd: tui.show_approval(cmd).strip().lower() == "y"
 
     session_id, history = choose_session(WORKSPACE)
@@ -51,6 +57,8 @@ def main() -> None:
             goal, DeepSeekllm, tools, base_prompt,
             approver=approver, history=history,
             on_text=tui.stream_chunk, on_tool=tui.show_tool,
+            on_reasoning=tui.reasoning_chunk,
+            max_steps=settings.max_steps,
         )
         tui.end_stream()
         save_messages(WORKSPACE, session_id, history[old_len:])

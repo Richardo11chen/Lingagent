@@ -1,0 +1,23 @@
+# Agent Harness 配置示例
+# 复制到 ~/.agent_harness.toml 后按需修改。
+# ⚠️ 密钥不写在这里——只写「从哪个环境变量读」（api_key_env）。
+
+[model]
+name = "deepseek-v4-flash"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+temperature = 1.0           # ⚠️ 思考模式下不生效（官方：不报错、静默忽略）
+thinking = true             # 思考开关（配置层人话——装配层翻译成 API 的 {"type": "enabled/disabled"}）
+reasoning_effort = "high"   # 思考强度（只管强度、不管开关）："low" / "high" / "max"
+
+[loop]
+max_steps = 20
+
+[context]
+compact_threshold = 70000   # 软阈值（字符当量）——超了触发微压缩
+keep_last = 5               # 微压缩保留最近 N 条工具结果
+snip_keep_groups = 3        # reactive 丢中间时保留最近 K 组
+
+[server]
+host = "127.0.0.1"
+port = 8000

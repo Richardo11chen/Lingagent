@@ -10,16 +10,20 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.styles import Style
 from wcwidth import wcswidth
-from rich.console import Console
+from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
+from rich.text import Text
 from rich.panel import Panel
 
 console = Console()
 
 _session: PromptSession | None = None
 _live: Live | None = None
-_buf: list[str] = []
+_blocks: list = []  # 本轮已封块的 renderables（快照）
+_reasoning_buf = ""
+_text_buf = ""
+_in_reasoning = False
 
 
 def _interactive() -> bool:
@@ -91,23 +95,60 @@ def show_history(messages) -> None:
 
 
 def begin_stream() -> None:
-    global _live, _buf
-    _buf = []
-    _live = Live(console=console, refresh_per_second=10, vertical_overflow="visible")
+    """本轮开始：开 Live（唯一输出通道——思考/工具/正文都在里面组合渲染）。"""
+    global _live, _blocks, _reasoning_buf, _text_buf, _in_reasoning
+    _blocks, _reasoning_buf, _text_buf, _in_reasoning = [], "", "", False
+    _live = Live(console=console, refresh_per_second=8, vertical_overflow="visible")
     _live.start()
 
 
+def _seal_current() -> None:
+    """把当前未收尾的块封成快照（后续只重建 current，开销小）。"""
+    global _reasoning_buf, _text_buf, _in_reasoning
+    if _reasoning_buf:
+        _blocks.append(Text("💭 " + _reasoning_buf, style="dim italic"))
+        _reasoning_buf = ""
+    if _text_buf:
+        _blocks.append(Markdown("● " + _text_buf))
+        _text_buf = ""
+    _in_reasoning = False
+
+
+def _refresh() -> None:
+    if not _live:
+        return
+    current = []
+    if _reasoning_buf:
+        current.append(Text("💭 " + _reasoning_buf, style="dim italic"))
+    if _text_buf:
+        current.append(Markdown("● " + _text_buf))
+    _live.update(Group(*_blocks, *current))
+
+
+def reasoning_chunk(chunk: str) -> None:
+    """思考增量：💭 暗色斜体（与正文区分）——「看它想什么」。"""
+    global _reasoning_buf, _in_reasoning
+    if not _in_reasoning:
+        _seal_current()
+        _in_reasoning = True
+    _reasoning_buf += chunk
+    _refresh()
+
+
 def stream_chunk(chunk: str) -> None:
-    _buf.append(chunk)
-    if _live:
-        _live.update(Markdown("● " + "".join(_buf)))
+    """正文增量：● 前缀 + Markdown 流式重绘（走 Live——与思考/工具同通道）。"""
+    global _text_buf, _in_reasoning
+    if _in_reasoning:
+        _seal_current()
+    _text_buf += chunk
+    _refresh()
 
 
 def end_stream() -> None:
     global _live
+    _seal_current()
     if _live:
-        _live.update(Markdown("● " + "".join(_buf)))
-        _live.stop()
+        _live.stop()  # 停 Live——内容留在屏幕
         _live = None
 
 
@@ -115,7 +156,13 @@ def show_tool(name: str, args: dict | None = None) -> None:
     detail = str((args or {}).get("command") or (args or {}).get("path") or "")
     if len(detail) > 50:
         detail = detail[:50] + "…"
-    console.print(f"[dim]⚙ {name}{': ' + detail if detail else ''}[/]")
+    line = f"⚙ {name}{': ' + detail if detail else ''}"
+    if _live:
+        _seal_current()
+        _blocks.append(Text(line, style="dim"))
+        _refresh()
+    else:
+        console.print(f"[dim]{line}[/]")  # Live 外（如历史渲染）直接打印
 
 
 def show_approval(command: str) -> str:

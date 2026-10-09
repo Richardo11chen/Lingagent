@@ -6,14 +6,21 @@
 
 import asyncio
 import threading
+from functools import partial
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-from .assembly import WORKSPACE, build_system_prompt, list_visible_sessions, tools
-from .llm import DeepSeekLLM, Msg
+from .assembly import (
+    WORKSPACE,
+    build_system_prompt,
+    list_visible_sessions,
+    load_settings_and_llm,
+    tools,
+)
+from .llm import Msg
 from .loop import agent_loop
-from .session import list_sessions, load_session, new_session_id, save_messages
+from .session import load_session, new_session_id, save_messages
 
 app = FastAPI()
 
@@ -24,7 +31,7 @@ async def ws_endpoint(ws: WebSocket):
     loop = asyncio.get_running_loop()
     session_id = new_session_id(WORKSPACE)
     history: list[Msg] = []
-    llm = DeepSeekLLM(build_system_prompt())
+    llm, settings = load_settings_and_llm(build_system_prompt())
     approval: dict = {}  # 审批等待槽：{"event": Event, "result": bool}
     user_task: asyncio.Task | None = None
 
@@ -43,6 +50,9 @@ async def ws_endpoint(ws: WebSocket):
             detail = str(args.get("command") or args.get("path") or "")
             send({"type": "tool", "name": name, "detail": detail[:80]})
 
+        def on_reasoning(chunk: str) -> None:
+            send({"type": "reasoning", "text": chunk})
+
         def approver(command: str) -> bool:
             """线程内阻塞等前端答复——收消息 task 唤醒 Event。"""
             ev = threading.Event()
@@ -53,7 +63,7 @@ async def ws_endpoint(ws: WebSocket):
             return approval["result"]
 
         old_len = len(history)
-        reply, new_history = await asyncio.to_thread(
+        run = partial(
             agent_loop,
             goal,
             llm,
@@ -63,7 +73,10 @@ async def ws_endpoint(ws: WebSocket):
             history=history,
             on_text=on_text,
             on_tool=on_tool,
+            on_reasoning=on_reasoning,
+            max_steps=settings.max_steps,
         )
+        reply, new_history = await asyncio.to_thread(run)
         history[:] = new_history  # 原地更新（闭包外的引用同步）
         save_messages(WORKSPACE, session_id, new_history[old_len:])
         await ws.send_json({"type": "assistant_done", "text": reply})
@@ -110,7 +123,10 @@ async def ws_endpoint(ws: WebSocket):
 
 
 def main() -> None:
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    from .settings import load_settings
+
+    s = load_settings()
+    uvicorn.run(app, host=s.server_host, port=s.server_port)
 
 
 if __name__ == "__main__":

@@ -17,3 +17,4 @@ class Msg:
     tool_call_id: str | None = None  # tool 消息：关联到那次模型调用
     tool_calls: list | None = None  # assistant 消息：模型发出的原始 tool_calls（重发时原样带回）
     tool_name: str | None = None  # tool 消息：哪个工具的结果（压缩判定用）
+    reasoning_content: str | None = None  # assistant 消息：思考内容（协议要求后续请求必须回传）

@@ -155,7 +155,7 @@ def _fake_llm(monkeypatch, failures: int = 0):
 def test_reactive_retries_once_with_harsher_compaction(monkeypatch):  # 413 → 退避+加压(snip+清) → 重试一次
     monkeypatch.setattr("time.sleep", lambda s: None)  # 跳过真实退避
     llm, calls = _fake_llm(monkeypatch, failures=1)
-    text, actions = llm(_long_history(6), [])
+    text, actions, _ = llm(_long_history(6), [])
     assert len(calls) == 2                       # 第一次 413 + 重试一次
     second = str(calls[1]["messages"])
     assert "已省略中间" in second                # 重试用的是 snip 加压版

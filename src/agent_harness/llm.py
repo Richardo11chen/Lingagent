@@ -34,8 +34,8 @@ class LLM(Protocol):
     """
 
     def __call__(
-        self, messages: list[Msg], tools: list[dict], on_text=None
-    ) -> tuple[str, list[Action]]: ...
+        self, messages: list[Msg], tools: list[dict], on_text=None, on_reasoning=None
+    ) -> tuple[str, list[Action], str]: ...
 
 
 class ScriptLLM:
@@ -49,19 +49,19 @@ class ScriptLLM:
         self._fix_script = list(fix_script or [])
 
     def __call__(
-        self, messages: list[Msg], tools: list[dict], on_text=None
-    ) -> tuple[str, list[Action]]:
+        self, messages: list[Msg], tools: list[dict], on_text=None, on_reasoning=None
+    ) -> tuple[str, list[Action], str]:
         last = messages[-1].content if messages else ""
         if "测试失败" in last:
             if self._fix_script:
-                return ("（假模型）测试失败，继续修改。", [self._fix_script.pop(0)])
-            return ("（假模型）多次修复未果，停止。", [])
+                return ("（假模型）测试失败，继续修改。", [self._fix_script.pop(0)], "")
+            return ("（假模型）多次修复未果，停止。", [], "")
         if "测试全部通过" in last:
-            return ("测试通过，任务完成。", [])
+            return ("测试通过，任务完成。", [], "")
         if self._script:
             action = self._script.pop(0)
-            return (f"（假模型）下一步：{action.tool}", [action])
-        return ("任务完成。", [])
+            return (f"（假模型）下一步：{action.tool}", [action], "")
+        return ("任务完成。", [], "")
 
 
 def to_api_messages(system_prompt: str, messages: list[Msg]) -> list[dict]:
@@ -71,9 +71,14 @@ def to_api_messages(system_prompt: str, messages: list[Msg]) -> list[dict]:
     """
     api_messages: list[dict] = [{"role": "system", "content": system_prompt}]
     for m in messages:
-        if m.role == "assistant" and m.tool_calls:
-            # assistant 消息带原始 tool_calls——API 要求原样重发
-            api_messages.append({"role": "assistant", "content": m.content, "tool_calls": m.tool_calls})
+        if m.role == "assistant" and (m.tool_calls or m.reasoning_content):
+            # assistant 消息原样重发：tool_calls + reasoning_content（协议要求回传）
+            entry: dict = {"role": "assistant", "content": m.content}
+            if m.tool_calls:
+                entry["tool_calls"] = m.tool_calls
+            if m.reasoning_content:
+                entry["reasoning_content"] = m.reasoning_content
+            api_messages.append(entry)
         elif m.role == "tool":
             api_messages.append({"role": "tool", "tool_call_id": m.tool_call_id, "content": m.content})
         else:
@@ -87,29 +92,56 @@ class DeepSeekLLM:
     停机语义：tool_calls is None = 模型给最终答案 = done（官方循环条件）。
     """
 
-    def __init__(self, system_prompt: str, model: str = "deepseek-v4-flash"):
-        self._client = OpenAI(
-            api_key=os.environ["DEEPSEEK_API_KEY"],
-            base_url="https://api.deepseek.com",
-        )
+    def __init__(
+        self,
+        system_prompt: str,
+        model: str = "deepseek-v4-flash",
+        base_url: str = "https://api.deepseek.com",
+        api_key_env: str = "DEEPSEEK_API_KEY",
+        temperature: float = 1.0,
+        compact_threshold: int = 70_000,
+        keep_last: int = 5,
+        snip_keep_groups: int = 3,
+        thinking: bool = True,
+        reasoning_effort: str = "high",
+    ):
+        self._client = OpenAI(api_key=os.environ[api_key_env], base_url=base_url)
         self._model = model
+        self._temperature = temperature
+        self._compact_threshold = compact_threshold
+        self._keep_last = keep_last
+        self._snip_keep_groups = snip_keep_groups
+        self._thinking = thinking
+        self._reasoning_effort = reasoning_effort
         self._system_prompt = system_prompt
 
-    def _request(self, api_messages: list[dict], tools: list[dict], on_text):
-        """流式发一次请求——返回 (text, raw_tool_calls)。
+    def _request(self, api_messages: list[dict], tools: list[dict], on_text, on_reasoning=None):
+        """流式发一次请求——返回 (text, raw_tool_calls, reasoning)。
 
-        on_text：每个文本增量回调（界面流式显示用；可为 None）。
+        on_text / on_reasoning：文本与思考增量回调（界面显示用；可为 None）。
         raw_tool_calls：按 index 拼装完整的 dict 列表（id/type/function——请求侧格式）。
         """
         stream = self._client.chat.completions.create(
-            model=self._model, messages=api_messages, tools=tools or None, stream=True
+            model=self._model,
+            messages=api_messages,
+            tools=tools or None,
+            temperature=self._temperature,
+            reasoning_effort=self._reasoning_effort,
+            extra_body={"thinking": {"type": "enabled" if self._thinking else "disabled"}},
+            stream=True,
         )
         text_parts: list[str] = []
+        reasoning_parts: list[str] = []
         acc: dict[int, dict] = {}  # index → 拼装中的调用（分片按 index 归位）
         for chunk in stream:
             if not chunk.choices:  # 部分 chunk 无 choices（usage 等）
                 continue
             delta = chunk.choices[0].delta
+            rc = getattr(delta, "reasoning_content", None)  # 思考增量（SDK 类型外字段）
+            if rc:
+                reasoning_parts.append(rc)
+                if on_reasoning:
+                    on_reasoning(rc)
             if delta.content:
                 text_parts.append(delta.content)
                 if on_text:
@@ -128,17 +160,17 @@ class DeepSeekLLM:
                         if tcd.function.arguments:  # arguments 分片累积
                             slot["function"]["arguments"] += tcd.function.arguments
         raw = [acc[i] for i in sorted(acc)]  # 按 index 排序——与到达顺序无关
-        return "".join(text_parts), raw
+        return "".join(text_parts), raw, "".join(reasoning_parts)
 
     def __call__(
-        self, messages: list[Msg], tools: list[dict], on_text=None
-    ) -> tuple[str, list[Action]]:
+        self, messages: list[Msg], tools: list[dict], on_text=None, on_reasoning=None
+    ) -> tuple[str, list[Action], str]:
         # 在调用 API 前进行上下文压缩（投影——不改 history）
-        messages = microcompact_if_needed(messages)
+        messages = microcompact_if_needed(messages, self._compact_threshold, keep_last=self._keep_last)
         api_messages = to_api_messages(self._system_prompt, messages)
 
         try:
-            text, raw = self._request(api_messages, tools, on_text)
+            text, raw, reasoning = self._request(api_messages, tools, on_text, on_reasoning)
         except APIStatusError as e:
             if e.status_code != 413:  # 非超限（401/500 等）——重试无意义，直接抛
                 raise
@@ -146,11 +178,13 @@ class DeepSeekLLM:
             # 第二次不在 try 内——结构上不可能有第三次（无需 has_attempted 标志）
             time.sleep(3)
             # 两刀：丢中间（砍大头）+ 清存活段的胖结果
-            pressed = microcompact(snip(messages), keep_last=0)
-            text, raw = self._request(to_api_messages(self._system_prompt, pressed), tools, on_text)
+            pressed = microcompact(snip(messages, self._snip_keep_groups), keep_last=0)
+            text, raw, reasoning = self._request(
+                to_api_messages(self._system_prompt, pressed), tools, on_text, on_reasoning
+            )
 
         if not raw:  # 无工具调用 = 最终答案 = done（官方停机条件）
-            return (text, [])
+            return (text, [], reasoning)
 
         actions: list[Action] = []
         for tc in raw:
@@ -162,4 +196,4 @@ class DeepSeekLLM:
                 tool_calls=raw,  # 原始结构——assistant 消息重发时原样带回
             ))
 
-        return (text, actions)
+        return (text, actions, reasoning)
