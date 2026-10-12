@@ -3,6 +3,7 @@
 覆盖：WS 会话/流式事件、线程桥接、审批跨进程（Event 等待/唤醒）、驳回回灌、done。
 """
 
+import pytest
 from fastapi.testclient import TestClient
 
 from agent_harness import server
@@ -10,8 +11,18 @@ from agent_harness.llm import Action
 from agent_harness.settings import Settings
 
 
+@pytest.fixture(autouse=True)
+def _isolate_archive_root(tmp_path, monkeypatch):
+    """存档根重定向到临时目录——WS 连接会造占位会话，别污染 ~/.agent_harness_sessions。"""
+    from agent_harness import session as session_mod
+
+    monkeypatch.setattr(session_mod, "SESSION_ROOT", tmp_path / "_archives")
+
+
 class FakeLLM:
     """假模型：第一轮发危险命令动作；后续轮回 done。"""
+
+    current = "fake-model"  # SwitchableLLM 门面属性（server 的 session 事件带模型名）
 
     def __init__(self, *a, **kw):
         self.calls = 0

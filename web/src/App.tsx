@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 import './App.css'
 
 type Ev =
-  | { type: 'session'; id: string; history_n: number; resumed?: boolean }
+  | { type: 'session'; id: string; history_n: number; resumed?: boolean; model?: string }
   | { type: 'sessions'; list: { id: string; preview: string }[] }
   | { type: 'history'; messages: { kind: 'user' | 'assistant' | 'tool'; text: string; name?: string }[] }
   | { type: 'assistant_chunk'; text: string }
@@ -34,6 +34,9 @@ type TraceRec = {
   error?: string
   command?: string
   decision?: string
+  verdict?: string
+  by?: string
+  reason?: string
   duration_ms?: number
 }
 
@@ -59,6 +62,11 @@ function traceRow(r: TraceRec): { label: string; detail: string } {
     return {
       label: '⚠ 审批',
       detail: `${DECISION_ZH[r.decision ?? ''] ?? r.decision ?? ''} · ${(r.command ?? '').slice(0, 60)}`,
+    }
+  if (r.kind === 'hook')
+    return {
+      label: '⚡ 策略',
+      detail: `${r.verdict === 'deny' ? '拦下' : '放行'}（${r.by ?? ''}）${r.reason ? ' · ' + r.reason : ''}`,
     }
   return { label: r.kind, detail: '' }
 }
@@ -91,6 +99,7 @@ function App() {
       const ev: Ev = JSON.parse(e.data)
       if (ev.type === 'session') {
         setSessionId(ev.id)
+        if (ev.model) setModelName(ev.model)  // 会话级模型：恢复时把实际模型带给表头
       } else if (ev.type === 'history') {
         setMsgs(
           ev.messages.map((m) =>

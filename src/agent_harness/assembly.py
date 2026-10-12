@@ -4,6 +4,7 @@ from pathlib import Path
 
 from .config import load_rules
 from .guardrail import safe_tool
+from .hooks import forbid_env_writes
 from .sensors import run_tests
 from .tools import count_lines, edit_file, read_file, run_shell, write_file
 
@@ -21,6 +22,10 @@ SYSTEM_PROMPT = (
 )
 
 WORKSPACE = Path.cwd()  # 工作目录 = 项目根
+
+# 策略名单（S9）：加策略只往这里塞函数——loop 一个字不动
+PRE_HOOKS = [forbid_env_writes]
+POST_HOOKS: list = []  # 后钩子（观察类）——v1 空名单
 
 tools = {
     "read_file": safe_tool(read_file, WORKSPACE),

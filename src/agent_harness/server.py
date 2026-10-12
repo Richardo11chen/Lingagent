@@ -12,6 +12,8 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from .assembly import (
+    POST_HOOKS,
+    PRE_HOOKS,
     WORKSPACE,
     build_system_prompt,
     list_visible_sessions,
@@ -20,7 +22,15 @@ from .assembly import (
 )
 from .llm import Msg
 from .loop import agent_loop
-from .session import load_session, new_session_id, save_messages, trace_path
+from .session import (
+    load_session,
+    load_session_model,
+    new_session_id,
+    prune_empty_sessions,
+    save_messages,
+    save_session_model,
+    trace_path,
+)
 from .trace import Tracer, load_trace
 
 app = FastAPI()
@@ -36,7 +46,7 @@ async def ws_endpoint(ws: WebSocket):
     approval: dict = {}  # 审批等待槽：{"event": Event, "result": bool}
     user_task: asyncio.Task | None = None
 
-    await ws.send_json({"type": "session", "id": session_id, "history_n": len(history)})
+    await ws.send_json({"type": "session", "id": session_id, "history_n": len(history), "model": llm.current})
 
     async def run_user(goal: str) -> None:
         """跑一轮 agent（旁路线程）——回调经事件循环推回 WS。"""
@@ -77,6 +87,7 @@ async def ws_endpoint(ws: WebSocket):
             on_tool=on_tool,
             on_reasoning=on_reasoning,
             tracer=tracer,
+            pre_hooks=PRE_HOOKS, post_hooks=POST_HOOKS,
             max_steps=settings.max_steps,
         )
         reply, new_history = await asyncio.to_thread(run)
@@ -101,10 +112,12 @@ async def ws_endpoint(ws: WebSocket):
                 await ws.send_json(
                     {"type": "models", "list": llm.profiles, "current": llm.current_profile}
                 )
-            elif mtype == "switch_model":  # 运行时切换模型
+            elif mtype == "switch_model":  # 运行时切换模型（会话级——落盘）
                 name = str(msg.get("name", ""))
                 try:
-                    await ws.send_json({"type": "model_switched", "model": llm.switch(name)})
+                    model = llm.switch(name)
+                    save_session_model(WORKSPACE, session_id, name)  # 记在会话上
+                    await ws.send_json({"type": "model_switched", "model": model})
                 except KeyError:
                     await ws.send_json(
                         {"type": "model_switched", "model": "", "error": f"未知 profile：{name}"}
@@ -113,6 +126,7 @@ async def ws_endpoint(ws: WebSocket):
                 recs = load_trace(trace_path(WORKSPACE, session_id))
                 await ws.send_json({"type": "trace", "list": recs[-1000:], "total": len(recs)})
             elif mtype == "sessions_request":  # 列历史会话（前端启动时问）
+                prune_empty_sessions(WORKSPACE)  # 顺手打扫（浏览器每刷新一次就留一个空占位）
                 items = [
                     {"id": s["id"], "preview": s["first_user_msg"]}
                     for s in list_visible_sessions()[:10]
@@ -123,8 +137,12 @@ async def ws_endpoint(ws: WebSocket):
                 if sid and (user_task is None or user_task.done()):
                     history[:] = load_session(WORKSPACE, sid)
                     session_id = sid
+                    saved = load_session_model(WORKSPACE, sid)  # 会话级模型：跟着会话走
+                    if saved and saved in settings.models and saved != llm.current_profile:
+                        llm.switch(saved)
                     await ws.send_json(
-                        {"type": "session", "id": session_id, "history_n": len(history), "resumed": True}
+                        {"type": "session", "id": session_id, "history_n": len(history),
+                         "resumed": True, "model": llm.current}
                     )
                     # 把历史渲染给前端（user/assistant 正文；tool 结果只给提示行——可能很长）
                     rendered = []

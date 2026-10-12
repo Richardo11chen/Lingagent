@@ -97,3 +97,38 @@ def test_load_empty_session(tmp_path):  # 刚占位的新会话：空文件读�
     assert load_session(tmp_path, sid) == []
     # 空会话出现在列表里（first_user_msg 为空）
     assert list_sessions(tmp_path)[0]["first_user_msg"] == ""
+
+
+def test_prune_empty_sessions(tmp_path):  # 打扫：只删「空且老」的占位——有内容的/刚建的不动
+    import os
+    import time
+
+    from agent_harness.session import prune_empty_sessions, session_path
+
+    old_empty = new_session_id(tmp_path)      # 空占位（旧）→ 该删
+    fresh_empty = new_session_id(tmp_path)    # 空占位（新）→ 留着
+    used = new_session_id(tmp_path)           # 有内容（旧）→ 不碰
+    save_messages(tmp_path, used, [Msg("user", "有内容")])
+    past = time.time() - 7200
+    for sid in (old_empty, used):             # 把两个的 mtime 调老
+        os.utime(session_path(tmp_path, sid), (past, past))
+
+    assert prune_empty_sessions(tmp_path) == 1
+    left = {s["id"] for s in list_sessions(tmp_path)}
+    assert old_empty not in left
+    assert fresh_empty in left and used in left
+
+
+def test_session_model_meta_roundtrip(tmp_path):  # 会话级模型：meta 行落盘/读回/后写为准/不进消息
+    from agent_harness.session import load_session_model, save_session_model
+
+    sid = new_session_id(tmp_path)
+    save_messages(tmp_path, sid, [Msg("user", "hi")])
+    assert load_session_model(tmp_path, sid) is None          # 没切过 = 没记录
+    assert load_session_model(tmp_path, "不存在的会话") is None  # 文件不存在 = None
+    save_session_model(tmp_path, sid, "MiniMax-M3")
+    assert load_session_model(tmp_path, sid) == "MiniMax-M3"
+    save_session_model(tmp_path, sid, "deepseek-flash")       # 再切：后写的为准
+    assert load_session_model(tmp_path, sid) == "deepseek-flash"
+    assert [m.content for m in load_session(tmp_path, sid)] == ["hi"]  # meta 不进消息
+    assert list_sessions(tmp_path)[0]["first_user_msg"] == "hi"        # 预览不受扰

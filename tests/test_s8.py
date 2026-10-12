@@ -82,6 +82,19 @@ def test_trace_event_detail_renders_raw():  # 钻取明细：全文原样输出�
     assert "#3" in out
 
 
+def test_loop_records_model_name(tmp_path):  # model 事件带实际模型名（排查「到底谁在答」用）
+    from agent_harness.llm import ScriptLLM
+    from agent_harness.loop import agent_loop
+
+    class NamedLLM(ScriptLLM):
+        current = "minimax-m3"  # 模拟 SwitchableLLM 的 current 属性
+
+    p = tmp_path / "t.trace.jsonl"
+    agent_loop("干活", NamedLLM([]), {}, "sys", tracer=Tracer(p), max_steps=3)
+    recs = _recs(p)
+    assert recs[0]["kind"] == "model" and recs[0]["model"] == "minimax-m3"
+
+
 def test_loop_writes_trace(tmp_path):  # 接线：一轮 = model → tool → model 三条事件
     from agent_harness.llm import Action, ScriptLLM
     from agent_harness.loop import agent_loop

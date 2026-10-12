@@ -112,7 +112,7 @@ def list_sessions(workspace: Path) -> list[dict]:
 
 
 def load_session(workspace: Path, session_id: str) -> list[Msg]:
-    """读回 Msg 列表——坏行（崩溃残留的半行）跳过，保住会话其余部分。"""
+    """读回 Msg 列表——坏行跳过；meta 行（会话属性，如模型选择）不进消息。"""
     path = session_path(workspace, session_id)
     msgs: list[Msg] = []
     with open(path, encoding="utf-8") as f:
@@ -121,7 +121,56 @@ def load_session(workspace: Path, session_id: str) -> list[Msg]:
             if not line:
                 continue
             try:
-                msgs.append(_dict_to_msg(json.loads(line)))
+                rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(rec, dict) or rec.get("kind") == "meta":
+                continue
+            msgs.append(_dict_to_msg(rec))
     return msgs
+
+
+def save_session_model(workspace: Path, session_id: str, profile: str) -> None:
+    """把「这个会话在用的模型」写进存档（meta 行，append-only——后写的为准）。"""
+    path = session_path(workspace, session_id)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"kind": "meta", "model": profile}, ensure_ascii=False) + "\n")
+
+
+def prune_empty_sessions(workspace: Path, older_than_sec: float = 3600) -> int:
+    """打扫：删掉「空且老」的占位会话（0 字节 = 开了没聊）。
+
+    阈值默认 1 小时——避开刚开始、可能马上要写的会话；正在跑的进程即使被删了
+    也无碍（下次写时 `open("a")` 会把文件重建）。返回删了几个。
+    """
+    d = _session_dir(workspace)
+    now = time.time()
+    removed = 0
+    for p in d.glob("*.jsonl"):
+        try:
+            st = p.stat()
+            if st.st_size == 0 and (now - st.st_mtime) > older_than_sec:
+                p.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def load_session_model(workspace: Path, session_id: str) -> str | None:
+    """读回会话的模型 profile 名（没切过/文件不存在 = None → 用默认）。"""
+    path = session_path(workspace, session_id)
+    if not path.exists():
+        return None
+    model = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict) and rec.get("kind") == "meta":
+            model = rec.get("model")
+    return model

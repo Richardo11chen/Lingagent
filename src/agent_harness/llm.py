@@ -86,6 +86,62 @@ def to_api_messages(system_prompt: str, messages: list[Msg]) -> list[dict]:
     return api_messages
 
 
+class ThinkSplitter:
+    """把正文里 <mm:think>…</mm:think> 包着的思考拆到思考通道（MiniMax 形态）。
+
+    标签会被流分片切断（"<mm:t" + "hink>"），所以尾部可能残留「半个标签」——扣住等下一片。
+    对不吐这形态的厂商（DeepSeek）零影响：拆分器全程一字不扣地放行。
+    """
+
+    OPEN = "<mm:think>"
+    CLOSE = "</mm:think>"
+
+    def __init__(self):
+        self._buf = ""
+        self._in_think = False
+
+    def feed(self, chunk: str) -> list[tuple[str, bool]]:
+        """喂增量，吐出 [(文本, 是思考吗), ...]——只吐已确定的整块。
+
+        两个标签都当结构件：**孤立的闭标签直接吞掉**（有的网关自己抽了思考、
+        只把 `</mm:think>` 残渣落在正文里——minimax 实测）；重复的开标签同理。
+        """
+        self._buf += chunk
+        out: list[tuple[str, bool]] = []
+        while True:
+            oi = self._buf.find(self.OPEN)
+            ci = self._buf.find(self.CLOSE)
+            if oi < 0 and ci < 0:
+                keep = max(  # 尾巴里有没有「半个标签」——两个标签都要防（分片会切断）
+                    (k for tag in (self.OPEN, self.CLOSE) for k in range(1, len(tag))
+                     if self._buf.endswith(tag[:k])),
+                    default=0,
+                )
+                emit, self._buf = (self._buf[:-keep], self._buf[-keep:]) if keep else (self._buf, "")
+                if emit:
+                    out.append((emit, self._in_think))
+                return out
+            if ci < 0 or (0 <= oi < ci):  # 先遇到开标签
+                pre, self._buf, entering = self._buf[:oi], self._buf[oi + len(self.OPEN):], True
+            else:                          # 先遇到闭标签
+                pre, self._buf, entering = self._buf[:ci], self._buf[ci + len(self.CLOSE):], False
+            if pre:
+                out.append((pre, self._in_think))
+            if entering and not self._in_think:
+                self._in_think = True      # 开思考
+            elif not entering and self._in_think:
+                self._in_think = False     # 收思考
+            # 其余情形（重复开 / 孤立闭）＝ 结构残渣，直接吞
+
+    def flush(self) -> list[tuple[str, bool]]:
+        """流结束：残留缓冲按当前状态派出（没闭合的标签当思考——模型忘了收尾也不丢字）。"""
+        out = []
+        if self._buf:
+            out.append((self._buf, self._in_think))
+            self._buf = ""
+        return out
+
+
 class DeepSeekLLM:
     """真模型适配器：history → API messages → 解析 tool_calls 成 Action。
 
@@ -141,6 +197,18 @@ class DeepSeekLLM:
         stream = self._client.chat.completions.create(**kwargs)
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
+        splitter = ThinkSplitter()  # 正文里的 <mm:think> 剥去思考通道（MiniMax 形态）
+
+        def _emit(piece: str, is_think: bool) -> None:
+            if is_think:
+                reasoning_parts.append(piece)
+                if on_reasoning:
+                    on_reasoning(piece)
+            else:
+                text_parts.append(piece)
+                if on_text:
+                    on_text(piece)
+
         acc: dict[int, dict] = {}  # index → 拼装中的调用（分片按 index 归位）
         for chunk in stream:
             if not chunk.choices:  # 部分 chunk 无 choices（usage 等）
@@ -154,9 +222,8 @@ class DeepSeekLLM:
                 if on_reasoning:
                     on_reasoning(rc)
             if delta.content:
-                text_parts.append(delta.content)
-                if on_text:
-                    on_text(delta.content)
+                for piece, is_think in splitter.feed(delta.content):
+                    _emit(piece, is_think)
             if delta.tool_calls:
                 for tcd in delta.tool_calls:
                     slot = acc.setdefault(
@@ -170,6 +237,8 @@ class DeepSeekLLM:
                             slot["function"]["name"] = tcd.function.name
                         if tcd.function.arguments:  # arguments 分片累积
                             slot["function"]["arguments"] += tcd.function.arguments
+        for piece, is_think in splitter.flush():  # 收尾：派发残留缓冲
+            _emit(piece, is_think)
         raw = [acc[i] for i in sorted(acc)]  # 按 index 排序——与到达顺序无关
         return "".join(text_parts), raw, "".join(reasoning_parts)
 

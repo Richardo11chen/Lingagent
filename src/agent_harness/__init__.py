@@ -5,13 +5,24 @@ from pathlib import Path
 
 from . import tui
 from .assembly import (
+    POST_HOOKS,
+    PRE_HOOKS,
     WORKSPACE,
     build_system_prompt,
     list_visible_sessions,
     load_settings_and_llm,
     tools,
 )
-from .session import list_sessions, new_session_id, load_session, save_messages, trace_path
+from .session import (
+    list_sessions,
+    load_session,
+    load_session_model,
+    new_session_id,
+    prune_empty_sessions,
+    save_messages,
+    save_session_model,
+    trace_path,
+)
 from .loop import agent_loop
 from .llm import Msg, DeepSeekLLM
 from .trace import Tracer, load_trace
@@ -57,7 +68,17 @@ def main() -> None:
     if settings.web_autostart and tui.interactive():  # 管道/脚本模式不拉网页端
         web_started = ensure_web(settings.server_port, WORKSPACE, WORKSPACE / "web")
 
+    prune_empty_sessions(WORKSPACE)  # 打扫：清掉「开了没聊」的空占位（不阻塞——顺手的事）
     session_id, history = choose_session(WORKSPACE)
+    # 会话级模型（用户定）：打开哪个会话用它上次用的模型；--model 显式指定优先
+    saved = load_session_model(WORKSPACE, session_id)
+    if saved and saved not in settings.models:
+        tui.show_note(f"会话原用模型 {saved} 已不在配置里，回退默认")
+    target = args.model or (saved if saved in settings.models else None)
+    if target and target != llm.current_profile:
+        llm.switch(target)
+    if args.model:  # 显式指定 → 落账（这个会话从此认它）
+        save_session_model(WORKSPACE, session_id, llm.current_profile)
     tracer = Tracer(trace_path(WORKSPACE, session_id))  # S8：轨迹与 session 同目录同 id
     tui.show_banner(session_id, len(history), llm.current)
     if history:
@@ -80,11 +101,13 @@ def main() -> None:
             else:
                 tui.show_note(f"没有 #{arg} 这条事件（当前共 {len(recs)} 条）")
             continue
-        if goal == "/model":  # 运行时切换模型
+        if goal == "/model":  # 运行时切换模型（会话级——落盘，退出不丢）
             tui.show_models(llm.profiles, llm.current_profile)
             pick = tui.ask().strip()
             if pick.isdigit() and 1 <= int(pick) <= len(llm.profiles):
-                tui.show_note(f"已切换到 {llm.switch(llm.profiles[int(pick) - 1])}")
+                name = llm.profiles[int(pick) - 1]
+                tui.show_note(f"已切换到 {llm.switch(name)}")
+                save_session_model(WORKSPACE, session_id, name)  # 记在会话上，下次打开还认
             continue
         if not goal:
             continue
@@ -97,6 +120,7 @@ def main() -> None:
             on_text=tui.stream_chunk, on_tool=tui.show_tool,
             on_reasoning=tui.reasoning_chunk,
             tracer=tracer,
+            pre_hooks=PRE_HOOKS, post_hooks=POST_HOOKS,
             max_steps=settings.max_steps,
         )
         tui.end_stream()

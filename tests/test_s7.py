@@ -140,6 +140,102 @@ def test_request_omits_private_params_when_off(monkeypatch):
     assert "reasoning_effort" not in captured
 
 
+def test_think_splitter_basic():  # 正文里的 <mm:think> 剥到思考通道
+    from agent_harness.llm import ThinkSplitter
+
+    sp = ThinkSplitter()
+    assert sp.feed("<mm:think>想一下</mm:think>答案") == [("想一下", True), ("答案", False)]
+    assert sp.flush() == []
+
+
+def test_think_splitter_across_chunks():  # 标签被分片切断也要正确归位（片段可能被拆多块，拼起来对即可）
+    from agent_harness.llm import ThinkSplitter
+
+    sp = ThinkSplitter()
+    out = []
+    for chunk in ["<mm:thi", "nk>思考", "中</mm:t", "hink>正文"]:
+        out += sp.feed(chunk)
+    out += sp.flush()
+    think = "".join(t for t, is_think in out if is_think)
+    plain = "".join(t for t, is_think in out if not is_think)
+    assert (think, plain) == ("思考中", "正文")
+
+
+def test_think_splitter_stray_close_dropped():  # 孤立闭标签是残渣——直接吞（网关抽走思考只留下它）
+    from agent_harness.llm import ThinkSplitter
+
+    sp = ThinkSplitter()
+    assert sp.feed("</mm:think>3") == [("3", False)]  # 正文只剩 3
+    assert sp.flush() == []
+
+
+def test_think_splitter_plain_text_untouched():  # 不带标签的文本零延迟放行（DeepSeek 路径不受影响）
+    from agent_harness.llm import ThinkSplitter
+
+    sp = ThinkSplitter()
+    assert sp.feed("普通文本") == [("普通文本", False)]
+
+
+def test_request_extracts_think_to_reasoning(monkeypatch):  # 走一遍 _request：转轨到 💭 通道
+    from types import SimpleNamespace
+
+    from agent_harness.llm import DeepSeekLLM
+    from agent_harness.messages import Msg
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
+    llm = DeepSeekLLM("sys")
+
+    def delta(content):
+        return SimpleNamespace(content=content, tool_calls=None, reasoning_content=None)
+
+    chunks = [
+        SimpleNamespace(choices=[SimpleNamespace(delta=delta("<mm:think>悄悄想"))]),
+        SimpleNamespace(choices=[SimpleNamespace(delta=delta("</mm:think>你好"))]),
+    ]
+    llm._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: iter(chunks)))
+    )
+    got_text, got_reasoning = [], []
+    text, _, reasoning = llm(
+        [Msg("user", "hi")], [], on_text=got_text.append, on_reasoning=got_reasoning.append
+    )
+    assert text == "你好" and reasoning == "悄悄想"     # 正文干净、思考归位
+    assert got_reasoning == ["悄悄想"] and "".join(got_text) == "你好"  # 两个回调通道各归各
+
+
+def test_request_assembles_tool_calls_with_think_split(monkeypatch):
+    # 回归：剥离 mm:think 不能吞掉 tool_calls（曾因缩进错位整段失灵——真机 minimax 抓到）
+    from types import SimpleNamespace
+
+    from agent_harness.llm import DeepSeekLLM
+    from agent_harness.messages import Msg
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
+    llm = DeepSeekLLM("sys")
+
+    def delta(content=None, tc=None):
+        return SimpleNamespace(content=content, tool_calls=tc, reasoning_content=None)
+
+    def tcf(index, id=None, name=None, args=None):
+        fn = SimpleNamespace(name=name, arguments=args)
+        return SimpleNamespace(index=index, id=id, function=fn)
+
+    chunks = [
+        SimpleNamespace(choices=[SimpleNamespace(delta=delta(content="<mm:think>想想"))]),
+        SimpleNamespace(choices=[SimpleNamespace(delta=delta(
+            content="</mm:think>", tc=[tcf(0, id="call_1", name="read_file", args='{"pa')]))]),
+        SimpleNamespace(choices=[SimpleNamespace(delta=delta(tc=[tcf(0, args='th": "a.txt"}')]))]),
+    ]
+    llm._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: iter(chunks)))
+    )
+    text, actions, reasoning = llm([Msg("user", "hi")], [])
+    assert reasoning == "想想" and text == ""
+    assert len(actions) == 1
+    assert actions[0].tool == "read_file" and actions[0].args == {"path": "a.txt"}
+    assert actions[0].tool_call_id == "call_1"
+
+
 def test_stream_tolerates_none_delta(monkeypatch):
     # 有的网关在收尾 chunk 里 delta=null（minimax-m3 实测）——解析不能崩
     from types import SimpleNamespace

@@ -214,6 +214,10 @@ def show_trace(recs: list[dict], session_id: str) -> None:
         elif kind == "approval":
             decision = {"approved": "已批准", "denied": "已驳回"}.get(r.get("decision"), str(r.get("decision")))
             table.add_row(str(i), ts, "⚠  审批", f"{decision} · {str(r.get('command', ''))[:40]}", _fmt_ms(r.get("duration_ms")))
+        elif kind == "hook":
+            verdict = "拦下" if r.get("verdict") == "deny" else "放行"
+            reason = f" · {r.get('reason', '')}" if r.get("reason") else ""
+            table.add_row(str(i), ts, "⚡ 策略", f"{verdict}（{r.get('by', '')}）{reason}"[:60], "")
     console.print(table)
     console.print("[dim]看某条全文：/trace N[/]")
 
