@@ -48,6 +48,11 @@ def session_path(workspace: Path, session_id: str) -> Path:
     return _session_dir(workspace) / f"{session_id}.jsonl"
 
 
+def trace_path(workspace: Path, session_id: str) -> Path:
+    """轨迹文件路径（S8·留痕）：与 session 同目录同 id——归档布局仍只在这里拼。"""
+    return _session_dir(workspace) / f"{session_id}.trace.jsonl"
+
+
 def _msg_to_dict(m: Msg) -> dict:
     """Msg → JSON 原生 dict（tool_calls 的 pydantic 对象用 model_dump 转纯 dict）。"""
     d: dict = {"role": m.role, "content": m.content}

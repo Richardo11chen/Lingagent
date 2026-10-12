@@ -11,9 +11,10 @@ from .assembly import (
     load_settings_and_llm,
     tools,
 )
-from .session import list_sessions, new_session_id, load_session, save_messages
+from .session import list_sessions, new_session_id, load_session, save_messages, trace_path
 from .loop import agent_loop
 from .llm import Msg, DeepSeekLLM
+from .trace import Tracer, load_trace
 
 def choose_session(workspace: Path) -> tuple[str, list[Msg]]:
     """列历史会话让用户选；返回 (session_id, history)。"""
@@ -52,6 +53,7 @@ def main() -> None:
     approver = lambda cmd: tui.show_approval(cmd).strip().lower() == "y"
 
     session_id, history = choose_session(WORKSPACE)
+    tracer = Tracer(trace_path(WORKSPACE, session_id))  # S8：轨迹与 session 同目录同 id
     tui.show_banner(session_id, len(history), llm.current)
     if history:
         tui.show_history(history)  # 恢复的会话：把历史渲染出来
@@ -62,6 +64,9 @@ def main() -> None:
             break  # 输入读尽（管道喂完 / Ctrl+Z 回车）——收工退出，不是错误
         if goal in ("exit", "quit"):
             break
+        if goal == "/trace":  # S8：轨迹时间线（只读投影）
+            tui.show_trace(load_trace(trace_path(WORKSPACE, session_id)), session_id)
+            continue
         if goal == "/model":  # 运行时切换模型
             tui.show_models(llm.profiles, llm.current_profile)
             pick = tui.ask().strip()
@@ -78,6 +83,7 @@ def main() -> None:
             approver=approver, history=history,
             on_text=tui.stream_chunk, on_tool=tui.show_tool,
             on_reasoning=tui.reasoning_chunk,
+            tracer=tracer,
             max_steps=settings.max_steps,
         )
         tui.end_stream()

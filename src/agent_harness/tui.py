@@ -10,11 +10,13 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.styles import Style
 from wcwidth import wcswidth
+from rich import box
 from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.text import Text
 from rich.panel import Panel
+from rich.table import Table
 
 console = Console()
 
@@ -163,11 +165,44 @@ def show_note(text: str) -> None:
     console.print(f"[magenta]{text}[/]")
 
 
+def _fmt_ms(v) -> str:
+    if not isinstance(v, (int, float)):
+        return ""
+    return f"{round(v)}ms" if v < 1000 else f"{v / 1000:.1f}s"
+
+
+def show_trace(recs: list[dict], session_id: str) -> None:
+    """轨迹时间线（/trace）——只读投影（S8 决策 4：只看，不重演）。"""
+    if not recs:
+        console.print("[dim]这个会话还没有轨迹。[/]")
+        return
+    table = Table(title=f"轨迹 · {session_id}", title_justify="left", box=box.SIMPLE, pad_edge=False)
+    table.add_column("时间", style="dim")
+    table.add_column("事件")
+    table.add_column("详情")
+    table.add_column("耗时", justify="right", style="dim")
+    for r in recs:
+        ts = str(r.get("ts", ""))[11:23]  # 只留 HH:MM:SS.mmm
+        kind = r.get("kind")
+        if kind == "model":
+            table.add_row(ts, "● 模型", f"step {r.get('step')} · 要了 {r.get('n_actions', '?')} 个动作", _fmt_ms(r.get("duration_ms")))
+        elif kind == "tool":
+            status = {"ok": "成功", "denied": "驳回", "blocked": "拦截", "error": "错误"}.get(r.get("status"), str(r.get("status")))
+            args = r.get("args") or {}
+            detail = str(args.get("command") or args.get("path") or "")
+            if r.get("error"):
+                detail = f"{detail} {r['error']}".strip()
+            table.add_row(ts, f"⚙  {r.get('tool')}", f"{status} · {detail[:50]}", _fmt_ms(r.get("duration_ms")))
+        elif kind == "approval":
+            table.add_row(ts, "⚠  审批", f"{r.get('decision')} · {str(r.get('command', ''))[:40]}", _fmt_ms(r.get("duration_ms")))
+    console.print(table)
+
+
 def show_tool(name: str, args: dict | None = None) -> None:
     detail = str((args or {}).get("command") or (args or {}).get("path") or "")
     if len(detail) > 50:
         detail = detail[:50] + "…"
-    line = f"⚙ {name}{': ' + detail if detail else ''}"
+    line = f"⚙  {name}{': ' + detail if detail else ''}"
     if _live:
         _seal_current()
         _blocks.append(Text(line, style="dim"))
@@ -178,9 +213,23 @@ def show_tool(name: str, args: dict | None = None) -> None:
 
 def show_approval(command: str) -> str:
     prompt_text = f"⚠️ 允许执行「{command}」吗？(y/n) "
+    global _live, _blocks
+    restart = False
+    if _live is not None:
+        # 流式中途审批：prompt_toolkit 要独占终端，而 Live 还在每秒 8 次重画——
+        # 让它先收口让位（stop 把最后一帧留在屏幕上），答完再起新 Live 接着画
+        _seal_current()
+        _live.stop()
+        _live = None
+        _blocks = []  # 旧块已印在屏幕上——新 Live 不重画，避免同一份内容印两遍
+        restart = True
     try:
         if not interactive():
             return input(prompt_text)
         return _session_get().prompt(message=[("fg:ansiyellow bold", prompt_text + "❯ ")])
     except EOFError:
         return "n"  # 输入读尽（管道喂完 / Ctrl+Z）——无声即驳回（安全默认）
+    finally:
+        if restart:
+            _live = Live(console=console, refresh_per_second=8, vertical_overflow="visible")
+            _live.start()

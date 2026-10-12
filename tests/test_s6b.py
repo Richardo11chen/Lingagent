@@ -29,9 +29,10 @@ def _no_save(workspace, session_id, msgs):  # 测试不落盘
     return None
 
 
-def test_ws_streaming_and_done(monkeypatch):  # 基本流：session → chunk → done
+def test_ws_streaming_and_done(monkeypatch, tmp_path):  # 基本流：session → chunk → done
     monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None: (FakeLLM(), Settings()))
     monkeypatch.setattr(server, "save_messages", _no_save)
+    monkeypatch.setattr(server, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
     c = TestClient(server.app)
     with c.websocket_connect("/ws") as ws:
         assert ws.receive_json()["type"] == "session"
@@ -50,9 +51,10 @@ def test_ws_streaming_and_done(monkeypatch):  # 基本流：session → chunk �
         assert "approval_request" in types      # 审批被触发（桥接通）
 
 
-def test_ws_approval_approved(monkeypatch):  # 批准路径：命令真执行（run_shell 被调）
+def test_ws_approval_approved(monkeypatch, tmp_path):  # 批准路径：命令真执行（run_shell 被调）
     monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None: (FakeLLM(), Settings()))
     monkeypatch.setattr(server, "save_messages", _no_save)
+    monkeypatch.setattr(server, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
     ran = {}
 
     def fake_run_shell(command: str) -> str:

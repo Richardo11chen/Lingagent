@@ -20,7 +20,8 @@ from .assembly import (
 )
 from .llm import Msg
 from .loop import agent_loop
-from .session import load_session, new_session_id, save_messages
+from .session import load_session, new_session_id, save_messages, trace_path
+from .trace import Tracer
 
 app = FastAPI()
 
@@ -63,6 +64,7 @@ async def ws_endpoint(ws: WebSocket):
             return approval["result"]
 
         old_len = len(history)
+        tracer = Tracer(trace_path(WORKSPACE, session_id))  # 每轮现取——resume 换 id 后自动跟到新文件
         run = partial(
             agent_loop,
             goal,
@@ -74,6 +76,7 @@ async def ws_endpoint(ws: WebSocket):
             on_text=on_text,
             on_tool=on_tool,
             on_reasoning=on_reasoning,
+            tracer=tracer,
             max_steps=settings.max_steps,
         )
         reply, new_history = await asyncio.to_thread(run)

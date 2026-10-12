@@ -14,6 +14,30 @@ def test_approval_eof_denies(monkeypatch):  # 审批时输入读尽（管道/流
     assert tui.show_approval("rm -rf /") == "n"
 
 
+def test_approval_suspends_live(monkeypatch):  # 流式中途审批：Live 让位（stop→答→start），旧块不重画
+    from agent_harness import tui
+
+    events = []
+
+    class FakeLive:
+        def stop(self):
+            events.append("stop")
+
+        def start(self):
+            events.append("start")
+
+    monkeypatch.setattr(tui, "_live", FakeLive())
+    monkeypatch.setattr(tui, "_blocks", [object()])
+    monkeypatch.setattr(tui, "Live", lambda **kw: FakeLive())
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("n\n"))
+
+    ans = tui.show_approval("del /q x")
+    assert ans.strip() == "n"
+    assert events == ["stop", "start"]  # 让位→答→重开
+    assert tui._blocks == []            # 旧块已被 stop 的最后一帧印掉——不重画
+
+
 def test_choose_session_non_tty(monkeypatch, tmp_path):  # 非终端 → 跳过会话选择，直接新会话
     import agent_harness
     from agent_harness import session

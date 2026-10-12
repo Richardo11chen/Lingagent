@@ -6,6 +6,7 @@ from .messages import Msg
 from .sensors import run_sensors
 from .guardrail import is_dangerous_command
 from .schema import TOOL_SCHEMAS
+from .trace import Tracer
 
 MAX_STEPS = 20
 Tool = Callable[..., str]
@@ -21,15 +22,20 @@ def agent_loop(
     on_text: Callable[[str], None] | None = None,  # 流式文本增量回调（透传给模型适配器）
     on_tool: Callable[[str, dict], None] | None = None,  # 工具执行提示回调（名字 + 参数，界面用）
     on_reasoning: Callable[[str], None] | None = None,  # 思考增量回调（界面用）
+    tracer: Tracer | None = None,  # 轨迹记录器（S8）——None = 关闭态，什么都不记
 ) -> tuple[str, list[Msg]]:
-    
+    if tracer is None:
+        tracer = Tracer()  # 关闭态空对象：不传 tracer 的调用方，代码一行不改
+
     answer = None
     history = [Msg("user", goal)] if history is None else history + [Msg("user", goal)]
 
-    for _ in range(max_steps):
-        text, actions, reasoning = llm(
-            history, TOOL_SCHEMAS, on_text=on_text, on_reasoning=on_reasoning
-        )
+    for step in range(1, max_steps + 1):
+        with tracer.timed("model", step=step) as ev:
+            text, actions, reasoning = llm(
+                history, TOOL_SCHEMAS, on_text=on_text, on_reasoning=on_reasoning
+            )
+            ev.fields["n_actions"] = len(actions)
         if not actions:
             answer = text
             history.append(Msg("assistant", text, reasoning_content=reasoning or None))
@@ -39,27 +45,42 @@ def agent_loop(
             Msg("assistant", text, tool_calls=actions[0].tool_calls, reasoning_content=reasoning or None)
         )
         for action in actions:
-            if on_tool:
-                on_tool(action.tool, action.args)
-            tool_func = tools.get(action.tool)
-            if action.tool == "run_shell" and is_dangerous_command(action.args.get("command", "")):
-                # 治理护栏：危险命令，先问人——批准才真执行，其余路径都到此为止
-                if approver is None:
-                    result = "无批准者，命令被策略拦截：危险命令不执行。"
-                elif approver(action.args["command"]):
+            with tracer.timed("tool", step=step, tool=action.tool, args=action.args) as ev:
+                if on_tool:
+                    on_tool(action.tool, action.args)
+                tool_func = tools.get(action.tool)
+                if action.tool == "run_shell" and is_dangerous_command(action.args.get("command", "")):
+                    # 治理护栏：危险命令，先问人——批准才真执行，其余路径都到此为止
+                    if approver is None:
+                        result = "无批准者，命令被策略拦截：危险命令不执行。"
+                        ev.fields["status"] = "blocked"
+                    else:
+                        with tracer.timed("approval", step=step, command=action.args["command"]) as aev:
+                            approved = approver(action.args["command"])
+                            aev.fields["decision"] = "approved" if approved else "denied"
+                        if approved:
+                            try:
+                                result = tool_func(**action.args)      # 批准 → 真执行
+                                ev.fields["status"] = "ok"
+                            except Exception as e:
+                                result = f"{action.tool}工具调用失败。"
+                                ev.fields["status"] = "error"
+                                ev.fields["error"] = f"{type(e).__name__}: {e}"
+                        else:
+                            result = "命令被驳回，未执行。"
+                            ev.fields["status"] = "denied"
+                elif tool_func:
                     try:
-                        result = tool_func(**action.args)      # 批准 → 真执行
+                        result = tool_func(**action.args)
+                        ev.fields["status"] = "ok"
                     except Exception as e:
                         result = f"{action.tool}工具调用失败。"
+                        ev.fields["status"] = "error"
+                        ev.fields["error"] = f"{type(e).__name__}: {e}"
                 else:
-                    result = "命令被驳回，未执行。"
-            elif tool_func:
-                try:
-                    result = tool_func(**action.args)
-                except Exception as e:
-                    result = f"{action.tool}工具调用失败。"
-            else:
-                result = f"工具不存在：未知工具 {action.tool}。"
+                    result = f"工具不存在：未知工具 {action.tool}。"
+                    ev.fields["status"] = "error"
+                ev.fields["result"] = result  # 全文（S8 决策 3）
 
             if action.tool_call_id:
                 # 回灌 tool 消息：模型发出的原始 tool_calls → 解析成 Action → 执行 → 回灌结果
