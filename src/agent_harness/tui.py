@@ -61,6 +61,24 @@ def show_banner(session_id: str, n_history: int, model_name: str = "") -> None:
     )
 
 
+def show_sessions(rows: list[dict], page: int, total_pages: int, total: int) -> None:
+    """历史会话选择器（分页）——rows: {time, model, preview}，每页十条。"""
+    table = Table(box=box.SIMPLE_HEAD, pad_edge=False, show_edge=False)
+    table.add_column("#", style="dim", justify="right")
+    table.add_column("时间", style="dim")
+    table.add_column("模型", style="magenta")
+    table.add_column("会话", overflow="ellipsis")
+    for i, r in enumerate(rows, 1):
+        table.add_row(str(i), r["time"], r["model"], r["preview"])
+    console.print(Panel(
+        table,
+        title=f"历史会话 · 第 {page}/{total_pages} 页 · 共 {total} 个",
+        title_align="left", border_style="blue",
+    ))
+    keys = "输入序号选择 · n 下一页 · p 上一页 · 0 新会话" if total_pages > 1 else "输入序号选择 · 0 新会话"
+    console.print(f"[dim]{keys}[/]")
+
+
 def show_web_hint(started: list[str] | None = None) -> None:
     """网页端链接提示——由调用方放在历史渲染之后（长历史时不用往上翻找）。"""
     tail = f" · {'、'.join(started)}启动中，几秒后就绪" if started else ""

@@ -29,29 +29,43 @@ from .trace import Tracer, load_trace
 from .weblaunch import ensure_web
 
 def choose_session(workspace: Path) -> tuple[str, list[Msg]]:
-    """列历史会话让用户选；返回 (session_id, history)。"""
+    """列历史会话让用户选（分页，每页 10 条）；返回 (session_id, history)。"""
     if not tui.interactive():
         return new_session_id(workspace), []          # 非终端（管道喂任务）：选择没意义，直接新会话
     sessions = list_visible_sessions()
     if not sessions:
         return new_session_id(workspace), []          # 首次：开新会话
-    print("历史会话：")
-    for i, s in enumerate(sessions[:10], 1):          # 最多列 10 个
-        t = time.strftime("%m-%d %H:%M", time.localtime(s["mtime"]))
-        print(f"  {i}. [{t}] {s['first_user_msg'] or '(空会话)'}")
-    print("  0. 新会话")
-    try:
-        choice = input("选择> ").strip()
-    except EOFError:                                   # 终端读尽（Ctrl+Z 回车）——开新会话
-        return new_session_id(workspace), []
-    if choice == "0" or not choice:
-        return new_session_id(workspace), []
-    try:
-        s = sessions[int(choice) - 1]
-    except (ValueError, IndexError):
-        print("输入无效，开新会话。")
-        return new_session_id(workspace), []
-    return s["id"], load_session(workspace, s["id"])
+
+    per_page = 10
+    page = 1
+    while True:
+        total_pages = (len(sessions) + per_page - 1) // per_page
+        page = min(page, total_pages)
+        chunk = sessions[(page - 1) * per_page: page * per_page]
+        rows = [
+            {
+                "time": time.strftime("%m-%d %H:%M", time.localtime(s["mtime"])),
+                "model": load_session_model(workspace, s["id"]) or "-",
+                "preview": (s["first_user_msg"] or "(空会话)").replace("\n", " ")[:40],
+            }
+            for s in chunk
+        ]
+        tui.show_sessions(rows, page, total_pages, len(sessions))
+        try:
+            choice = input("选择> ").strip().lower()
+        except EOFError:                               # 终端读尽（Ctrl+Z 回车）——开新会话
+            return new_session_id(workspace), []
+        if choice in ("0", ""):
+            return new_session_id(workspace), []       # 新会话
+        if choice == "n" and page < total_pages:
+            page += 1
+        elif choice == "p" and page > 1:
+            page -= 1
+        elif choice.isdigit() and 1 <= int(choice) <= len(chunk):
+            s = chunk[int(choice) - 1]
+            return s["id"], load_session(workspace, s["id"])
+        else:
+            tui.show_note("没这个选项——按提示来")
 
 def main() -> None:
     import argparse

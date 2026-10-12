@@ -129,7 +129,7 @@ async def ws_endpoint(ws: WebSocket):
                 prune_empty_sessions(WORKSPACE)  # 顺手打扫（浏览器每刷新一次就留一个空占位）
                 items = [
                     {"id": s["id"], "preview": s["first_user_msg"]}
-                    for s in list_visible_sessions()[:10]
+                    for s in list_visible_sessions()  # 全量下发——前端弹层可滚动
                 ]
                 await ws.send_json({"type": "sessions", "list": items})
             elif mtype == "resume":  # 恢复某个会话

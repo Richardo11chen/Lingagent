@@ -45,6 +45,31 @@ def test_approval_suspends_live(monkeypatch):  # 流式中途审批：Live 让�
     assert any("驳回" in l for l in lines)  # 答完补一行决定记录（屏幕侧留痕）
 
 
+def test_choose_session_paginates(monkeypatch, tmp_path):  # 超过一页：n 翻到第 2 页，选到第 2 页的会话
+    import agent_harness
+    from agent_harness import session as session_mod
+
+    monkeypatch.setattr(session_mod, "SESSION_ROOT", tmp_path / "_archives")
+    fake = [{"id": f"s{i:02d}", "mtime": 0.0, "first_user_msg": f"会话{i}"} for i in range(25)]
+    monkeypatch.setattr(agent_harness, "list_visible_sessions", lambda: fake)
+    monkeypatch.setattr(agent_harness, "load_session", lambda w, sid: [])
+    monkeypatch.setattr(tui, "interactive", lambda: True)
+    shown = []
+    monkeypatch.setattr(
+        tui, "show_sessions",
+        lambda rows, page, total_pages, total: shown.append((page, total_pages, rows[0]["preview"])),
+    )
+    inputs = iter(["n", "1"])  # 翻到第 2 页 → 选第 1 个
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
+
+    sid, history = agent_harness.choose_session(tmp_path)
+    assert sid == "s10"                        # 第 2 页第 1 个 = 总第 11 个
+    assert [p for p, _, _ in shown] == [1, 2]  # 渲染了两页
+    assert shown[1][1] == 3                    # 25 个 → 共 3 页
+    assert shown[1][2] == "会话10"
+    assert history == []
+
+
 def test_choose_session_non_tty(monkeypatch, tmp_path):  # 非终端 → 跳过会话选择，直接新会话
     import agent_harness
     from agent_harness import session
