@@ -70,13 +70,15 @@ def test_config_syntax_error_fails_fast(tmp_path):  # TOML 语法错（如值没
 def test_global_sections(tmp_path):  # 全局节（loop/context/server）照旧
     p = tmp_path / "c.toml"
     p.write_text(
-        "[loop]\nmax_steps = 5\n\n[context]\ncompact_threshold = 1234\n\n[server]\nport = 9999\n",
+        "[loop]\nmax_steps = 5\n\n[context]\ncompact_threshold = 1234\n\n"
+        "[server]\nport = 9999\n\n[web]\nautostart = false\n",
         encoding="utf-8",
     )
     s = load_settings(p)
     assert s.max_steps == 5
     assert s.compact_threshold == 1234
     assert s.server_port == 9999
+    assert s.web_autostart is False
 
 
 def test_private_params_fallback(tmp_path):  # 私有参数非法值一律回退 off（= 不传）——别瞎猜厂商语义

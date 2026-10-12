@@ -21,7 +21,7 @@ from .assembly import (
 from .llm import Msg
 from .loop import agent_loop
 from .session import load_session, new_session_id, save_messages, trace_path
-from .trace import Tracer
+from .trace import Tracer, load_trace
 
 app = FastAPI()
 
@@ -109,6 +109,9 @@ async def ws_endpoint(ws: WebSocket):
                     await ws.send_json(
                         {"type": "model_switched", "model": "", "error": f"未知 profile：{name}"}
                     )
+            elif mtype == "trace_request":  # S8：轨迹时间线（只读投影——决策 4）
+                recs = load_trace(trace_path(WORKSPACE, session_id))
+                await ws.send_json({"type": "trace", "list": recs[-1000:], "total": len(recs)})
             elif mtype == "sessions_request":  # 列历史会话（前端启动时问）
                 items = [
                     {"id": s["id"], "preview": s["first_user_msg"]}
@@ -152,6 +155,7 @@ def main() -> None:
             raise SystemExit(f"未知模型 profile：{args.model}（可用：{', '.join(s.models)}）")
         global _CLI_MODEL
         _CLI_MODEL = args.model  # ws_endpoint 构造 llm 时用
+    print("前端（网页界面）: http://localhost:5173（在 web/ 下 npm run dev）")
     uvicorn.run(app, host=s.server_host, port=s.server_port)
 
 

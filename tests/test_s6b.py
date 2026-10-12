@@ -75,6 +75,49 @@ def test_ws_approval_approved(monkeypatch, tmp_path):  # 批准路径：命令�
     assert ran.get("cmd") == "rm -rf test_dir"  # 批准后真执行
 
 
+def test_ensure_web_skips_when_running(monkeypatch, tmp_path):
+    # 幂等：端口都有人在听 → 一个进程都不许拉
+    from agent_harness import weblaunch
+
+    calls = []
+    monkeypatch.setattr(weblaunch, "_port_open", lambda port: True)
+    monkeypatch.setattr(weblaunch.subprocess, "Popen", lambda *a, **k: calls.append(a))
+    assert weblaunch.ensure_web(8000, tmp_path, tmp_path) == []
+    assert calls == []
+
+
+def test_ensure_web_spawns_missing(monkeypatch, tmp_path):
+    # 缺谁拉谁：后端（python -m）+ 前端（npm.cmd → cmd /c）
+    from agent_harness import weblaunch
+
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "package.json").write_text("{}", encoding="utf-8")
+    spawned = []
+    monkeypatch.setattr(weblaunch, "_port_open", lambda port: False)
+    monkeypatch.setattr(weblaunch.shutil, "which", lambda name: "C:/fake/npm.cmd")
+    monkeypatch.setattr(weblaunch.subprocess, "Popen", lambda argv, **k: spawned.append(argv))
+
+    started = weblaunch.ensure_web(8000, tmp_path, web)
+    assert started == ["后端", "前端"]
+    assert spawned[0][1:] == ["-m", "agent_harness.server"]
+    assert spawned[1][0].lower().endswith("cmd.exe") and "run" in spawned[1]
+
+
+def test_ws_trace_request(monkeypatch, tmp_path):  # 轨迹时间线：trace_request → trace 事件（只读）
+    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None: (FakeLLM(), Settings()))
+    tf = tmp_path / "t.trace.jsonl"
+    tf.write_text('{"kind": "model", "step": 1, "n_actions": 0}\n', encoding="utf-8")
+    monkeypatch.setattr(server, "trace_path", lambda w, s: tf)
+    c = TestClient(server.app)
+    with c.websocket_connect("/ws") as ws:
+        ws.receive_json()  # session
+        ws.send_json({"type": "trace_request"})
+        ev = ws.receive_json()
+    assert ev["type"] == "trace"
+    assert ev["total"] == 1 and ev["list"][0]["kind"] == "model"
+
+
 def test_server_cli_model_fail_fast(tmp_path):
     # 启动期就拦住打错的 profile 名（别等 WS 连上才在 handler 里炸——前端只看到连接即断）
     import os

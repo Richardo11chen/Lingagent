@@ -239,3 +239,30 @@ footer button {
 .bubble.assistant th {
   background: #0b0d11;
 }
+
+.trace-panel button .trace-main {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-field {
+  border: 1px solid #2a2d34;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #16181d;
+}
+
+.trace-field .sid {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.trace-field pre {
+  margin: 0;
+  font-family: Consolas, Menlo, monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #e6e6e6;
+}

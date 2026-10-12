@@ -15,6 +15,7 @@ from .session import list_sessions, new_session_id, load_session, save_messages,
 from .loop import agent_loop
 from .llm import Msg, DeepSeekLLM
 from .trace import Tracer, load_trace
+from .weblaunch import ensure_web
 
 def choose_session(workspace: Path) -> tuple[str, list[Msg]]:
     """列历史会话让用户选；返回 (session_id, history)。"""
@@ -52,11 +53,16 @@ def main() -> None:
     llm, settings = load_settings_and_llm(base_prompt, args.model)  # 可切换门面（流式）
     approver = lambda cmd: tui.show_approval(cmd).strip().lower() == "y"
 
+    web_started: list[str] = []
+    if settings.web_autostart and tui.interactive():  # 管道/脚本模式不拉网页端
+        web_started = ensure_web(settings.server_port, WORKSPACE, WORKSPACE / "web")
+
     session_id, history = choose_session(WORKSPACE)
     tracer = Tracer(trace_path(WORKSPACE, session_id))  # S8：轨迹与 session 同目录同 id
     tui.show_banner(session_id, len(history), llm.current)
     if history:
         tui.show_history(history)  # 恢复的会话：把历史渲染出来
+    tui.show_web_hint(web_started)  # 链接放历史之后（长历史时不用往上翻）
     while True:
         try:
             goal = tui.ask().strip()

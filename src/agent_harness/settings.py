@@ -42,6 +42,7 @@ class Settings:
     snip_keep_groups: int = 3
     server_host: str = "127.0.0.1"
     server_port: int = 8000
+    web_autostart: bool = True  # 进 TUI 时自动把网页端（后端 + 前端 dev server）拉起来
 
     def model(self, name: str | None = None) -> ModelProfile:
         """取 profile（指定名 或 default）；名字不存在回退 default。"""
@@ -91,6 +92,9 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
     sv = data.get("server", {})
     s.server_host = str(sv.get("host", s.server_host))
     s.server_port = int(sv.get("port", s.server_port))
+
+    wb = data.get("web", {})
+    s.web_autostart = bool(wb.get("autostart", s.web_autostart))
 
     if s.default_model not in s.models:  # default 指向不存在的 profile → 当场说清楚（别等 KeyError）
         raise SystemExit(

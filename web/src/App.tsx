@@ -13,6 +13,7 @@ type Ev =
   | { type: 'reasoning'; text: string }
   | { type: 'models'; list: string[]; current: string }
   | { type: 'model_switched'; model: string; error?: string }
+  | { type: 'trace'; list: TraceRec[]; total: number }
   | { type: 'approval_request'; command: string }
 
 type Msg =
@@ -21,7 +22,48 @@ type Msg =
   | { kind: 'tool'; name: string; detail?: string }
   | { kind: 'reasoning'; text: string }
 
+type TraceRec = {
+  ts: string
+  kind: string
+  step?: number
+  n_actions?: number
+  tool?: string
+  args?: { command?: string; path?: string }
+  status?: string
+  result?: string
+  error?: string
+  command?: string
+  decision?: string
+  duration_ms?: number
+}
+
 const WS_URL = 'ws://127.0.0.1:8000/ws'
+
+const fmtMs = (v?: number) => (v == null ? '' : v < 1000 ? `${Math.round(v)}ms` : `${(v / 1000).toFixed(1)}s`)
+const STATUS_ZH: Record<string, string> = { ok: '成功', denied: '驳回', blocked: '拦截', error: '错误' }
+const DECISION_ZH: Record<string, string> = { approved: '已批准', denied: '已驳回' }
+
+// 口径与 TUI /trace 对齐（工程化措辞）
+function traceRow(r: TraceRec): { label: string; detail: string } {
+  if (r.kind === 'model')
+    return {
+      label: '● 模型',
+      detail: r.error ? `失败 · ${r.error}` : `step ${r.step} · 工具调用 ×${r.n_actions ?? '?'}`,
+    }
+  if (r.kind === 'tool')
+    return {
+      label: `⚙ ${r.tool ?? ''}`,
+      detail: `${STATUS_ZH[r.status ?? ''] ?? r.status ?? ''} · ${r.args?.command ?? r.args?.path ?? ''}${r.error ? ' ' + r.error : ''}`,
+    }
+  if (r.kind === 'approval')
+    return {
+      label: '⚠ 审批',
+      detail: `${DECISION_ZH[r.decision ?? ''] ?? r.decision ?? ''} · ${(r.command ?? '').slice(0, 60)}`,
+    }
+  return { label: r.kind, detail: '' }
+}
+
+const fmtVal = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
 
 function App() {
   const [msgs, setMsgs] = useState<Msg[]>([])
@@ -32,6 +74,8 @@ function App() {
   const [sessions, setSessions] = useState<{ id: string; preview: string }[] | null>(null)
   const [modelName, setModelName] = useState('')
   const [modelPicker, setModelPicker] = useState<{ list: string[]; current: string } | null>(null)
+  const [trace, setTrace] = useState<{ list: TraceRec[]; total: number } | null>(null)
+  const [traceSel, setTraceSel] = useState<number | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -55,6 +99,9 @@ function App() {
         )
       } else if (ev.type === 'sessions') {
         if (ev.list.length > 0) setSessions(ev.list)
+      } else if (ev.type === 'trace') {
+        setTrace({ list: ev.list, total: ev.total })
+        setTraceSel(null)
       } else if (ev.type === 'models') {
         setModelPicker({ list: ev.list, current: ev.current })
       } else if (ev.type === 'model_switched') {
@@ -106,6 +153,11 @@ function App() {
     if (!text || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
     if (text === '/model') {
       wsRef.current.send(JSON.stringify({ type: 'models_request' }))
+      setInput('')
+      return
+    }
+    if (text === '/trace') {
+      wsRef.current.send(JSON.stringify({ type: 'trace_request' }))
       setInput('')
       return
     }
@@ -188,6 +240,49 @@ function App() {
           <button className="new" onClick={() => setModelPicker(null)}>
             取消
           </button>
+        </div>
+      )}
+      {trace !== null && (
+        <div className="session-picker trace-panel">
+          {traceSel === null ? (
+            <>
+              <h3>
+                轨迹时间线（共 {trace.total} 条
+                {trace.total > trace.list.length ? `，显示最近 ${trace.list.length} 条` : ''}）
+              </h3>
+              {trace.list.map((r, i) => {
+                const row = traceRow(r)
+                return (
+                  <button key={i} onClick={() => setTraceSel(i)}>
+                    <span className="trace-main">
+                      #{i + 1} {row.label} {row.detail}
+                    </span>
+                    <span className="sid">
+                      {r.ts.slice(11, 23)} {fmtMs(r.duration_ms)}
+                    </span>
+                  </button>
+                )
+              })}
+              <button className="new" onClick={() => setTrace(null)}>
+                关闭
+              </button>
+            </>
+          ) : (
+            <>
+              <h3>
+                #{traceSel + 1} · {trace.list[traceSel].kind}
+              </h3>
+              {Object.entries(trace.list[traceSel]).map(([k, v]) => (
+                <div key={k} className="trace-field">
+                  <span className="sid">{k}</span>
+                  <pre>{fmtVal(v)}</pre>
+                </div>
+              ))}
+              <button className="new" onClick={() => setTraceSel(null)}>
+                返回列表
+              </button>
+            </>
+          )}
         </div>
       )}
       {approval !== null && (

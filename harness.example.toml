@@ -43,3 +43,6 @@ snip_keep_groups = 3        # reactive 丢中间时保留最近 K 组
 [server]
 host = "127.0.0.1"
 port = 8000
+
+[web]
+autostart = true            # 进 TUI 时自动拉起网页端（后端 + 前端 dev server）——已在跑的不重复拉

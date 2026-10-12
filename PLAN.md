@@ -100,6 +100,7 @@
 - S7 = 多模型档（2026-10-09，配置维做深）：每个模型一个 profile（**不做 provider 层**——YAGNI：连接信息重复两行，等「改一处要改多处」再抽象）；`thinking` / `reasoning_effort` 三态、默认不传（**翻案**：旧版无条件传 DeepSeek 私有参数——兼容面只盖协议骨架，不盖厂商扩展参数）；身份类配置错误 fail fast（`--model` 未知、`default` 不在 `[models.*]` 均当场退出）；双端 `/model` 运行时切换（`SwitchableLLM` 门面）。范围：只接 OpenAI 兼容面（用户拍板）。
 - 编号注记（2026-10-09）：S7 原为 Isolate / 子 agent 预留（见 CE 表），实际施工让位给多模型档；子 agent 顺延为后续候选。
 - 配置支持 `api_key` 直写（2026-10-09，用户要求「不考虑安全性」）：profile 写 `api_key = "..."` 即用、**优先于 `api_key_env`**；两者都缺 → 启动时 SystemExit（替代裸 KeyError）。明文落盘——示例文件注明「别把 key 提交进仓库」。
+- 网页端自启（2026-10-12，用户要求）：进 TUI 自动确保网页端在跑——端口探测**幂等**（已在跑的不重复拉）、进程 **detached**（关 TUI 网页端不受影响）、`[web].autostart` 可关、管道/非交互模式不触发。实现 `weblaunch.py`。
 
 ## 终局参照：agent_loop 伪代码（用户规格材料 2026-08-28 提供）
 
