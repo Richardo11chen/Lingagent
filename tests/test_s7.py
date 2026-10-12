@@ -57,6 +57,16 @@ def test_legacy_single_model_section(tmp_path):  # 老格式 [model] 单节自�
     assert s.model().name == "deepseek-v4-pro"
 
 
+def test_config_syntax_error_fails_fast(tmp_path):  # TOML 语法错（如值没加引号）→ 干净报错，不是 traceback
+    import pytest
+
+    p = tmp_path / "c.toml"
+    p.write_text("[models.x]\napi_key_env = sk-abc\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as e:
+        load_settings(p)
+    assert "语法错误" in str(e.value)
+
+
 def test_global_sections(tmp_path):  # 全局节（loop/context/server）照旧
     p = tmp_path / "c.toml"
     p.write_text(
@@ -91,6 +101,28 @@ def _stub_client(captured: dict):
     return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
 
 
+def test_api_key_direct(tmp_path, monkeypatch):  # api_key 直写配置：优先于 api_key_env
+    from agent_harness.llm import DeepSeekLLM
+
+    p = tmp_path / "c.toml"
+    p.write_text('[models.x]\nname = "m"\napi_key = "sk-direct"\n', encoding="utf-8")
+    prof = load_settings(p).model("x")
+    assert prof.api_key == "sk-direct"
+    monkeypatch.delenv("X_KEY", raising=False)  # 环境变量没设也不影响——直写优先
+    llm = DeepSeekLLM("sys", api_key=prof.api_key, api_key_env="X_KEY")
+    assert llm._client.api_key == "sk-direct"
+
+
+def test_api_key_missing_fail_fast(monkeypatch):  # 直写和 env 都缺 → 启动时当场退出（别等首次请求 401）
+    import pytest
+
+    from agent_harness.llm import DeepSeekLLM
+
+    monkeypatch.delenv("NO_SUCH_KEY", raising=False)
+    with pytest.raises(SystemExit):
+        DeepSeekLLM("sys", api_key_env="NO_SUCH_KEY")
+
+
 def test_request_omits_private_params_when_off(monkeypatch):
     # 跨厂商安全：off（默认）= 请求体里一个 DeepSeek 私有参数都没有
     from agent_harness.llm import DeepSeekLLM
@@ -104,6 +136,32 @@ def test_request_omits_private_params_when_off(monkeypatch):
 
     assert "extra_body" not in captured
     assert "reasoning_effort" not in captured
+
+
+def test_stream_tolerates_none_delta(monkeypatch):
+    # 有的网关在收尾 chunk 里 delta=null（minimax-m3 实测）——解析不能崩
+    from types import SimpleNamespace
+
+    from agent_harness.llm import DeepSeekLLM
+    from agent_harness.messages import Msg
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
+    llm = DeepSeekLLM("sys")
+
+    def chunk(delta):
+        return SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+
+    chunks = [
+        chunk(SimpleNamespace(content="你好", tool_calls=None, reasoning_content=None)),
+        chunk(None),  # ← 实测撞到的那片
+        SimpleNamespace(choices=[]),  # usage 类 chunk：无 choices
+    ]
+    llm._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: iter(chunks)))
+    )
+    text, actions, reasoning = llm([Msg("user", "hi")], [])
+    assert text == "你好"
+    assert actions == []
 
 
 def test_request_carries_private_params_when_set(monkeypatch):

@@ -25,6 +25,7 @@ class ModelProfile:
     name: str = "deepseek-v4-flash"
     base_url: str = "https://api.deepseek.com"
     api_key_env: str = "DEEPSEEK_API_KEY"
+    api_key: str = ""  # 直写密钥（优先于 api_key_env；明文落盘——示例文件别提交进仓库）
     temperature: float = 1.0
     thinking: str = "off"  # "enabled" / "disabled" / "off"（off = 不传）
     reasoning_effort: str = "off"  # "low" / "high" / "max" / "off"（off = 不传）
@@ -52,6 +53,7 @@ def _profile_from(data: dict) -> ModelProfile:
     p.name = str(data.get("name", p.name))
     p.base_url = str(data.get("base_url", p.base_url))
     p.api_key_env = str(data.get("api_key_env", p.api_key_env))
+    p.api_key = str(data.get("api_key", p.api_key))
     p.temperature = float(data.get("temperature", p.temperature))
     th = str(data.get("thinking", p.thinking)).lower()
     p.thinking = th if th in ("enabled", "disabled", "off") else "off"  # 非法回退 off（不传）
@@ -65,7 +67,10 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
     s = Settings()
     if not path.exists():
         return s
-    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as e:  # 语法错（漏引号等）——给一行干净报错，别甩 traceback
+        raise SystemExit(f"配置文件语法错误：{path}\n{e}")
 
     # 模型 profiles：新格式 [models.*]；老格式 [model] 单个节自动兼容
     if "models" in data:

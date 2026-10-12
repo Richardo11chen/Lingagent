@@ -65,6 +65,7 @@ class SwitchableLLM:
             model=p.name,
             base_url=p.base_url,
             api_key_env=p.api_key_env,
+            api_key=p.api_key,
             temperature=p.temperature,
             compact_threshold=self._settings.compact_threshold,
             keep_last=self._settings.keep_last,

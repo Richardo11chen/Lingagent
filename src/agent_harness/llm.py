@@ -98,6 +98,7 @@ class DeepSeekLLM:
         model: str = "deepseek-v4-flash",
         base_url: str = "https://api.deepseek.com",
         api_key_env: str = "DEEPSEEK_API_KEY",
+        api_key: str = "",
         temperature: float = 1.0,
         compact_threshold: int = 70_000,
         keep_last: int = 5,
@@ -105,7 +106,10 @@ class DeepSeekLLM:
         thinking: str = "off",
         reasoning_effort: str = "off",
     ):
-        self._client = OpenAI(api_key=os.environ[api_key_env], base_url=base_url)
+        key = api_key or os.environ.get(api_key_env, "")  # 直写优先；不写回退环境变量
+        if not key:
+            raise SystemExit(f"缺少 API key：profile 没写 api_key，环境变量 {api_key_env} 也没设置")
+        self._client = OpenAI(api_key=key, base_url=base_url)
         self._model = model
         self._temperature = temperature
         self._compact_threshold = compact_threshold
@@ -142,6 +146,8 @@ class DeepSeekLLM:
             if not chunk.choices:  # 部分 chunk 无 choices（usage 等）
                 continue
             delta = chunk.choices[0].delta
+            if delta is None:  # 有的网关收尾 chunk 给 delta=null（minimax-m3 实测）——跳过
+                continue
             rc = getattr(delta, "reasoning_content", None)  # 思考增量（SDK 类型外字段）
             if rc:
                 reasoning_parts.append(rc)

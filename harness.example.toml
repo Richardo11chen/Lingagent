@@ -1,6 +1,6 @@
 # Agent Harness 配置示例
 # 复制到 ~/.agent_harness.toml 后按需修改。
-# ⚠️ 密钥不落盘——只写「从哪个环境变量读」（api_key_env）。
+# 密钥两种写法：① 只写「从哪个环境变量读」（api_key_env，默认）② 直写 api_key（明文落盘——写了优先）
 
 [model]
 default = "deepseek-flash"  # 当前使用哪个 profile——必须是下面某个 [models.*] 的名字（CLI --model 可临时覆盖）
@@ -11,6 +11,7 @@ default = "deepseek-flash"  # 当前使用哪个 profile——必须是下面某
 name = "deepseek-flash"
 base_url = "https://api.deepseek.com"
 api_key_env = "DEEPSEEK_API_KEY"
+# api_key = "sk-..."        # 可直写（明文——别把 key 提交进仓库；写了优先于上面的 env）
 temperature = 1.0           # ⚠️ 思考模式下不生效（官方：不报错、静默忽略）
 thinking = "enabled"        # DeepSeek 私有：开关——"enabled" / "disabled" / "off"（off = 不传）
 reasoning_effort = "high"   # DeepSeek 私有：强度——"low" / "high" / "max"；"off" = 不传
