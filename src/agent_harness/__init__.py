@@ -64,8 +64,15 @@ def main() -> None:
             break  # 输入读尽（管道喂完 / Ctrl+Z 回车）——收工退出，不是错误
         if goal in ("exit", "quit"):
             break
-        if goal == "/trace":  # S8：轨迹时间线（只读投影）
-            tui.show_trace(load_trace(trace_path(WORKSPACE, session_id)), session_id)
+        if goal == "/trace" or goal.startswith("/trace "):  # S8：轨迹时间线（只读投影）
+            recs = load_trace(trace_path(WORKSPACE, session_id))
+            arg = goal[len("/trace"):].strip()
+            if not arg:
+                tui.show_trace(recs, session_id)      # 总览
+            elif arg.isdigit() and 1 <= int(arg) <= len(recs):
+                tui.show_trace_event(recs[int(arg) - 1], int(arg))  # 钻取单条全文
+            else:
+                tui.show_note(f"没有 #{arg} 这条事件（当前共 {len(recs)} 条）")
             continue
         if goal == "/model":  # 运行时切换模型
             tui.show_models(llm.profiles, llm.current_profile)

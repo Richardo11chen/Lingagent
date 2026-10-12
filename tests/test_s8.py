@@ -55,6 +55,33 @@ def _recs(p):
     return [json.loads(l) for l in p.read_text(encoding="utf-8").strip().splitlines()]
 
 
+def test_trace_event_detail_renders_raw():  # 钻取明细：全文原样输出，方括号不会被当 markup 解析
+    import io
+
+    from rich.console import Console
+
+    from agent_harness import tui
+
+    buf = io.StringIO()
+    old = tui.console
+    tui.console = Console(file=buf, width=120)
+    try:
+        tui.show_trace_event(
+            {
+                "ts": "2026-10-12T16:05:46.037", "kind": "tool", "step": 1, "tool": "run_shell",
+                "args": {"command": "del /q x & echo [exit=%errorlevel%]"},
+                "status": "ok", "result": "[bold]不是 markup[/] 原始文本", "duration_ms": 5,
+            },
+            3,
+        )
+    finally:
+        tui.console = old
+    out = buf.getvalue()
+    assert "[bold]不是 markup[/]" in out    # 原样输出——没有被当 markup 吃掉
+    assert "exit=%errorlevel%" in out
+    assert "#3" in out
+
+
 def test_loop_writes_trace(tmp_path):  # 接线：一轮 = model → tool → model 三条事件
     from agent_harness.llm import Action, ScriptLLM
     from agent_harness.loop import agent_loop

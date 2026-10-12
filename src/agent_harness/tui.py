@@ -21,6 +21,7 @@ from rich.table import Table
 console = Console()
 
 _session: PromptSession | None = None
+_approval: PromptSession | None = None  # 审批专用输入会话（erase_when_done、无 toolbar）
 _live: Live | None = None
 _blocks: list = []  # 本轮已封块的 renderables（快照）
 _reasoning_buf = ""
@@ -97,12 +98,18 @@ def show_history(messages) -> None:
             show_tool(m.tool_name or "工具结果")
 
 
-def begin_stream() -> None:
-    """本轮开始：开 Live（唯一输出通道——思考/工具/正文都在里面组合渲染）。"""
-    global _live, _blocks, _reasoning_buf, _text_buf, _in_reasoning
-    _blocks, _reasoning_buf, _text_buf, _in_reasoning = [], "", "", False
+def _live_open() -> None:
+    """开一个新 Live 接着画（审批让位后归位用——旧块已印屏，不重画）。"""
+    global _live
     _live = Live(console=console, refresh_per_second=8, vertical_overflow="visible")
     _live.start()
+
+
+def begin_stream() -> None:
+    """本轮开始：开 Live（唯一输出通道——思考/工具/正文都在里面组合渲染）。"""
+    global _blocks, _reasoning_buf, _text_buf, _in_reasoning
+    _blocks, _reasoning_buf, _text_buf, _in_reasoning = [], "", "", False
+    _live_open()
 
 
 def _seal_current() -> None:
@@ -177,25 +184,45 @@ def show_trace(recs: list[dict], session_id: str) -> None:
         console.print("[dim]这个会话还没有轨迹。[/]")
         return
     table = Table(title=f"轨迹 · {session_id}", title_justify="left", box=box.SIMPLE, pad_edge=False)
+    table.add_column("#", style="dim", justify="right")
     table.add_column("时间", style="dim")
     table.add_column("事件")
     table.add_column("详情")
     table.add_column("耗时", justify="right", style="dim")
-    for r in recs:
+    for i, r in enumerate(recs, 1):
         ts = str(r.get("ts", ""))[11:23]  # 只留 HH:MM:SS.mmm
         kind = r.get("kind")
         if kind == "model":
-            table.add_row(ts, "● 模型", f"step {r.get('step')} · 要了 {r.get('n_actions', '?')} 个动作", _fmt_ms(r.get("duration_ms")))
+            if r.get("error"):
+                detail = f"失败 · {r['error']}"
+            else:
+                detail = f"工具调用 ×{r.get('n_actions', '?')}"
+            table.add_row(str(i), ts, "● 模型", f"step {r.get('step')} · {detail}", _fmt_ms(r.get("duration_ms")))
         elif kind == "tool":
             status = {"ok": "成功", "denied": "驳回", "blocked": "拦截", "error": "错误"}.get(r.get("status"), str(r.get("status")))
             args = r.get("args") or {}
             detail = str(args.get("command") or args.get("path") or "")
             if r.get("error"):
                 detail = f"{detail} {r['error']}".strip()
-            table.add_row(ts, f"⚙  {r.get('tool')}", f"{status} · {detail[:50]}", _fmt_ms(r.get("duration_ms")))
+            table.add_row(str(i), ts, f"⚙  {r.get('tool')}", f"{status} · {detail[:50]}", _fmt_ms(r.get("duration_ms")))
         elif kind == "approval":
-            table.add_row(ts, "⚠  审批", f"{r.get('decision')} · {str(r.get('command', ''))[:40]}", _fmt_ms(r.get("duration_ms")))
+            decision = {"approved": "已批准", "denied": "已驳回"}.get(r.get("decision"), str(r.get("decision")))
+            table.add_row(str(i), ts, "⚠  审批", f"{decision} · {str(r.get('command', ''))[:40]}", _fmt_ms(r.get("duration_ms")))
     console.print(table)
+    console.print("[dim]看某条全文：/trace N[/]")
+
+
+def show_trace_event(rec: dict, idx: int) -> None:
+    """单条事件的完整内容（/trace N）——总览表里钻进去看全文。
+
+    内容走 Text（不走 markup 解析）——工具结果里带 [exit=0] 这类方括号是常态。
+    """
+    body = Text()
+    body.append(f"#{idx} · {rec.get('kind', '')}\n", style="bold")
+    for k, v in rec.items():
+        body.append(f"{k}：", style="dim")
+        body.append(f"{v}\n")
+    console.print(Panel(body, title="轨迹明细", title_align="left", border_style="dim"))
 
 
 def show_tool(name: str, args: dict | None = None) -> None:
@@ -211,6 +238,14 @@ def show_tool(name: str, args: dict | None = None) -> None:
         console.print(f"[dim]{line}[/]")  # Live 外（如历史渲染）直接打印
 
 
+def _approval_session() -> PromptSession:
+    """审批专用输入会话：erase_when_done——答完自动擦提示行（不擦会留屏，像「又弹了一次」）。"""
+    global _approval
+    if _approval is None:
+        _approval = PromptSession(erase_when_done=True)
+    return _approval
+
+
 def show_approval(command: str) -> str:
     prompt_text = f"⚠️ 允许执行「{command}」吗？(y/n) "
     global _live, _blocks
@@ -223,13 +258,22 @@ def show_approval(command: str) -> str:
         _live = None
         _blocks = []  # 旧块已印在屏幕上——新 Live 不重画，避免同一份内容印两遍
         restart = True
+
+    ans = "n"  # 默认驳回——异常路径也有一张安全票
     try:
         if not interactive():
-            return input(prompt_text)
-        return _session_get().prompt(message=[("fg:ansiyellow bold", prompt_text + "❯ ")])
+            ans = input(prompt_text)
+        else:
+            ans = _approval_session().prompt(message=[("fg:ansiyellow bold", prompt_text + "❯ ")])
     except EOFError:
-        return "n"  # 输入读尽（管道喂完 / Ctrl+Z）——无声即驳回（安全默认）
-    finally:
+        pass  # 输入读尽（管道喂完 / Ctrl+Z）——维持默认驳回
+    except BaseException:  # Ctrl+C 等：Live 先归位再抛
         if restart:
-            _live = Live(console=console, refresh_per_second=8, vertical_overflow="visible")
-            _live.start()
+            _live_open()
+        raise
+
+    # 此时 Live 仍停着——这一行永久落屏（审批的屏幕侧留痕；文件侧在 trace）
+    console.print(f"[yellow]⚠  审批：{'已批准' if ans.strip().lower() == 'y' else '已驳回'}[/] [dim]· {command[:60]}[/]")
+    if restart:
+        _live_open()
+    return ans

@@ -14,10 +14,11 @@ def test_approval_eof_denies(monkeypatch):  # 审批时输入读尽（管道/流
     assert tui.show_approval("rm -rf /") == "n"
 
 
-def test_approval_suspends_live(monkeypatch):  # 流式中途审批：Live 让位（stop→答→start），旧块不重画
+def test_approval_suspends_live(monkeypatch):  # 流式中途审批：Live 让位（stop→答→start）+ 决定落一行
     from agent_harness import tui
 
     events = []
+    lines = []
 
     class FakeLive:
         def stop(self):
@@ -26,9 +27,14 @@ def test_approval_suspends_live(monkeypatch):  # 流式中途审批：Live 让�
         def start(self):
             events.append("start")
 
+    class FakeConsole:
+        def print(self, *a, **k):
+            lines.append(str(a[0]) if a else "")
+
     monkeypatch.setattr(tui, "_live", FakeLive())
     monkeypatch.setattr(tui, "_blocks", [object()])
     monkeypatch.setattr(tui, "Live", lambda **kw: FakeLive())
+    monkeypatch.setattr(tui, "console", FakeConsole())
     monkeypatch.setattr(tui, "interactive", lambda: False)
     monkeypatch.setattr(sys, "stdin", io.StringIO("n\n"))
 
@@ -36,6 +42,7 @@ def test_approval_suspends_live(monkeypatch):  # 流式中途审批：Live 让�
     assert ans.strip() == "n"
     assert events == ["stop", "start"]  # 让位→答→重开
     assert tui._blocks == []            # 旧块已被 stop 的最后一帧印掉——不重画
+    assert any("驳回" in l for l in lines)  # 答完补一行决定记录（屏幕侧留痕）
 
 
 def test_choose_session_non_tty(monkeypatch, tmp_path):  # 非终端 → 跳过会话选择，直接新会话
