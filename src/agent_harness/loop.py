@@ -26,6 +26,7 @@ def agent_loop(
     tracer: Tracer | None = None,  # 轨迹记录器（S8）——None = 关闭态，什么都不记
     pre_hooks: list | None = None,  # 预钩子名单（S9）——None = 空名单
     post_hooks: list | None = None,  # 后钩子名单（S9·观察类）
+    on_hook: Callable[[str, str], None] | None = None,  # 策略拦截回调（by, reason）——界面实时流用
 ) -> tuple[str, list[Msg]]:
     if tracer is None:
         tracer = Tracer()  # 关闭态空对象：不传 tracer 的调用方，代码一行不改
@@ -90,6 +91,8 @@ def agent_loop(
                         ev.fields["status"] = "denied"
                         ev.fields["hook"] = pre.by
                         may_run = False
+                        if on_hook:
+                            on_hook(pre.by, pre.reason)  # 实时流冒一行（只在拦下时——放行不冒，防噪音）
 
                 # 第三道：真执行
                 if may_run:

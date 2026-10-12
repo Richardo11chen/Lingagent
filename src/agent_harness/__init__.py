@@ -135,6 +135,7 @@ def main() -> None:
             on_reasoning=tui.reasoning_chunk,
             tracer=tracer,
             pre_hooks=PRE_HOOKS, post_hooks=POST_HOOKS,
+            on_hook=tui.show_hook,
             max_steps=settings.max_steps,
         )
         tui.end_stream()

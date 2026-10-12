@@ -115,6 +115,37 @@ def test_ensure_web_spawns_missing(monkeypatch, tmp_path):
     assert spawned[1][0].lower().endswith("cmd.exe") and "run" in spawned[1]
 
 
+def test_ws_hook_denied_event(monkeypatch, tmp_path):  # 策略拦下 → WS 推 hook 事件（实时流一行）
+    class EnvLLM:
+        current = "fake-model"
+
+        def __init__(self, *a, **kw):
+            self.calls = 0
+
+        def __call__(self, messages, tools, on_text=None, on_reasoning=None):
+            if self.calls:
+                return ("完成", [], "")
+            self.calls += 1
+            return ("", [Action(tool="write_file", args={"path": ".env", "content": "x"})], "")
+
+    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None: (EnvLLM(), Settings()))
+    monkeypatch.setattr(server, "save_messages", _no_save)
+    monkeypatch.setattr(server, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
+    c = TestClient(server.app)
+    with c.websocket_connect("/ws") as ws:
+        ws.receive_json()  # session
+        ws.send_json({"type": "user", "text": "干活"})
+        hook_ev = None
+        while True:
+            m = ws.receive_json()
+            if m["type"] == "hook":
+                hook_ev = m
+            if m["type"] == "assistant_done":
+                break
+    assert hook_ev is not None
+    assert hook_ev["by"] == "forbid_env_writes" and "敏感文件" in hook_ev["reason"]
+
+
 def test_ws_trace_request(monkeypatch, tmp_path):  # 轨迹时间线：trace_request → trace 事件（只读）
     monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None: (FakeLLM(), Settings()))
     tf = tmp_path / "t.trace.jsonl"

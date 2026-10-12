@@ -9,3 +9,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# 本地环境变量 / 密钥（不入仓）
+.env

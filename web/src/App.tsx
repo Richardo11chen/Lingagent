@@ -14,6 +14,7 @@ type Ev =
   | { type: 'models'; list: string[]; current: string }
   | { type: 'model_switched'; model: string; error?: string }
   | { type: 'trace'; list: TraceRec[]; total: number }
+  | { type: 'hook'; by: string; reason: string }
   | { type: 'approval_request'; command: string }
 
 type Msg =
@@ -21,6 +22,7 @@ type Msg =
   | { kind: 'assistant'; text: string; streaming?: boolean }
   | { kind: 'tool'; name: string; detail?: string }
   | { kind: 'reasoning'; text: string }
+  | { kind: 'hook'; text: string }
 
 type TraceRec = {
   ts: string
@@ -146,6 +148,8 @@ function App() {
         })
       } else if (ev.type === 'tool') {
         setMsgs((ms) => [...ms, { kind: 'tool', name: ev.name, detail: ev.detail }])
+      } else if (ev.type === 'hook') {
+        setMsgs((ms) => [...ms, { kind: 'hook', text: `⚡ 策略拦截：${ev.by} · ${ev.reason}` }])
       } else if (ev.type === 'approval_request') {
         setApproval(ev.command)
       }
@@ -198,6 +202,10 @@ function App() {
           ) : m.kind === 'reasoning' ? (
             <div key={i} className="reasoning">
               💭 {m.text}
+            </div>
+          ) : m.kind === 'hook' ? (
+            <div key={i} className="tool hook">
+              {m.text}
             </div>
           ) : (
             <div key={i} className={`bubble ${m.kind}`}>

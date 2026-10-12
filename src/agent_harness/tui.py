@@ -79,6 +79,17 @@ def show_sessions(rows: list[dict], page: int, total_pages: int, total: int) -> 
     console.print(f"[dim]{keys}[/]")
 
 
+def show_hook(by: str, reason: str) -> None:
+    """策略拦截提示（实时流里冒一行）——内容走 Text，不走 markup 解析。"""
+    line = f"⚡ 策略拦截：{by}" + (f" · {reason[:50]}" if reason else "")
+    if _live:
+        _seal_current()
+        _blocks.append(Text(line, style="yellow"))
+        _refresh()
+    else:
+        console.print(Text(line, style="yellow"))
+
+
 def show_web_hint(started: list[str] | None = None) -> None:
     """网页端链接提示——由调用方放在历史渲染之后（长历史时不用往上翻找）。"""
     tail = f" · {'、'.join(started)}启动中，几秒后就绪" if started else ""

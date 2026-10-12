@@ -111,6 +111,10 @@ main {
   padding-left: 4px;
 }
 
+.tool.hook {
+  color: #d4a72c;
+}
+
 .approval {
   display: flex;
   align-items: center;

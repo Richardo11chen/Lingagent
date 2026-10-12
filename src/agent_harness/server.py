@@ -64,6 +64,9 @@ async def ws_endpoint(ws: WebSocket):
         def on_reasoning(chunk: str) -> None:
             send({"type": "reasoning", "text": chunk})
 
+        def on_hook(by: str, reason: str) -> None:
+            send({"type": "hook", "by": by, "reason": reason})
+
         def approver(command: str) -> bool:
             """线程内阻塞等前端答复——收消息 task 唤醒 Event。"""
             ev = threading.Event()
@@ -88,6 +91,7 @@ async def ws_endpoint(ws: WebSocket):
             on_reasoning=on_reasoning,
             tracer=tracer,
             pre_hooks=PRE_HOOKS, post_hooks=POST_HOOKS,
+            on_hook=on_hook,
             max_steps=settings.max_steps,
         )
         reply, new_history = await asyncio.to_thread(run)

@@ -109,6 +109,22 @@ def test_post_exception_swallowed():  # 观察者异常吞掉——不拖垮主�
     assert any("好的结果" in m.content for m in hist)
 
 
+def test_on_hook_fires_on_deny_only():  # 实时流回调：拦下才冒行，放行不冒
+    got = []
+    llm = ScriptLLM([Action(tool="fake", args={})])
+    agent_loop("干活", llm, {"fake": lambda: "ok"}, "sys",
+               pre_hooks=[lambda a: deny("不")],
+               on_hook=lambda by, reason: got.append((by, reason)), max_steps=3)
+    assert got == [("<lambda>", "不")]
+
+    got.clear()
+    llm2 = ScriptLLM([Action(tool="fake", args={})])
+    agent_loop("干活", llm2, {"fake": lambda: "ok"}, "sys",
+               pre_hooks=[lambda a: None],
+               on_hook=lambda by, reason: got.append((by, reason)), max_steps=3)
+    assert got == []  # 放行不冒行（防噪音）
+
+
 def test_guardrail_precedes_hooks():  # 三道理序：护栏先拦 → 钩子名单根本不跑
     called = []
 
