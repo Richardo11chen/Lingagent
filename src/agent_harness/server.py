@@ -15,10 +15,10 @@ from .assembly import (
     POST_HOOKS,
     PRE_HOOKS,
     WORKSPACE,
+    build_session_tools,
     build_system_prompt,
     list_visible_sessions,
     load_settings_and_llm,
-    tools,
 )
 from .llm import Msg
 from .loop import agent_loop
@@ -78,12 +78,17 @@ async def ws_endpoint(ws: WebSocket):
 
         old_len = len(history)
         tracer = Tracer(trace_path(WORKSPACE, session_id))  # 每轮现取——resume 换 id 后自动跟到新文件
+        sp = build_system_prompt()
+        session_tools = build_session_tools(  # S10：本会话工具表（带 spawn_subagent）
+            llm, sp, approver=approver, tracer=tracer,
+            max_steps=settings.max_steps, on_hook=on_hook,
+        )
         run = partial(
             agent_loop,
             goal,
             llm,
-            tools,
-            build_system_prompt(),
+            session_tools,
+            sp,
             approver=approver,
             history=history,
             on_text=on_text,

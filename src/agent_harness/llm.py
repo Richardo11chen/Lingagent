@@ -34,7 +34,8 @@ class LLM(Protocol):
     """
 
     def __call__(
-        self, messages: list[Msg], tools: list[dict], on_text=None, on_reasoning=None
+        self, messages: list[Msg], tools: list[dict], on_text=None, on_reasoning=None,
+        system_prompt: str | None = None,
     ) -> tuple[str, list[Action], str]: ...
 
 
@@ -49,7 +50,8 @@ class ScriptLLM:
         self._fix_script = list(fix_script or [])
 
     def __call__(
-        self, messages: list[Msg], tools: list[dict], on_text=None, on_reasoning=None
+        self, messages: list[Msg], tools: list[dict], on_text=None, on_reasoning=None,
+        system_prompt: str | None = None,
     ) -> tuple[str, list[Action], str]:
         last = messages[-1].content if messages else ""
         if "测试失败" in last:
@@ -243,11 +245,13 @@ class DeepSeekLLM:
         return "".join(text_parts), raw, "".join(reasoning_parts)
 
     def __call__(
-        self, messages: list[Msg], tools: list[dict], on_text=None, on_reasoning=None
+        self, messages: list[Msg], tools: list[dict], on_text=None, on_reasoning=None,
+        system_prompt: str | None = None,
     ) -> tuple[str, list[Action], str]:
         # 在调用 API 前进行上下文压缩（投影——不改 history）
         messages = microcompact_if_needed(messages, self._compact_threshold, keep_last=self._keep_last)
-        api_messages = to_api_messages(self._system_prompt, messages)
+        sp = system_prompt or self._system_prompt  # 调用方给了就用它（子 agent 带自己的提示词）
+        api_messages = to_api_messages(sp, messages)
 
         try:
             text, raw, reasoning = self._request(api_messages, tools, on_text, on_reasoning)
@@ -260,7 +264,7 @@ class DeepSeekLLM:
             # 两刀：丢中间（砍大头）+ 清存活段的胖结果
             pressed = microcompact(snip(messages, self._snip_keep_groups), keep_last=0)
             text, raw, reasoning = self._request(
-                to_api_messages(self._system_prompt, pressed), tools, on_text, on_reasoning
+                to_api_messages(sp, pressed), tools, on_text, on_reasoning
             )
 
         if not raw:  # 无工具调用 = 最终答案 = done（官方停机条件）

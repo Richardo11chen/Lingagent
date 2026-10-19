@@ -6,7 +6,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from agent_harness import server
+from agent_harness import assembly, server
 from agent_harness.llm import Action
 from agent_harness.settings import Settings
 
@@ -27,7 +27,7 @@ class FakeLLM:
     def __init__(self, *a, **kw):
         self.calls = 0
 
-    def __call__(self, messages, tools, on_text=None, on_reasoning=None):
+    def __call__(self, messages, tools, on_text=None, on_reasoning=None, system_prompt=None):
         self.calls += 1
         if self.calls == 1:
             if on_text:
@@ -72,7 +72,7 @@ def test_ws_approval_approved(monkeypatch, tmp_path):  # 批准路径：命令�
         ran["cmd"] = command
         return "退出码 0\n(假执行)"
 
-    monkeypatch.setitem(server.tools, "run_shell", fake_run_shell)
+    monkeypatch.setitem(assembly.tools, "run_shell", fake_run_shell)  # 会话工具表从注册表拷贝（S10）
     c = TestClient(server.app)
     with c.websocket_connect("/ws") as ws:
         ws.receive_json()
@@ -122,7 +122,7 @@ def test_ws_hook_denied_event(monkeypatch, tmp_path):  # 策略拦下 → WS 推
         def __init__(self, *a, **kw):
             self.calls = 0
 
-        def __call__(self, messages, tools, on_text=None, on_reasoning=None):
+        def __call__(self, messages, tools, on_text=None, on_reasoning=None, system_prompt=None):
             if self.calls:
                 return ("完成", [], "")
             self.calls += 1

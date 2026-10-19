@@ -94,5 +94,27 @@ TOOL_SCHEMAS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_subagent",
+            "description": (
+                "把一块需要大量探索的子任务派给一个独立上下文的子 agent：它在自己的上下文里读文件、"
+                "查目录、跑命令，只把最终结论回报给你（中间过程不进你的上下文）。适合「先查清楚 X」"
+                "这类过程不必留在主对话的探索型任务。子 agent 不能改文件（写操作留在主对话）。"
+                "子 agent 看不到主对话——子任务说明必须自包含。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "subtask": {
+                        "type": "string",
+                        "description": "完整的子任务说明（自包含：目标、范围、完成标准）",
+                    },
+                },
+                "required": ["subtask"],
+            },
+        },
+    },
 ]
 

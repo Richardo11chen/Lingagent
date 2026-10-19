@@ -36,10 +36,15 @@ def agent_loop(
     answer = None
     history = [Msg("user", goal)] if history is None else history + [Msg("user", goal)]
 
+    # 工具菜单 = 工具注册表（S10）：注册表里没有的工具，模型菜单里也不出现——
+    # 受限工具集、以及「子 agent 到顶后不许再派」都靠这一条收窄。
+    tool_schemas = [s for s in TOOL_SCHEMAS if s["function"]["name"] in tools]
+
     for step in range(1, max_steps + 1):
         with tracer.timed("model", step=step) as ev:
             text, actions, reasoning = llm(
-                history, TOOL_SCHEMAS, on_text=on_text, on_reasoning=on_reasoning
+                history, tool_schemas, on_text=on_text, on_reasoning=on_reasoning,
+                system_prompt=system_prompt,  # 每次调用带自己的提示词（子 agent 用它）
             )
             ev.fields["n_actions"] = len(actions)
             model_name = getattr(llm, "current", "")  # 实际在用的模型名（SwitchableLLM 有、假模型没有）

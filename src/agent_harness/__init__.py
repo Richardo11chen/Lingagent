@@ -8,10 +8,10 @@ from .assembly import (
     POST_HOOKS,
     PRE_HOOKS,
     WORKSPACE,
+    build_session_tools,
     build_system_prompt,
     list_visible_sessions,
     load_settings_and_llm,
-    tools,
 )
 from .session import (
     list_sessions,
@@ -94,6 +94,10 @@ def main() -> None:
     if args.model:  # 显式指定 → 落账（这个会话从此认它）
         save_session_model(WORKSPACE, session_id, llm.current_profile)
     tracer = Tracer(trace_path(WORKSPACE, session_id))  # S8：轨迹与 session 同目录同 id
+    session_tools = build_session_tools(  # S10：本会话工具表（带 spawn_subagent）
+        llm, base_prompt, approver=approver, tracer=tracer,
+        max_steps=settings.max_steps, on_hook=tui.show_hook,
+    )
     tui.show_banner(session_id, len(history), llm.current)
     if history:
         tui.show_history(history)  # 恢复的会话：把历史渲染出来
@@ -129,7 +133,7 @@ def main() -> None:
         tui.begin_stream()
         old_len = len(history)
         reply, history = agent_loop(
-            goal, llm, tools, base_prompt,
+            goal, llm, session_tools, base_prompt,
             approver=approver, history=history,
             on_text=tui.stream_chunk, on_tool=tui.show_tool,
             on_reasoning=tui.reasoning_chunk,

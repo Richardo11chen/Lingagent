@@ -6,6 +6,7 @@ from .config import load_rules
 from .guardrail import safe_tool
 from .hooks import forbid_env_writes
 from .sensors import run_tests
+from .subagent import make_spawn_tool
 from .tools import count_lines, edit_file, read_file, run_shell, write_file
 
 SYSTEM_PROMPT = (
@@ -35,6 +36,28 @@ tools = {
     "run_shell": run_shell,  # shell 不包——命令危险面归 H 护栏管
     "run_tests": run_tests,  # pytest 判红绿
 }
+
+
+def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
+                        max_steps: int | None = None, on_hook=None) -> dict:
+    """每个会话的工具表：基础工具 + spawn_subagent（闭包持有该会话的装配）。
+
+    模型 / 审批 / trace 都是会话级的——所以 spawn 不能一次性注册进模块级 tools。
+    """
+    session_tools = dict(tools)
+    session_tools["spawn_subagent"] = make_spawn_tool(
+        llm=llm,
+        tools=tools,
+        system_prompt=system_prompt,
+        approver=approver,
+        tracer=tracer,
+        pre_hooks=PRE_HOOKS,
+        post_hooks=POST_HOOKS,
+        depth=0,
+        max_steps=max_steps,
+        on_hook=on_hook,
+    )
+    return session_tools
 
 
 def build_system_prompt() -> str:
@@ -101,8 +124,11 @@ class SwitchableLLM:
     def profiles(self) -> list[str]:
         return list(self._settings.models)
 
-    def __call__(self, messages, tools, on_text=None, on_reasoning=None):
-        return self._inner(messages, tools, on_text=on_text, on_reasoning=on_reasoning)
+    def __call__(self, messages, tools, on_text=None, on_reasoning=None, system_prompt=None):
+        return self._inner(
+            messages, tools, on_text=on_text, on_reasoning=on_reasoning,
+            system_prompt=system_prompt,
+        )
 
 
 def load_settings_and_llm(system_prompt: str, model_name: str | None = None):
