@@ -18,6 +18,8 @@ def test_read_only_allowed():  # 只读命令放行（不吵人）
         "git status", "git log --oneline -5", "git diff", "git remote -v",
         "python --version", "where python", "echo hello", "cd src", "tasklist",
         'echo "a & b"', 'type "C:\\a>b.txt"', "dir 2>&1",
+        "dir README* /b 2>nul && echo --- && dir /b",  # 空设备重定向不是写文件
+        "dir >nul", "dir 2>NUL", "dir 2>/dev/null",
     ):
         assert risk(cmd) == "read_only", cmd
 

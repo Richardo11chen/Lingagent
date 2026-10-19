@@ -83,6 +83,8 @@ def classify_command(command: str) -> CommandRisk:
     """把一条 shell 命令拆段、分类——整条取最严的一段（复合命令按最严算）。"""
     # fd→fd 重定向（2>&1）里的 & 不是命令分隔符，也不写文件——先剔除
     command = re.sub(r"\d?>&\d", "", command)
+    # 写空设备（>nul / 2>nul / >/dev/null）不改工作区——同样先剔除（Windows 常用它吞 stderr）
+    command = re.sub(r"\d?>\s*(?:nul|/dev/null)\b", "", command, flags=re.IGNORECASE)
     segments, balanced = _split_segments(command)
     if not balanced:
         return CommandRisk(UNKNOWN, "引号不闭合，无法解析")
