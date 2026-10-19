@@ -70,7 +70,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "run_shell",
-            "description": "执行 shell 命令（工作目录内）。查看文件列表、跑构建等。危险命令会被拦截并询问用户。",
+            "description": "执行 shell 命令（工作目录内）。查看文件列表、跑构建等。只读命令直接执行；会改动文件、执行程序或无法判定的命令会先询问用户。",
             "parameters": {
                 "type": "object",
                 "properties": {

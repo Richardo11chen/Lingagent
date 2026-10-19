@@ -5,7 +5,6 @@
 
 from pathlib import Path
 
-from agent_harness.guardrail import is_dangerous_command
 from agent_harness.llm import Action, ScriptLLM
 from agent_harness.loop import agent_loop
 from agent_harness.tools import run_shell, write_file
@@ -15,15 +14,7 @@ def make_tools():
     return {"run_shell": run_shell}
 
 
-def test_guardrail_detects_dangerous():  # 危险命令判定：rm -rf / del /s / shutdown 拦；pytest、format 函数调用放
-    assert is_dangerous_command("rm -rf /")
-    assert is_dangerous_command("rm --recursive /tmp/x")
-    assert is_dangerous_command("rm -rf=force /x")  # 组合参数（子串匹配）也拦
-    assert is_dangerous_command("del /s C:\\temp")
-    assert is_dangerous_command("shutdown /s")
-    assert not is_dangerous_command("pytest -q")
-    assert not is_dangerous_command("python -c 'x = format(1)'")  # format 当函数调用不拦
-
+# 命令风险判定测试在 tests/test_s11.py（S11 换锁：黑名单 → 风险分级）
 
 def test_approver_approves_executes_command(tmp_path):  # approver 批准 → 危险命令真执行（回灌执行输出，无驳回语）
     target = tmp_path / "demo_trash"

@@ -1,63 +1,236 @@
-"""治理护栏：识别危险动作 → 拦截（规格 A.4(B)：护栏必须是代码机制，提示词不算）。"""
+"""治理护栏：命令风险判定 + 路径围栏。
+
+S11 换锁：判定从「危险命令黑名单」翻成「风险分级 + 默认审批」——
+只对确认只读的命令放行；改动 / 执行 / 网络 / 未知一律问人；极危险直接拒。
+方向变了：黑名单默认信任（不在表里就放行），风险分级默认不信（判不出安全就问）。
+
+规格硬标准（A.4）：护栏是代码机制，不是提示词——判定可确定性单测。
+"""
+import ntpath
+import re
+from dataclasses import dataclass
 from pathlib import Path
 
-# 危险命令表：命令 → 危险参数特征（空元组 = 命令本身危险）
-DANGEROUS = {
-    # Linux / Unix 核心
-    "rm": {"-r", "-f", "--recursive", "--force", "-rf"},
-    "rmdir": {"-p"},          # -p 递归删除父目录（可能误删）
-    "chmod": {"-R", "000", "777"},  # 递归或全局权限
-    "chown": {"-R"},
-    "dd": {"of="},            # 写设备（可只匹配 of=）
-    "mkfs": None,             # 本身危险
-    "fdisk": None,
-    "parted": None,
-    "shred": {"-z", "-f", "-n"},
-    "wipe": {"-f"},
-    "mount": {"-o", "remount", "--bind"},
-    "umount": {"-l", "-f"},
-    "fsck": {"-y", "-f"},
-    "shutdown": {"-h", "-r", "-P", "-H", "/s", "/p"},
+# ---- 风险等级（只读放行；中间四档问人；catastrophic 直接拒）----
 
-    # Windows 原生
-    "del": {"/s", "/q", "/f"},
-    "erase": {"/s", "/q", "/f"},
-    "rmdir": {"/s", "/q"},
-    "rd": {"/s", "/q"},
-    "format": None,
-    "diskpart": {"/s"},
-    "cipher": {"/w"},
-    "takeown": {"/f"},
-    "icacls": {"/grant", "/remove", "/t"},
-    "reg": {"delete", "/f"},
-    "bcdedit": {"/delete", "/f"},
+READ_ONLY = "read_only"
+MUTATING = "mutating"
+EXECUTING = "executing"
+NETWORK = "network"
+UNKNOWN = "unknown"
+CATASTROPHIC = "catastrophic"
 
-    # macOS 特有
-    "diskutil": {"eraseDisk", "eraseVolume"},
-    "hdiutil": {"-readwrite"},  # 结合 attach 使用
+_SEVERITY = {READ_ONLY: 0, UNKNOWN: 1, NETWORK: 2, EXECUTING: 3, MUTATING: 4, CATASTROPHIC: 5}
 
-    # 跨平台网络破坏（可选）
-    "iptables": {"-F", "--flush"},  # 清空防火墙规则，可能断网
-    "ip": {"flush"},                # 刷新网络配置
+CATASTROPHIC_PROGRAMS = {
+    "format", "fdisk", "parted", "diskpart", "dd", "shred", "wipe",
+    "mkfs", "mkfs.ext2", "mkfs.ext3", "mkfs.ext4", "mkfs.xfs", "mkfs.vfat",
+    "mkfs.ntfs", "mkfs.btrfs",
 }
 
-def is_dangerous_command(command: str) -> bool: #当前逻辑存在误报可能
-    """判断命令是否危险（危险命令表匹配）。"""
-    parts = command.strip().split()
-    if not parts:
-        return False
-    prog = parts[0].lower()
-    args = parts[1:]
-    if prog not in DANGEROUS:
-        return False
-    if not DANGEROUS[prog]:  # 空元组 = 命令本身危险
-        return True
-    for arg in args:
-        for d in DANGEROUS[prog]:
-          if d in arg:      # 特征出现在参数里（子串），不是参数等于特征 (宽匹配)
-              return True
+# 只读命令：确认不改工作区（重定向另判——`>` 出现即按改动算）。
+# 注意：find / sed / awk / xargs / tee / sort -o 能写或执行，故意不入白名单。
+READ_ONLY_PROGRAMS = {
+    "dir", "type", "findstr", "where", "ver", "cd", "chdir", "echo", "set",
+    "whoami", "hostname", "tasklist", "vol", "date", "title", "cls", "path",
+    "color", "mode", "more", "fc", "comp", "tree",
+    "ls", "cat", "head", "tail", "wc", "grep", "stat", "pwd", "basename",
+    "dirname", "realpath", "md5sum", "sha1sum", "sha256sum", "which", "uname",
+}
+
+# 只打印版本号的程序：仅当唯一参数是版本旗标时算只读（其余一律按执行算）
+VERSION_PROGRAMS = {"python", "py", "python3", "pytest", "node", "npm", "uv", "pip", "pip3"}
+VERSION_FLAGS = {"--version", "-version", "-V", "-v"}
+
+MUTATING_PROGRAMS = {
+    "del", "erase", "rm", "rmdir", "rd", "mkdir", "md", "copy", "move", "ren",
+    "rename", "attrib", "icacls", "takeown", "xcopy", "robocopy", "mklink",
+    "fsutil", "reg", "schtasks", "sc", "net", "wmic", "tar", "unzip", "7z",
+    "expand", "compact", "chkdsk", "defrag", "cipher", "bcdedit", "shutdown",
+    "taskkill", "assoc", "ftype",
+}
+
+EXECUTING_PROGRAMS = {
+    "python", "py", "python3", "pytest", "powershell", "pwsh", "cmd", "command",
+    "bash", "sh", "zsh", "wsl", "node", "npm", "npx", "yarn", "pnpm", "uv", "pip",
+    "pip3", "conda", "java", "javac", "go", "cargo", "rustc", "dotnet", "ruby",
+    "perl", "php", "cscript", "wscript", "mshta", "rundll32", "regsvr32", "start", "call",
+}
+
+NETWORK_PROGRAMS = {
+    "curl", "wget", "certutil", "bitsadmin", "ftp", "sftp", "scp", "ssh",
+    "telnet", "nc", "ncat", "ping", "tracert", "nslookup",
+}
+
+GIT_READ_SUBCOMMANDS = {
+    "status", "log", "diff", "show", "rev-parse", "blame", "ls-files", "shortlog",
+    "describe", "grep", "show-ref", "for-each-ref", "cat-file", "merge-base",
+}
+
+ROOT_TARGETS = {"/", "/*", "~", "~/*", "\\", "*", "*.*", "./*", ".\\*",
+                "c:\\", "c:/", "d:\\", "d:/"}
+
+
+@dataclass
+class CommandRisk:
+    """判定结果：risk 决定放行 / 问人 / 直拒；reason 进回灌与 trace。"""
+
+    risk: str
+    reason: str = ""
+
+
+def classify_command(command: str) -> CommandRisk:
+    """把一条 shell 命令拆段、分类——整条取最严的一段（复合命令按最严算）。"""
+    # fd→fd 重定向（2>&1）里的 & 不是命令分隔符，也不写文件——先剔除
+    command = re.sub(r"\d?>&\d", "", command)
+    segments, balanced = _split_segments(command)
+    if not balanced:
+        return CommandRisk(UNKNOWN, "引号不闭合，无法解析")
+    if not segments:
+        return CommandRisk(UNKNOWN, "空命令")
+
+    worst = CommandRisk(READ_ONLY, "只读")
+    for seg in segments:
+        if _has_file_write(seg):
+            worst = _worse(worst, CommandRisk(MUTATING, "含输出重定向（> / >>）"))
+        else:
+            tokens = _tokens(seg)
+            if tokens:
+                worst = _worse(worst, _classify_tokens(tokens))
+        if worst.risk == CATASTROPHIC:
+            return worst
+    return worst
+
+
+def _split_segments(command: str) -> tuple[list[str], bool]:
+    """按未加引号的 & | ( ) 和换行拆段；返回 (段列表, 引号是否闭合)."""
+    segs: list[str] = []
+    buf: list[str] = []
+    quote = False
+    for c in command:
+        if c == '"':
+            quote = not quote
+            buf.append(c)
+        elif not quote and (c in "&|()" or c in "\r\n"):
+            seg = "".join(buf).strip()
+            if seg:
+                segs.append(seg)
+            buf = []
+        else:
+            buf.append(c)
+    seg = "".join(buf).strip()
+    if seg:
+        segs.append(seg)
+    return segs, not quote
+
+
+def _has_file_write(segment: str) -> bool:
+    """未加引号的 > 即「写文件」（调用前已剔除 2>&1 这类 fd→fd 重定向）。"""
+    quote = False
+    for c in segment:
+        if c == '"':
+            quote = not quote
+        elif c == ">" and not quote:
+            return True
     return False
 
+
+def _tokens(segment: str) -> list[str]:
+    """按空白切 token（双引号内不切）——够用于取程序名与判断参数。"""
+    out: list[str] = []
+    buf: list[str] = []
+    quote = False
+    for c in segment:
+        if c == '"':
+            quote = not quote
+            buf.append(c)
+        elif c.isspace() and not quote:
+            if buf:
+                out.append("".join(buf))
+                buf = []
+        else:
+            buf.append(c)
+    if buf:
+        out.append("".join(buf))
+    return out
+
+
+def _normalize_prog(token: str) -> str:
+    """取程序名：去引号 / 去 @ 前缀 / 取 basename / 去扩展名 / 小写."""
+    name = token.strip().lstrip("@").strip('"')
+    name = ntpath.basename(name).lower()
+    for ext in (".exe", ".com", ".bat", ".cmd", ".ps1"):
+        if name.endswith(ext):
+            name = name[: -len(ext)]
+    return name
+
+
+def _classify_tokens(tokens: list[str]) -> CommandRisk:
+    prog = _normalize_prog(tokens[0])
+    args = tokens[1:]
+    if not prog:
+        return CommandRisk(UNKNOWN, "取不到程序名")
+
+    if prog in CATASTROPHIC_PROGRAMS or _is_catastrophic_target(prog, args):
+        return CommandRisk(CATASTROPHIC, f"极危险命令：{prog}")
+    if prog == "git":
+        return _classify_git(args)
+    if prog in VERSION_PROGRAMS:
+        if len(args) == 1 and args[0].lower() in VERSION_FLAGS:
+            return CommandRisk(READ_ONLY, f"只读：{prog} {args[0]}")
+        return CommandRisk(EXECUTING, f"执行程序：{prog}")
+    if prog in READ_ONLY_PROGRAMS:
+        return CommandRisk(READ_ONLY, f"只读：{prog}")
+    if prog in MUTATING_PROGRAMS:
+        return CommandRisk(MUTATING, f"改动文件：{prog}")
+    if prog in EXECUTING_PROGRAMS:
+        return CommandRisk(EXECUTING, f"执行程序：{prog}")
+    if prog in NETWORK_PROGRAMS:
+        return CommandRisk(NETWORK, f"网络命令：{prog}")
+    return CommandRisk(UNKNOWN, f"未知命令：{prog}")
+
+
+def _is_catastrophic_target(prog: str, args: list[str]) -> bool:
+    """rm -rf / 与 del /s /q C:\\ 这类「根目标 + 递归/强制」升级为直拒。"""
+    if prog not in {"rm", "del", "erase", "rd", "rmdir"}:
+        return False
+    targets = []
+    for a in args:
+        if a.startswith("-"):
+            continue
+        if prog in {"del", "erase", "rd", "rmdir"} and re.fullmatch(r"/[A-Za-z]", a):
+            continue  # Windows 旗标（/s /q /f）——不是目标
+        targets.append(a)
+    rootish = any(t.strip('"').lower() in ROOT_TARGETS for t in targets)
+    flags = " ".join(args).lower()
+    recursive = any(f in flags for f in ("-r", "-rf", "-fr", "--recursive", "/s", "/q", "/f"))
+    return rootish and recursive
+
+
+def _classify_git(args: list[str]) -> CommandRisk:
+    if not args:
+        return CommandRisk(READ_ONLY, "只读：git（空参数打印帮助）")
+    sub = args[0].lower()
+    rest = args[1:]
+    if sub in GIT_READ_SUBCOMMANDS:
+        return CommandRisk(READ_ONLY, f"只读：git {sub}")
+    if sub == "branch":
+        mutating = any(a.lower().startswith(("-d", "-m", "-c", "--delete", "--move", "--copy")) for a in rest)
+        return CommandRisk(MUTATING if mutating else READ_ONLY, "git branch")
+    if sub == "remote":
+        read = not rest or all(a in ("-v", "--verbose", "show") for a in rest)
+        return CommandRisk(READ_ONLY if read else MUTATING, "git remote")
+    if sub == "config":
+        read = any(a in ("--get", "--get-all", "--get-regexp", "--list", "-l") for a in rest)
+        return CommandRisk(READ_ONLY if read else MUTATING, "git config")
+    return CommandRisk(MUTATING, f"git {sub}（会改仓库）")
+
+
+def _worse(a: CommandRisk, b: CommandRisk) -> CommandRisk:
+    return b if _SEVERITY.get(b.risk, 0) > _SEVERITY.get(a.risk, 0) else a
+
+
+# ---- 路径围栏（S3，未变）----
 
 def in_workspace(path: str, workspace: Path) -> bool:
     """路径是否在工作目录内：先 resolve（解析 .. 和符号链接），再比前缀。"""

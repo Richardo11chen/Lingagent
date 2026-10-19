@@ -4,7 +4,7 @@ from typing import Callable
 from .llm import LLM, Action
 from .messages import Msg
 from .sensors import run_sensors
-from .guardrail import is_dangerous_command
+from .guardrail import classify_command
 from .schema import TOOL_SCHEMAS
 from .trace import Tracer
 from .hooks import run_post, run_pre
@@ -65,21 +65,31 @@ def agent_loop(
                 tool_func = tools.get(action.tool)
 
                 # 第一道：内置护栏（基线不可摘——先于 hooks 名单跑，S9 决策 3）
+                # S11：黑名单 → 风险分级——只读放行；改动 / 执行 / 未知问人；极危险直接拒
                 may_run = True
-                if action.tool == "run_shell" and is_dangerous_command(action.args.get("command", "")):
-                    # 治理护栏：危险命令，先问人——批准才真执行
-                    if approver is None:
-                        result = "无批准者，命令被策略拦截：危险命令不执行。"
+                if action.tool == "run_shell":
+                    risk = classify_command(action.args.get("command", ""))
+                    ev.fields["risk"] = risk.risk
+                    if risk.risk == "catastrophic":
+                        result = f"命令被策略直接拒绝（{risk.reason}），未执行。"
                         ev.fields["status"] = "blocked"
                         may_run = False
-                    else:
-                        with tracer.timed("approval", step=step, command=action.args["command"]) as aev:
-                            approved = approver(action.args["command"])
-                            aev.fields["decision"] = "approved" if approved else "denied"
-                        if not approved:
-                            result = "命令被驳回，未执行。"
-                            ev.fields["status"] = "denied"
+                    elif risk.risk != "read_only":
+                        if approver is None:
+                            result = f"无批准者，命令被策略拦截：{risk.reason}，不执行。"
+                            ev.fields["status"] = "blocked"
                             may_run = False
+                        else:
+                            with tracer.timed(
+                                "approval", step=step,
+                                command=action.args["command"], risk=risk.risk,
+                            ) as aev:
+                                approved = approver(action.args["command"])
+                                aev.fields["decision"] = "approved" if approved else "denied"
+                            if not approved:
+                                result = "命令被驳回，未执行。"
+                                ev.fields["status"] = "denied"
+                                may_run = False
 
                 # 第二道：预钩子名单（S9）——guardrail 之后、执行之前；首个 deny 短路
                 if may_run:
