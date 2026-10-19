@@ -102,6 +102,11 @@
 - 配置支持 `api_key` 直写（2026-10-09，用户要求「不考虑安全性」）：profile 写 `api_key = "..."` 即用、**优先于 `api_key_env`**；两者都缺 → 启动时 SystemExit（替代裸 KeyError）。明文落盘——示例文件注明「别把 key 提交进仓库」。
 - 网页端自启（2026-10-12，用户要求）：进 TUI 自动确保网页端在跑——端口探测**幂等**（已在跑的不重复拉）、进程 **detached**（关 TUI 网页端不受影响）、`[web].autostart` 可关、管道/非交互模式不触发。实现 `weblaunch.py`。
 - 会话级模型（2026-10-12，用户要求「符合实际模型 / 每个对话独立 / 退出不恢复默认」）：模型选择落进**会话存档**（meta 行 `save/load_session_model`）——打开会话恢复其模型、`/model` 切换即落盘、`--model` 显式指定优先并落账；新会话用默认。**翻案**：原设计模型选择只活在进程内存（每个 TUI 进程一份、退出即丢、多窗口各记各的——用户实测撞出「两个窗口模型对不上」的困惑；探针实证 mm:think 只属 MiniMax、deepseek 思考走 💭 通道）。顺带：trace 的 model 事件记 `model` 字段（「到底谁在答」按行可查）。
+- S8 = tracer（2026-10-12）：两份账分家——session 给模型看（可压缩投影）、trace 给人看（`<会话id>.trace.jsonl`，append-only、永不压缩）；记录点 = **注入式 tracer**（作 `agent_loop` 参数，可关、可换假件）；粒度 = 一动作一条（model / tool / approval）+ `perf_counter` 耗时 + **结果全文**；「回放」= 只看时间线不重演（重演 = 重新执行工具，属治理问题，v1 不做）；查看入口 = TUI `/trace` 总览 + 钻取、网页 overlay（WS 只推最近 1000 条 + total）。
+- S9 = hooks（2026-10-12）：策略挂载点（PreToolUse / PostToolUse）；预钩子 `fn(action) -> Verdict | None`（`deny(reason)`、reason 原样回灌）、**首个 deny 短路**、异常 = 默认拦截（fail closed）；后钩子只观察（异常吞掉）；**三道理序**——内置护栏 + 审批**排最前、不可摘**（基线），hooks 在其后叠加（更严的赢）；注册 v1 = 代码（`assembly.PRE_HOOKS`），配置声明等第二个来源；拦 / 放都进 trace，`on_hook` 只在拦下冒实时行；随附策略 `forbid_env_writes`。
+- run_shell 硬超时（2026-10-19，S10 真机撞出）：单条 shell 命令 120 秒上限；Windows 上超时必须 `taskkill /F /T` 杀整棵树——`subprocess.run(timeout=)` 只杀 `cmd.exe`，孙进程攥着管道，`communicate` 仍会阻塞到它跑完（实测）。
+- S10 子 agent 工具面与只读约束（2026-10-19，用户最终拍板）：子 agent 拿**全量基础工具**（含写类）；只读只在**提示词层**约束——「如果只想让它读，就遵守只读约束」：默认只读，父任务明确要求写入才动手并列出改动。模型跟随父当前 profile。**翻案**：旧案「白名单只读工具集」已撤——用户要能力面完整；代价 = 只读是约定不是机制（OS 级沙箱未收口），残余风险记已知边界。附带修复：`agent_loop` 的 `system_prompt` 原先是死参数（从未使用），现随调用传入 LLM 适配器——子 agent 的提示词才真正送达。
+- S11 = 命令风险分级（2026-10-19，用户拍板）：`guardrail` 从 `DANGEROUS` 黑名单翻成 `classify_command`——拆段（未加引号的 `& | ( )` + 换行）→ 剔除 `2>&1` → 重定向（`>`/`>>`）算改动 → 程序名归一（去引号 / `@` / basename / 扩展名）→ 策略表；整条按最严段算。策略：只读白名单放行（dir/type/findstr/git 只读子命令/`--version` 等）；改动 / 执行 / 网络 / **未知一律问人**（fail closed）；极危险（format/mkfs/fdisk/diskpart/dd/shred/wipe、`rm -rf /`、`del /s /q C:\`）**直接拒**。`run_shell` 的 tool 事件与 approval 事件都记 `risk`。边界：分级是「够用级」解析（不是完整 shell parser），判不出就问人——解析粗糙不会变成放行漏洞。
 
 ## 终局参照：agent_loop 伪代码（用户规格材料 2026-08-28 提供）
 
