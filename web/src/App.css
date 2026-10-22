@@ -176,6 +176,13 @@ main {
   cursor: pointer;
 }
 
+/* 第三个按钮比前两个轻一档：它是"少问一次"，不是更危险的决定 */
+.approval button.remember {
+  border-style: dashed;
+  color: #a9b2bd;
+  font-size: 13px;
+}
+
 footer {
   display: flex;
   gap: 8px;

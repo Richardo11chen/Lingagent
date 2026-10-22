@@ -13,6 +13,7 @@ from .assembly import (
     list_visible_sessions,
     load_settings_and_llm,
 )
+from .guardrail import command_head
 from .session import (
     list_sessions,
     list_trace_files,
@@ -115,9 +116,19 @@ def main() -> None:
     llm, settings = load_settings_and_llm(  # 可切换门面（流式）
         base_prompt, args.model, on_notice=tui.show_notice,
     )
-    approver = lambda cmd, reason="": (
-        tui.show_approval(cmd, reason, timeout=settings.approval_timeout).strip().lower() == "y"
-    )
+    # 本会话「不再问」的程序名（只在内存里，重启即忘——安全边界清楚）
+    session_allowed: set[str] = set()
+
+    def approver(cmd: str, reason: str) -> bool:
+        head = command_head(cmd)
+        if head and head in session_allowed:
+            tui.show_note(f"本会话已允许 {head}，直接执行")  # 留痕：不是静默放行
+            return True
+        decision = tui.show_approval(cmd, reason, timeout=settings.approval_timeout)
+        if decision == "always" and head:
+            session_allowed.add(head)
+            tui.show_note(f"本会话不再询问 {head}", "info")
+        return decision != "deny"
 
     web_started: list[str] = []
     if settings.web_autostart and tui.interactive():  # 管道/脚本模式不拉网页端
@@ -146,6 +157,7 @@ def main() -> None:
     session_tools = build_session_tools(  # S10：本会话工具表（带 spawn_subagent）
         llm, base_prompt, approver=approver, tracer=tracer,
         max_steps=settings.max_steps, on_hook=tui.show_hook,
+        allow_commands=settings.guardrail_allow,
     )
     tui.show_banner(session_id, len(history), llm.current)
     if history:
@@ -195,6 +207,7 @@ def main() -> None:
                 pre_hooks=PRE_HOOKS, post_hooks=POST_HOOKS,
                 on_hook=tui.show_hook,
                 max_steps=settings.max_steps,
+                allow_commands=settings.guardrail_allow,
             )
         except KeyboardInterrupt:  # Ctrl+C：结束本轮，回到输入行（不是退出程序）
             tui.end_stream()

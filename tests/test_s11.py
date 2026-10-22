@@ -138,3 +138,39 @@ def test_syntax_stripping_keeps_the_real_command():  # 剥语法词不能把真�
     assert risk("for %f in (*.py) do @del %f") == "mutating"
     assert risk("for %f in (*.py) do @echo %f > out.txt") == "mutating"
 
+
+# ---- A+：人写的允许规则（前缀语义）+ 会话内记忆 ----
+
+def test_allow_rules_are_prefix_matches():  # `git *` = 以 git 开头的任何命令；写全了就是只这一条
+    from agent_harness.guardrail import classify_command, matches_allow
+
+    allow = ["git *", "docker ps"]
+    assert matches_allow("git status", allow) == "git *"
+    assert matches_allow("git push --force", allow) == "git *"
+    assert matches_allow("docker ps -a", allow) is None     # 没写 * 就是精确匹配
+    assert matches_allow("docker ps", allow) == "docker ps"
+    assert matches_allow("gitk", allow) is None             # 不误伤同前缀的别的程序
+
+
+def test_allow_rule_skips_the_question():  # 命中的规则直接放行，理由里写明是哪条规则
+    from agent_harness.guardrail import classify_command
+
+    r = classify_command("del /q build", allow=["del *"])
+    assert r.risk == "read_only" and "已允许" in r.reason
+
+
+def test_allow_rule_cannot_unlock_catastrophic():  # 地板：allow = ["*"] 也放不出 format / rm -rf /
+    from agent_harness.guardrail import classify_command
+
+    assert classify_command("format c:", allow=["*"]).risk == "catastrophic"
+    assert classify_command("rm -rf /", allow=["*"]).risk == "catastrophic"
+
+
+def test_command_head_skips_syntax_words():  # 会话内记忆按"真程序名"归类
+    from agent_harness.guardrail import command_head
+
+    assert command_head("for %f in (*.py) do @del %f") == "del"
+    assert command_head('cd src && find . -name "*.py"') == "cd"
+    assert command_head("git status") == "git"
+
+

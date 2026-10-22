@@ -11,6 +11,7 @@ import time
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import FormattedText
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
 from wcwidth import wcswidth
 from rich import box
@@ -368,19 +369,49 @@ def _approval_session() -> PromptSession:
     """审批专用输入会话：erase_when_done——答完自动擦提示行（不擦会留屏，像「又弹了一次」）。"""
     global _approval
     if _approval is None:
-        _approval = PromptSession(erase_when_done=True)
+        _approval = PromptSession(erase_when_done=True, key_bindings=_approval_key_bindings())
     return _approval
 
 
+ESC_SENTINEL = "\x1b"  # Esc 的返回值（prompt_toolkit 的 app.exit 原样带回）
+
+
+def _approval_key_bindings():
+    """Esc = 驳回。Enter 是 prompt_toolkit 默认的"提交"键，不用绑。"""
+    kb = KeyBindings()
+
+    @kb.add("escape", eager=True)
+    def _esc(event):
+        event.app.exit(result=ESC_SENTINEL)
+
+    return kb
+
+
+def _to_decision(raw: str | None) -> str:
+    """输入 → 决定。空回车 = 批准（Enter 是"同意"的自然动作）；
+    其余任何东西（n / Esc / 打错字）= 驳回——打错字不该变成放行。
+    """
+    if raw is None:
+        return "deny"
+    val = raw.strip().lower()
+    if val == "a":
+        return "always"
+    if val in ("", "y"):
+        return "approve"
+    return "deny"
+
+
 def show_approval(command: str, reason: str = "", timeout: float = 300.0) -> str:
-    """人工审批：先说「为什么问你」，再给完整命令，最后一行问要不要执行。
+    """人工审批：先说「为什么问你」，再给完整命令，然后等一个键。
+
+    返回 "approve" / "deny" / "always"（always = 本会话不再问这个程序）。
 
     只给命令不够——`find /c /v "" README.md` 看着像只读统计，在 GNU find 语义下
     却会遍历整盘。判定原因必须跟着命令一起递到人眼前，否则审批只是走过场。
 
     timeout：没人答复就按驳回处理（0 = 一直等）。人走开了不该把整台机器卡死。
     """
-    prompt_text = "允许执行吗？(y/n) "
+    hint = "Enter 执行 · Esc 驳回 · a 记住(本会话) "
     global _live, _blocks
     restart = False
     if _live is not None:
@@ -415,26 +446,26 @@ def show_approval(command: str, reason: str = "", timeout: float = 300.0) -> str
         def _fire() -> None:
             nonlocal timed_out
             timed_out = True
-            app.exit("")  # 空输入 → 走默认驳回
+            app.exit(None)  # 空决定 → 驳回
 
         try:
             timers.append(asyncio.get_running_loop().call_later(timeout, _fire))
         except Exception:  # 定时都挂不上就算了——超时是贴心，不是必需
             pass
 
-    ans = "n"  # 默认驳回——异常路径也有一张安全票
+    raw: str | None = "n"  # 默认驳回——异常路径也有一张安全票
     try:
         if sess is None:
-            ans = input(prompt_text)
+            raw = input(hint + "❯ ")
         else:
-            ans = sess.prompt(
-                message=[("fg:ansiyellow bold", prompt_text + "❯ ")], pre_run=_arm_timeout,
+            raw = sess.prompt(
+                message=[("fg:ansiyellow bold", hint + "❯ ")], pre_run=_arm_timeout,
             )
     except EOFError:
-        pass  # 输入读尽（管道喂完 / Ctrl+Z）——维持默认驳回
+        raw = None  # 输入读尽（管道喂完 / Ctrl+Z）——按驳回
     except Exception as e:  # 审批界面自己坏了：按驳回处理，别把这一轮打死
         console.print(Text(f"⚠  审批界面出错（{type(e).__name__}: {e}），按驳回处理", style="red"))
-        ans = "n"
+        raw = None
     except BaseException:  # Ctrl+C 等：Live 先归位再抛
         if restart:
             _live_open()
@@ -443,15 +474,16 @@ def show_approval(command: str, reason: str = "", timeout: float = 300.0) -> str
         for t in timers:
             t.cancel()
 
+    decision = _to_decision(raw)
     if timed_out:
         console.print(Text(f"⚠  审批超时（{timeout:g} 秒没人答复），按驳回处理", style="yellow"))
-        ans = "n"
+        decision = "deny"
 
     # 此时 Live 仍停着——这一行永久落屏（审批的屏幕侧留痕；文件侧在 trace）
-    # 不重复命令：上面两行已经印着原因和全文，这行只记「谁按了哪个键」
-    decision = "已批准" if ans.strip().lower() == "y" else "已驳回"
+    # 不重复命令：上面两行已经印着原因和全文，这行只记「按了哪个键」
+    label = {"approve": "已批准", "always": "已批准（本会话不再问）", "deny": "已驳回"}[decision]
     tail = f" · {reason}" if reason else ""
-    console.print(f"[yellow]⚠  审批：{decision}{tail}[/]")
+    console.print(f"[yellow]⚠  审批：{label}{tail}[/]")
     if restart:
         _live_open()
-    return ans
+    return decision

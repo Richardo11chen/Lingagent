@@ -11,7 +11,7 @@ from agent_harness import tui
 def test_approval_eof_denies(monkeypatch):  # 审批时输入读尽（管道/流末尾）→ 无声即驳回
     monkeypatch.setattr(tui, "interactive", lambda: False)
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))  # 空流：任何读取立刻读尽
-    assert tui.show_approval("rm -rf /") == "n"
+    assert tui.show_approval("rm -rf /") == "deny"
 
 
 def test_approval_suspends_live(monkeypatch):  # 流式中途审批：Live 让位（stop→答→start）+ 决定落一行
@@ -39,7 +39,7 @@ def test_approval_suspends_live(monkeypatch):  # 流式中途审批：Live 让�
     monkeypatch.setattr(sys, "stdin", io.StringIO("n\n"))
 
     ans = tui.show_approval("del /q x")
-    assert ans.strip() == "n"
+    assert ans == "deny"
     assert events == ["stop", "start"]  # 让位→答→重开
     assert tui._blocks == []            # 旧块已被 stop 的最后一帧印掉——不重画
     assert any("驳回" in l for l in lines)  # 答完补一行决定记录（屏幕侧留痕）
@@ -129,4 +129,16 @@ def test_approval_ui_failure_denies_instead_of_raising(monkeypatch):
     monkeypatch.setattr(tui, "interactive", lambda: True)
     monkeypatch.setattr(tui, "_approval_session", lambda: Broken())
     monkeypatch.setattr(tui, "_live", None)
-    assert tui.show_approval("del x", "改动文件：del") == "n"
+    assert tui.show_approval("del x", "改动文件：del") == "deny"
+
+
+def test_approval_keys_map_to_three_decisions():  # Enter 批准 / Esc 驳回 / a 记住；打错字算驳回
+    from agent_harness.tui import ESC_SENTINEL, _to_decision
+
+    assert _to_decision("") == "approve"        # 空回车 = 同意
+    assert _to_decision("y") == "approve"       # 老习惯也留下
+    assert _to_decision("a") == "always"        # 本会话不再问
+    assert _to_decision(ESC_SENTINEL) == "deny"  # Esc
+    assert _to_decision("n") == "deny"
+    assert _to_decision("qwe") == "deny"        # 打错字不该变成放行
+    assert _to_decision(None) == "deny"         # 读尽 / 超时

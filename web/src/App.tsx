@@ -239,8 +239,8 @@ function App() {
     wsRef.current?.send(JSON.stringify({ type: 'interrupt' }))
   }
 
-  const answer = (approved: boolean) => {
-    wsRef.current?.send(JSON.stringify({ type: 'approval_response', approved }))
+  const answer = (approved: boolean, remember = false) => {
+    wsRef.current?.send(JSON.stringify({ type: 'approval_response', approved, remember }))
     setApproval(null)
   }
 
@@ -375,6 +375,9 @@ function App() {
           <div className="approval-actions">
             <button onClick={() => answer(true)}>批准</button>
             <button onClick={() => answer(false)}>驳回</button>
+            <button className="remember" onClick={() => answer(true, true)}>
+              本会话不再问
+            </button>
           </div>
         </div>
       )}

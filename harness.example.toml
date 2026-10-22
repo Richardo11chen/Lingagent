@@ -51,3 +51,9 @@ autostart = true            # 进 TUI 时自动拉起网页端（后端 + 前端
 
 [trace]
 enabled = true              # false = 不写轨迹文件（session 仍在，只是没有"给人看的账"）
+
+[guardrail]
+# 这些命令不再问人（前缀语义：`git *` = 以 git 开头的任何命令；不带 * 就是精确匹配）。
+# catastrophic 档（format / mkfs / dd / rm -rf /）不受这里影响。
+allow = []
+# allow = ["git *", "uv *", "rg *", "pytest *"]

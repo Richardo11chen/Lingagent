@@ -8,6 +8,7 @@ S11 换锁：判定从「危险命令黑名单」翻成「风险分级 + 默认�
 """
 import ntpath
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -92,13 +93,66 @@ class CommandRisk:
     reason: str = ""
 
 
-def classify_command(command: str) -> CommandRisk:
-    """把一条 shell 命令拆段、分类——整条取最严的一段（复合命令按最严算）。"""
-    # fd→fd 重定向（2>&1）里的 & 不是命令分隔符，也不写文件——先剔除
+def classify_command(command: str, allow: Sequence[str] = ()) -> CommandRisk:
+    """把一条 shell 命令拆段、分类——整条取最严的一段（复合命令按最严算）。
+
+    allow：人写的允许规则（前缀语义，见 matches_allow）。顺序是
+    **灾难 > 规则 > 分类**——写明 `allow = ["*"]` 也放不出 `format c:`，
+    这是刻意留的地板。
+    """
+    worst = _classify_segments(command)
+    if worst.risk == CATASTROPHIC:
+        return worst
+    hit = matches_allow(command, allow)
+    if hit:
+        return CommandRisk(READ_ONLY, f"已允许：{hit}")
+    return worst
+
+
+def matches_allow(command: str, patterns: Sequence[str] = ()) -> str | None:
+    """命令是否命中允许规则；返回命中的那条（给 trace / 提示用）。
+
+    语义刻意做成「前缀」而不是正则/glob 全匹配：写 `git *` 就是"以 git 开头的任何命令"，
+    写 `git status` 就是"只这一条"。规则是给人写的，不该要求记通配符语法。
+    """
+    cmd = " ".join(command.split()).lower()
+    if not cmd:
+        return None
+    for raw in patterns or ():
+        pat = " ".join(str(raw).split()).lower()
+        if not pat:
+            continue
+        if pat.endswith("*"):
+            if cmd.startswith(pat[:-1]):
+                return raw
+        elif cmd == pat:
+            return raw
+    return None
+
+
+def command_head(command: str) -> str:
+    """取整条命令的第一个「真程序名」——会话内"不再问"按它归类。
+
+    跳过语法词与残片（`for %f in` / `*.py`），所以对
+    `for %f in (*.py) do @del %f` 得到的是 `del` 而不是 `for`。
+    """
+    segments, _balanced = _split_segments(_strip_fd_redirects(command))
+    for seg in segments:
+        tokens = _command_tokens(seg)
+        if tokens:
+            return _normalize_prog(tokens[0])
+    return ""
+
+
+def _strip_fd_redirects(command: str) -> str:
+    """剔除 fd→fd 重定向与写空设备：它们既不是命令，也不改工作区。"""
     command = re.sub(r"\d?>&\d", "", command)
-    # 写空设备（>nul / 2>nul / >/dev/null）不改工作区——同样先剔除（Windows 常用它吞 stderr）
-    command = re.sub(r"\d?>\s*(?:nul|/dev/null)\b", "", command, flags=re.IGNORECASE)
-    segments, balanced = _split_segments(command)
+    return re.sub(r"\d?>\s*(?:nul|/dev/null)\b", "", command, flags=re.IGNORECASE)
+
+
+def _classify_segments(command: str) -> CommandRisk:
+    """纯分类（不含 allow 规则）——拆段 + 每段取最严。"""
+    segments, balanced = _split_segments(_strip_fd_redirects(command))
     if not balanced:
         return CommandRisk(UNKNOWN, "引号不闭合，无法解析")
     if not segments:

@@ -55,6 +55,8 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
     - 系统提示**不再断言环境**（"shell 是 cmd.exe" 是那次 91MB 的根）→ 改成"先 `ver` / `where` 确认，同名程序可能是两个东西"
     - 轨迹可清理：`--clean-trace DAYS`；`[trace] enabled` 一键关；`/trace` 记查看时间，30 天没看启动时提醒一次
     - 压缩会出声：`llm.py` 加 `on_notice(text, **fields)`（构造参数，不变量协议），真压了才提示（没压不吵）；413 重试也提示。TUI 用 `⟳` 一行插入流里，网页复用 `notice` 事件；同时写一条 `kind: compact` 的 trace（`reason` / `before` / `after`），`/trace` 表格显示「81234 → 21005 字符」
+    - A+ 审批模型（2026-10-22 晚）：`[guardrail] allow` 前缀规则（`git *`）+ 审批三键（Enter 批准 / Esc 驳回 / `a` 记住本会话）+ 网页第三个按钮。`classify_command(cmd, allow)` 顺序是**灾难 > 规则 > 分类**；会话内记忆按 `command_head()`（跳过语法词）归类，只在内存里。`show_approval` 返回值从原始输入改成 `approve/deny/always`
+    - 护栏精度：`for / do / in` 等语法词先剥再分类（不能整段丢弃，否则 `do @del %f` 的 del 被吞）；程序位含 `*`/`?` 或以 `%`/`$` 开头视为残片；`find` 默认只读、带 `-delete/-exec/-ok/-fprint/-fls` 才升档
     - 顺带修一个真 hang：`run_user` 里任何没被接住的异常（比如假模型没有 `set_notice`）会让前端永远等 `assistant_done`——现在给 task 挂了兜底回调，异常一律变成 `error` 事件
   - 体验一致性批次（审美审查后）：`show_note` 分 info/warn/error 三档（失败终于不是洋红色）；TUI 与网页共用 `TRACE_FIELD_CHARS` + `ellipsis_note`（同一句截断说明），工具详情两端都截 50；网页错误改独立 `.err-line`（左线 + 红字）；等第一个字时两端都有「⋯」；网页底部加 `/model` `/trace` 一行提示；断线清残留审批卡；网页加「停止」（`loop.should_stop` 每步检查 + `interrupt` 消息，正在跑的那一步会跑完）；`/model` 输入非法时不再静默吞
 

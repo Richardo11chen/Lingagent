@@ -120,6 +120,27 @@ cd web && npx tsc --noEmit     # 前端类型检查
 - **子 agent 的中间过程不进实时流**，只进 trace。
 - 只接 OpenAI 兼容协议面；DeepSeek 私有参数（`thinking` / `reasoning_effort`）默认不传。
 
+## 审批怎么答
+
+危险动作会停下来问你一句，只认三个键：
+
+| 键 | 含义 |
+|---|---|
+| `Enter` | 执行这一次 |
+| `Esc` | 驳回（也可以打 `n` 回车） |
+| `a` + `Enter` | 执行，并且**本次会话不再问这个程序** |
+
+网页端是三个按钮：批准 / 驳回 / 本会话不再问。
+
+记住的范围是"程序名"（`git`、`uv`、`del`），不是整条命令；只存在内存里，**重启就忘**。想让某些命令永远不问，写进配置：
+
+```toml
+[guardrail]
+allow = ["git *", "uv *", "rg *"]   # 前缀语义：以这些词开头的命令不再问
+```
+
+`catastrophic` 档（`format` / `mkfs` / `dd` / `rm -rf /`）**不受 allow 影响**——写 `allow = ["*"]` 也放不出来，这是刻意留的地板。
+
 ## 常见坑
 
 - **同名命令不同物**：PATH 里 Git 的 unix 工具（`find` / `sort` / `awk`）可能排在 `System32` 之前。Windows 的 `find` 是逐行文本搜索，GNU 的 `find` 是文件查找——`find /c /v "" README.md` 在 GNU 语义下会把 `C:\` 整个遍历一遍（2026-10-19 就这么灌出过 91MB 输出）。不确定就先 `where find`。

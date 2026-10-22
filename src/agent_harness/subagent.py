@@ -50,6 +50,7 @@ def make_spawn_tool(
     max_steps: int | None = None,
     on_hook=None,
     should_stop=None,
+    allow_commands=(),
 ):
     """构造 spawn_subagent 工具（装配层工厂）。
 
@@ -75,6 +76,7 @@ def make_spawn_tool(
                 max_steps=max_steps,
                 on_hook=on_hook,
                 should_stop=should_stop,
+                allow_commands=allow_commands,
             )
         child_tracer = _ChildTracer(tracer, child_depth) if tracer is not None else None
         answer, _child_history = agent_loop(  # 子 agent 的 history 用完即弃（上下文隔离）
@@ -90,6 +92,7 @@ def make_spawn_tool(
             on_hook=on_hook,
             max_steps=max_steps or MAX_STEPS,
             should_stop=should_stop,  # 父按了停止，子 agent 下一步也停
+            allow_commands=allow_commands,  # 允许规则跟着一起下去，别让子 agent 反过来问
         )
         # 固定模板摘要（用户拍板）：父只看到目标与结论
         return f"[子 agent 报告]\n目标：{subtask}\n结论：{answer}"

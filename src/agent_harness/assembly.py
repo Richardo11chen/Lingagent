@@ -41,7 +41,7 @@ tools = {
 
 def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
                         max_steps: int | None = None, on_hook=None,
-                        should_stop=None) -> dict:
+                        should_stop=None, allow_commands=()) -> dict:
     """每个会话的工具表：基础工具 + spawn_subagent（闭包持有该会话的装配）。
 
     模型 / 审批 / trace 都是会话级的——所以 spawn 不能一次性注册进模块级 tools。
@@ -59,6 +59,7 @@ def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
         max_steps=max_steps,
         on_hook=on_hook,
         should_stop=should_stop,
+        allow_commands=allow_commands,
     )
     return session_tools
 

@@ -60,6 +60,8 @@ class Settings:
     server_port: int = 8000
     web_autostart: bool = True  # 进 TUI 时自动把网页端（后端 + 前端 dev server）拉起来
     trace_enabled: bool = True  # 写轨迹文件（关掉 = 只留 session，省磁盘）
+    # 人写的允许规则：`["git *", "uv *"]` = 这些命令不再问（前缀语义，灾难命令不受影响）
+    guardrail_allow: list[str] = field(default_factory=list)
 
     def model(self, name: str | None = None) -> ModelProfile:
         """取 profile（指定名 或 default）；名字不存在回退 default。"""
@@ -118,6 +120,12 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
 
     tr = data.get("trace", {})
     s.trace_enabled = bool(tr.get("enabled", s.trace_enabled))
+
+    gr = data.get("guardrail", {})
+    allow = gr.get("allow", s.guardrail_allow)
+    if isinstance(allow, str):  # 允许写单条字符串
+        allow = [allow]
+    s.guardrail_allow = [str(x) for x in allow]
 
     if s.default_model not in s.models:  # default 指向不存在的 profile → 当场说清楚（别等 KeyError）
         raise SystemExit(

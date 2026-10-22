@@ -1,5 +1,6 @@
 """主循环：组织上下文 → 调模型 → 解析动作 → 分发执行 → 回灌结果 → 停机判断。"""
 
+from collections.abc import Sequence
 from typing import Callable
 from .llm import LLM, Action
 from .messages import Msg
@@ -29,6 +30,7 @@ def agent_loop(
     post_hooks: list | None = None,  # 后钩子名单（S9·观察类）
     on_hook: Callable[[str, str], None] | None = None,  # 策略拦截回调（by, reason）——界面实时流用
     should_stop: Callable[[], bool] | None = None,  # 每步开始问一次「还继续吗」——网页的停止按钮
+    allow_commands: Sequence[str] = (),  # 配置里写死的允许规则（前缀语义，见 guardrail）
 ) -> tuple[str, list[Msg]]:
     if tracer is None:
         tracer = Tracer()  # 关闭态空对象：不传 tracer 的调用方，代码一行不改
@@ -75,7 +77,7 @@ def agent_loop(
                 # S11：黑名单 → 风险分级——只读放行；改动 / 执行 / 未知问人；极危险直接拒
                 may_run = True
                 if action.tool == "run_shell":
-                    risk = classify_command(action.args.get("command", ""))
+                    risk = classify_command(action.args.get("command", ""), allow_commands)
                     ev.fields["risk"] = risk.risk
                     if risk.risk == "catastrophic":
                         result = f"命令被策略直接拒绝（{risk.reason}），未执行。"

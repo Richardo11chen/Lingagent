@@ -21,6 +21,7 @@ from .assembly import (
     list_visible_sessions,
     load_settings_and_llm,
 )
+from .guardrail import command_head
 from .llm import Msg
 from .loop import agent_loop
 from .session import (
@@ -63,7 +64,8 @@ async def ws_endpoint(ws: WebSocket):
         build_system_prompt(), _CLI_MODEL,
         on_notice=lambda text: send({"type": "notice", "text": text}),
     )
-    approval: dict = {}  # 审批等待槽：{"event": Event, "result": bool}
+    approval: dict = {}  # 审批等待槽：{"event": Event, "result": bool, "remember": bool}
+    approved_programs: set[str] = set()  # 本连接内"不再问"的程序名（重启即忘）
     stop_event = threading.Event()  # 本轮「别继续了」——网页停止按钮置位，loop 每步看一眼
     user_task: asyncio.Task | None = None
 
@@ -100,15 +102,24 @@ async def ws_endpoint(ws: WebSocket):
             """线程内阻塞等前端答复——收消息 task 唤醒 Event。
 
             reason 一起推给前端：只给命令的话，批的人不知道自己批的是什么风险。
+            本会话"不再问"的记忆存在这里（按程序名），重启即忘。
             """
+            head = command_head(command)
+            if head and head in approved_programs:
+                send({"type": "notice", "text": f"本会话已允许 {head}，直接执行"})
+                return True
             ev = threading.Event()
             approval["event"] = ev
             approval["result"] = False
+            approval["remember"] = False
             send({"type": "approval_request", "command": command, "reason": reason})
             waited = ev.wait(timeout=settings.approval_timeout or None)
             if not waited:  # 没人回答：按驳回处理，别让这一轮永远挂着
                 send({"type": "notice", "text": f"审批超时（{settings.approval_timeout:g} 秒无人答复），已按驳回处理。"})
                 return False
+            if approval["result"] and approval.get("remember") and head:
+                approved_programs.add(head)
+                send({"type": "notice", "text": f"本会话不再询问 {head}"})
             return approval["result"]
 
         old_len = len(history)
@@ -125,6 +136,7 @@ async def ws_endpoint(ws: WebSocket):
             llm, sp, approver=approver, tracer=tracer,
             max_steps=settings.max_steps, on_hook=on_hook,
             should_stop=stop_event.is_set,
+            allow_commands=settings.guardrail_allow,
         )
         run = partial(
             agent_loop,
@@ -142,6 +154,7 @@ async def ws_endpoint(ws: WebSocket):
             on_hook=on_hook,
             max_steps=settings.max_steps,
             should_stop=stop_event.is_set,
+            allow_commands=settings.guardrail_allow,
         )
         try:
             reply, new_history = await asyncio.to_thread(run)
@@ -173,6 +186,7 @@ async def ws_endpoint(ws: WebSocket):
                 ev = approval.get("event")
                 if ev:
                     approval["result"] = bool(msg.get("approved"))
+                    approval["remember"] = bool(msg.get("remember"))
                     ev.set()
             elif mtype == "models_request":  # 列可选模型（/model）
                 await ws.send_json(
