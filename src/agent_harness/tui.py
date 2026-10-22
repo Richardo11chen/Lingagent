@@ -18,6 +18,8 @@ from rich.text import Text
 from rich.panel import Panel
 from rich.table import Table
 
+from .trace import TRACE_FIELD_CHARS, ellipsis_note
+
 console = Console()
 
 _session: PromptSession | None = None
@@ -27,6 +29,7 @@ _blocks: list = []  # 本轮已封块的 renderables（快照）
 _reasoning_buf = ""
 _text_buf = ""
 _in_reasoning = False
+_waiting = False  # 已发出请求、还没等到第一个字——先给人一个「它在动」的信号
 
 
 def interactive() -> bool:
@@ -81,6 +84,8 @@ def show_sessions(rows: list[dict], page: int, total_pages: int, total: int) -> 
 
 def show_hook(by: str, reason: str) -> None:
     """策略拦截提示（实时流里冒一行）——内容走 Text，不走 markup 解析。"""
+    global _waiting
+    _waiting = False
     line = f"⚡ 策略拦截：{by}" + (f" · {reason[:50]}" if reason else "")
     if _live:
         _seal_current()
@@ -142,9 +147,11 @@ def _live_open() -> None:
 
 def begin_stream() -> None:
     """本轮开始：开 Live（唯一输出通道——思考/工具/正文都在里面组合渲染）。"""
-    global _blocks, _reasoning_buf, _text_buf, _in_reasoning
+    global _blocks, _reasoning_buf, _text_buf, _in_reasoning, _waiting
     _blocks, _reasoning_buf, _text_buf, _in_reasoning = [], "", "", False
+    _waiting = True  # 请求已发出、还没回音——先挂一个「等」的提示，别让屏幕像死了
     _live_open()
+    _refresh()  # 立刻画一帧，否则「等」要等到第一个 chunk 才出现（等于没写）
 
 
 def _seal_current() -> None:
@@ -163,6 +170,8 @@ def _refresh() -> None:
     if not _live:
         return
     current = []
+    if _waiting and not _blocks and not _reasoning_buf and not _text_buf:
+        current.append(Text("⋯ 等待模型响应", style="dim"))  # 第一个字到之前，给个活着的信号
     if _reasoning_buf:
         current.append(Text("💭 " + _reasoning_buf, style="dim italic"))
     if _text_buf:
@@ -172,7 +181,8 @@ def _refresh() -> None:
 
 def reasoning_chunk(chunk: str) -> None:
     """思考增量：💭 暗色斜体（与正文区分）——「看它想什么」。"""
-    global _reasoning_buf, _in_reasoning
+    global _reasoning_buf, _in_reasoning, _waiting
+    _waiting = False
     if not _in_reasoning:
         _seal_current()
         _in_reasoning = True
@@ -182,7 +192,8 @@ def reasoning_chunk(chunk: str) -> None:
 
 def stream_chunk(chunk: str) -> None:
     """正文增量：● 前缀 + Markdown 流式重绘（走 Live——与思考/工具同通道）。"""
-    global _text_buf, _in_reasoning
+    global _text_buf, _in_reasoning, _waiting
+    _waiting = False
     if _in_reasoning:
         _seal_current()
     _text_buf += chunk
@@ -190,7 +201,8 @@ def stream_chunk(chunk: str) -> None:
 
 
 def end_stream() -> None:
-    global _live
+    global _live, _waiting
+    _waiting = False
     _seal_current()
     if _live:
         _live.stop()  # 停 Live——内容留在屏幕
@@ -203,8 +215,14 @@ def show_models(profiles: list[str], current: str) -> None:
     console.print(Panel("\n".join(lines), title="选择模型（输入序号，回车取消）", border_style="magenta"))
 
 
-def show_note(text: str) -> None:
-    console.print(f"[magenta]{text}[/]")
+# 提示的三档：别让「操作成功」和「这一轮失败了」长成同一个样子
+_NOTE_STYLE = {"info": ("magenta", ""), "warn": ("yellow", "! "), "error": ("red", "✗ ")}
+
+
+def show_note(text: str, kind: str = "info") -> None:
+    """一行提示。info = 陈述；warn = 你没按提示来 / 有东西被回退；error = 这一轮废了。"""
+    color, prefix = _NOTE_STYLE.get(kind, _NOTE_STYLE["info"])
+    console.print(f"[{color}]{prefix}{text}[/]")
 
 
 def _fmt_ms(v) -> str:
@@ -253,7 +271,7 @@ def show_trace(recs: list[dict], session_id: str) -> None:
     console.print("[dim]看某条全文：/trace N[/]")
 
 
-TRACE_DETAIL_CHARS = 4000  # 单字段钻取显示上限——一次命令能刷出几十 MB，全打出来会冻住终端
+TRACE_DETAIL_CHARS = TRACE_FIELD_CHARS  # 与网页同一个数（trace.py 定义）
 
 
 def show_trace_event(rec: dict, idx: int) -> None:
@@ -269,17 +287,15 @@ def show_trace_event(rec: dict, idx: int) -> None:
         body.append(f"{k}：", style="dim")
         if len(text_v) > TRACE_DETAIL_CHARS:
             body.append(f"{text_v[:TRACE_DETAIL_CHARS]}\n")
-            body.append(
-                f"…（本字段共 {len(text_v)} 字符，此处只显示前 {TRACE_DETAIL_CHARS}；"
-                f"全文见存档目录下同名 .trace.jsonl）\n",
-                style="yellow",
-            )
+            body.append(ellipsis_note(len(text_v)) + "\n", style="yellow")
         else:
             body.append(f"{text_v}\n")
     console.print(Panel(body, title="轨迹明细", title_align="left", border_style="dim"))
 
 
 def show_tool(name: str, args: dict | None = None) -> None:
+    global _waiting
+    _waiting = False
     detail = str((args or {}).get("command") or (args or {}).get("path") or "")
     if len(detail) > 50:
         detail = detail[:50] + "…"

@@ -28,6 +28,7 @@ def agent_loop(
     pre_hooks: list | None = None,  # 预钩子名单（S9）——None = 空名单
     post_hooks: list | None = None,  # 后钩子名单（S9·观察类）
     on_hook: Callable[[str, str], None] | None = None,  # 策略拦截回调（by, reason）——界面实时流用
+    should_stop: Callable[[], bool] | None = None,  # 每步开始问一次「还继续吗」——网页的停止按钮
 ) -> tuple[str, list[Msg]]:
     if tracer is None:
         tracer = Tracer()  # 关闭态空对象：不传 tracer 的调用方，代码一行不改
@@ -42,6 +43,11 @@ def agent_loop(
     tool_schemas = [s for s in TOOL_SCHEMAS if s["function"]["name"] in tools]
 
     for step in range(1, max_steps + 1):
+        if should_stop is not None and should_stop():
+            # 停止的最小语义：不再发起新动作。正在跑的那一步（工具 / 模型请求）跑完才停——
+            # 硬中断一个子进程比「多做一步」更麻烦，个人项目不做。
+            answer = "已按你的要求中止本轮（后面的步骤没有执行）。"
+            break
         with tracer.timed("model", step=step) as ev:
             text, actions, reasoning = llm(
                 history, tool_schemas, on_text=on_text, on_reasoning=on_reasoning,

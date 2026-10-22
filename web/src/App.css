@@ -115,10 +115,21 @@ main {
   color: #d4a72c;
 }
 
-/* 本轮失败（网络断 / 模型报错）——必须醒目，否则用户以为还在生成 */
-.tool.err {
-  color: #c0392b;
+/* 本轮失败：给它一条自己的左线，别再借用 12px 的工具提示行 */
+.err-line {
+  padding: 2px 0 2px 10px;
+  margin: 2px 0;
+  border-left: 2px solid #c0392b;
+  color: #e06c5a;
+  font-size: 13px;
   font-weight: 600;
+}
+
+/* 已发出、还没等到第一个字 */
+.pending {
+  padding-left: 4px;
+  color: #7a7f8a;
+  font-size: 13px;
 }
 
 .approval {
@@ -194,6 +205,30 @@ footer button {
   background: #1e3a5f;
   color: #e6e6e6;
   cursor: pointer;
+}
+
+footer button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 停止：本轮正在跑时才出现，视觉上比「发送」轻一档 */
+footer button.stop {
+  background: #3a2323;
+  border: 1px solid #5c2f2f;
+  color: #e0a0a0;
+}
+
+/* 两个暗号的一行提示：小、灰、不抢戏 */
+.hints {
+  padding: 0 16px 8px;
+  color: #6b7280;
+  font-size: 11px;
+}
+
+.hints code {
+  color: #8a93a0;
+  font-size: 11px;
 }
 
 .session-picker {

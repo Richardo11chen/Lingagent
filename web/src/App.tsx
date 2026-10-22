@@ -85,6 +85,8 @@ function App() {
   const [sessionId, setSessionId] = useState('')
   const [approval, setApproval] = useState<{ command: string; reason: string } | null>(null)
   const [connected, setConnected] = useState(false)
+  const [running, setRunning] = useState(false)  // 这一轮在跑——决定底部显示「发送」还是「停止」
+  const [pending, setPending] = useState(false)  // 已发出、还没等到第一个字
   const [sessions, setSessions] = useState<{ id: string; preview: string }[] | null>(null)
   const [modelName, setModelName] = useState('')
   const [modelPicker, setModelPicker] = useState<{ list: string[]; current: string } | null>(null)
@@ -112,6 +114,10 @@ function App() {
       sock.onclose = () => {
         setConnected(false)
         wsRef.current = null
+        // 断线 = 这一轮没了：清掉残留的审批卡（点它已经没人接）和「在跑」状态
+        setApproval(null)
+        setRunning(false)
+        setPending(false)
         if (!unmounted) retry = window.setTimeout(connect, 1500)
       }
       sock.onmessage = onMessage
@@ -145,6 +151,7 @@ function App() {
           setMsgs((ms) => [...ms, { kind: 'tool', name: ev.error || '切换失败' }])
         }
       } else if (ev.type === 'assistant_chunk') {
+        setPending(false)
         setMsgs((ms) => {
           const last = ms[ms.length - 1]
           if (last && last.kind === 'assistant' && last.streaming) {
@@ -153,6 +160,8 @@ function App() {
           return [...ms, { kind: 'assistant', text: ev.text, streaming: true }]
         })
       } else if (ev.type === 'assistant_done') {
+        setRunning(false)
+        setPending(false)
         setMsgs((ms) => {
           const last = ms[ms.length - 1]
           if (last && last.kind === 'assistant' && last.streaming) {
@@ -161,6 +170,7 @@ function App() {
           return [...ms, { kind: 'assistant', text: ev.text }]
         })
       } else if (ev.type === 'reasoning') {
+        setPending(false)
         setMsgs((ms) => {
           const last = ms[ms.length - 1]
           if (last && last.kind === 'reasoning') {
@@ -169,12 +179,16 @@ function App() {
           return [...ms, { kind: 'reasoning', text: ev.text }]
         })
       } else if (ev.type === 'tool') {
+        setPending(false)
         setMsgs((ms) => [...ms, { kind: 'tool', name: ev.name, detail: ev.detail }])
       } else if (ev.type === 'hook') {
+        setPending(false)
         setMsgs((ms) => [...ms, { kind: 'hook', text: `⚡ 策略拦截：${ev.by} · ${ev.reason}` }])
       } else if (ev.type === 'approval_request') {
         setApproval({ command: ev.command, reason: ev.reason ?? '' })
       } else if (ev.type === 'error') {
+        setRunning(false)
+        setPending(false)
         setMsgs((ms) => [...ms, { kind: 'error', text: ev.text }])
       }
     }
@@ -194,6 +208,7 @@ function App() {
   const send = () => {
     const text = input.trim()
     if (!text || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+    if (running) return  // 上一轮还没完——服务端也会忽略，这里先在按钮上挡住
     if (text === '/model') {
       wsRef.current.send(JSON.stringify({ type: 'models_request' }))
       setInput('')
@@ -207,6 +222,13 @@ function App() {
     wsRef.current.send(JSON.stringify({ type: 'user', text }))
     setMsgs((ms) => [...ms, { kind: 'user', text }])
     setInput('')
+    setRunning(true)
+    setPending(true)
+  }
+
+  // 停止本轮：不再发起新动作（正在跑的那一步会跑完），与 TUI 的 Ctrl+C 同义
+  const interrupt = () => {
+    wsRef.current?.send(JSON.stringify({ type: 'interrupt' }))
   }
 
   const answer = (approved: boolean) => {
@@ -238,8 +260,8 @@ function App() {
               {m.text}
             </div>
           ) : m.kind === 'error' ? (
-            <div key={i} className="tool err">
-              ⚠ {m.text}
+            <div key={i} className="err-line">
+              ✗ {m.text}
             </div>
           ) : (
             <div key={i} className={`bubble ${m.kind}`}>
@@ -251,6 +273,7 @@ function App() {
             </div>
           ),
         )}
+        {pending && <div className="pending">⋯</div>}
         <div ref={bottomRef} />
       </main>
       {sessions !== null && (
@@ -347,6 +370,10 @@ function App() {
           </div>
         </div>
       )}
+      {/* 两个暗号放在这，别让人靠猜 */}
+      <div className="hints">
+        <code>/model</code> 换模型 · <code>/trace</code> 看轨迹
+      </div>
       <footer>
         <input
           value={input}
@@ -355,7 +382,14 @@ function App() {
           placeholder="❯ 说点什么…"
           autoFocus
         />
-        <button onClick={send}>发送</button>
+        <button onClick={send} disabled={running}>
+          发送
+        </button>
+        {running && (
+          <button className="stop" onClick={interrupt}>
+            停止
+          </button>
+        )}
       </footer>
     </div>
   )

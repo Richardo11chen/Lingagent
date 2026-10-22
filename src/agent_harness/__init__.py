@@ -65,7 +65,7 @@ def choose_session(workspace: Path) -> tuple[str, list[Msg]]:
             s = chunk[int(choice) - 1]
             return s["id"], load_session(workspace, s["id"])
         else:
-            tui.show_note("没这个选项——按提示来")
+            tui.show_note("没这个选项——按提示来", "warn")
 
 def main() -> None:
     import argparse
@@ -87,7 +87,7 @@ def main() -> None:
     # 会话级模型（用户定）：打开哪个会话用它上次用的模型；--model 显式指定优先
     saved = load_session_model(WORKSPACE, session_id)
     if saved and saved not in settings.models:
-        tui.show_note(f"会话原用模型 {saved} 已不在配置里，回退默认")
+        tui.show_note(f"会话原用模型 {saved} 已不在配置里，回退默认", "warn")
     target = args.model or (saved if saved in settings.models else None)
     if target and target != llm.current_profile:
         llm.switch(target)
@@ -117,7 +117,7 @@ def main() -> None:
             elif arg.isdigit() and 1 <= int(arg) <= len(recs):
                 tui.show_trace_event(recs[int(arg) - 1], int(arg))  # 钻取单条全文
             else:
-                tui.show_note(f"没有 #{arg} 这条事件（当前共 {len(recs)} 条）")
+                tui.show_note(f"没有 #{arg} 这条事件（当前共 {len(recs)} 条）", "warn")
             continue
         if goal == "/model":  # 运行时切换模型（会话级——落盘，退出不丢）
             tui.show_models(llm.profiles, llm.current_profile)
@@ -126,6 +126,8 @@ def main() -> None:
                 name = llm.profiles[int(pick) - 1]
                 tui.show_note(f"已切换到 {llm.switch(name)}")
                 save_session_model(WORKSPACE, session_id, name)  # 记在会话上，下次打开还认
+            elif pick:  # 空输入 = 取消（面板上写了）；打了别的东西 = 说清楚，别静默吞
+                tui.show_note("没这个序号——按提示来", "warn")
             continue
         if not goal:
             continue
@@ -145,12 +147,12 @@ def main() -> None:
             )
         except KeyboardInterrupt:  # Ctrl+C：结束本轮，回到输入行（不是退出程序）
             tui.end_stream()
-            tui.show_note("已中断本轮（这一轮的历史未落盘）")
+            tui.show_note("已中断本轮（这一轮的历史未落盘）", "warn")
             continue
         except Exception as e:  # 网络断了 / 模型报错 / 参数解析炸了——报一句，保住会话
             # history 是被 agent_loop 换成新列表的（history + [...]），失败时原列表没被改写
             tui.end_stream()
-            tui.show_note(f"本轮失败：{type(e).__name__}: {e}")
+            tui.show_note(f"本轮失败：{type(e).__name__}: {e}", "error")
             continue
         tui.end_stream()
         save_messages(WORKSPACE, session_id, history[old_len:])

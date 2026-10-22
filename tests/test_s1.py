@@ -11,6 +11,28 @@ def make_tools():
     return {"read_file": read_file, "write_file": write_file, "count_lines": count_lines}
 
 
+def test_should_stop_ends_round_before_next_step(tmp_path):  # 停止按钮：当前这一步跑完，后面不再发起
+    target = tmp_path / "a.txt"
+    target.write_text("hello", encoding="utf-8")
+    ran = []
+
+    def spy(**kw):
+        ran.append(kw)
+        return "内容"
+
+    llm = ScriptLLM([
+        Action("read_file", {"path": "a"}),
+        Action("read_file", {"path": "b"}),
+        Action("read_file", {"path": "c"}),
+    ])
+    answer, _ = agent_loop(
+        "干活", llm, {"read_file": spy}, SYSTEM_PROMPT,
+        should_stop=lambda: len(ran) >= 1, max_steps=5,
+    )
+    assert len(ran) == 1  # 第一个动作跑完后，第二步开头就停了
+    assert "中止" in answer
+
+
 def test_1(tmp_path):  # 剧本驱动：工具结果作为 user 消息回灌进历史，写盘真发生
     target = tmp_path / "a.txt"
     target.write_text("hello", encoding="utf-8")

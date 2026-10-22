@@ -39,6 +39,7 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
   - `server.main` 前置校验密钥；`sensors.run_tests` 改用 `sys.executable -m pytest`；`wcwidth` 写进依赖
   - 存档布局迁移（用户批准）：`session.py` 改为 `~/.agent_harness_sessions/<项目名>-<身份前8位>/`，身份 = 工作目录里的 `.agent-harness-id`（uuid，已 gitignore）→ **项目改名/移动不再丢历史**；老的路径派生目录首次访问自动搬过来（本机已迁：53 个会话 → `AgentHarness-d619b9f5`）；新增 3 条测试覆盖身份稳定 / 改名后仍可读 / 旧目录迁移
   - 审批带判定原因（用户批准，改接口）：`approver` 签名 `(command, reason)`；TUI 先印「⚠ 未知命令：find」再印命令全文，网页审批卡改成 原因 / 命令 / 按钮 三行；`loop` 把 `risk.reason` 递出去；新增 1 条测试 + 8 处测试回调跟着改签名
+  - 体验一致性批次（审美审查后）：`show_note` 分 info/warn/error 三档（失败终于不是洋红色）；TUI 与网页共用 `TRACE_FIELD_CHARS` + `ellipsis_note`（同一句截断说明），工具详情两端都截 50；网页错误改独立 `.err-line`（左线 + 红字）；等第一个字时两端都有「⋯」；网页底部加 `/model` `/trace` 一行提示；断线清残留审批卡；网页加「停止」（`loop.should_stop` 每步检查 + `interrupt` 消息，正在跑的那一步会跑完）；`/model` 输入非法时不再静默吞
 
 未完成：
 

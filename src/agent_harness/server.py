@@ -32,19 +32,17 @@ from .session import (
     save_session_model,
     trace_path,
 )
-from .trace import Tracer, load_trace
+from .trace import Tracer, TRACE_FIELD_CHARS, ellipsis_note, load_trace
 
 app = FastAPI()
 
-TRACE_WIRE_CHARS = 2000  # 网页端单字段上限——result 可能是几十 MB，整条推给浏览器会冻住页面
-
 
 def _slim(rec: dict) -> dict:
-    """把一条轨迹记录压到适合过 WS 的大小（看全文请开存档目录里的 .trace.jsonl）。"""
+    """把一条轨迹记录压到适合过 WS 的大小——和 TUI 用同一个上限、同一句说明。"""
     out: dict = {}
     for k, v in rec.items():
-        if isinstance(v, str) and len(v) > TRACE_WIRE_CHARS:
-            out[k] = v[:TRACE_WIRE_CHARS] + f"…（共 {len(v)} 字符，已截断）"
+        if isinstance(v, str) and len(v) > TRACE_FIELD_CHARS:
+            out[k] = v[:TRACE_FIELD_CHARS] + ellipsis_note(len(v))
         else:
             out[k] = v
     return out
@@ -58,6 +56,7 @@ async def ws_endpoint(ws: WebSocket):
     history: list[Msg] = []
     llm, settings = load_settings_and_llm(build_system_prompt(), _CLI_MODEL)
     approval: dict = {}  # 审批等待槽：{"event": Event, "result": bool}
+    stop_event = threading.Event()  # 本轮「别继续了」——网页停止按钮置位，loop 每步看一眼
     user_task: asyncio.Task | None = None
 
     await ws.send_json({"type": "session", "id": session_id, "history_n": len(history), "model": llm.current})
@@ -73,7 +72,7 @@ async def ws_endpoint(ws: WebSocket):
 
         def on_tool(name: str, args: dict) -> None:
             detail = str(args.get("command") or args.get("path") or "")
-            send({"type": "tool", "name": name, "detail": detail[:80]})
+            send({"type": "tool", "name": name, "detail": detail[:50]})  # 与 TUI 同一个截断长度
 
         def on_reasoning(chunk: str) -> None:
             send({"type": "reasoning", "text": chunk})
@@ -115,6 +114,7 @@ async def ws_endpoint(ws: WebSocket):
             pre_hooks=PRE_HOOKS, post_hooks=POST_HOOKS,
             on_hook=on_hook,
             max_steps=settings.max_steps,
+            should_stop=stop_event.is_set,
         )
         try:
             reply, new_history = await asyncio.to_thread(run)
@@ -132,7 +132,15 @@ async def ws_endpoint(ws: WebSocket):
             if mtype == "user":
                 if user_task and not user_task.done():
                     continue  # 上一轮还在跑——忽略
+                stop_event.clear()  # 新一轮：把上一轮的「停」清掉
                 user_task = asyncio.create_task(run_user(str(msg.get("text", ""))))
+            elif mtype == "interrupt":
+                # 停止本轮：置位给 loop 的检查点；若正卡在审批上，顺手驳回把它放出来
+                stop_event.set()
+                ev = approval.get("event")
+                if ev:
+                    approval["result"] = False
+                    ev.set()
             elif mtype == "approval_response":
                 ev = approval.get("event")
                 if ev:

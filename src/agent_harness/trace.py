@@ -18,6 +18,14 @@ from pathlib import Path
 # 也塞进内存和界面。超限的记录只留一条摘要占位（原始字节仍在文件里，需要时直接看文件）。
 MAX_RECORD_BYTES = 2 * 1024 * 1024
 
+# 单字段显示上限：终端和网页共用同一个数、同一句话——两处不一样会让人以为数据不同
+TRACE_FIELD_CHARS = 2000
+
+
+def ellipsis_note(total: int, shown: int = TRACE_FIELD_CHARS) -> str:
+    """截断说明的唯一来源：TUI 和网页都调它，保证同一个词。"""
+    return f"…（共 {total} 字符，仅显示前 {shown}；全文见同名 .trace.jsonl）"
+
 
 def load_trace(path: Path) -> list[dict]:
     """读回轨迹：坏行跳过（与 session.load_session 同规矩）；文件不存在 = 空列表。
