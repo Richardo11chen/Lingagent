@@ -29,16 +29,25 @@ CATASTROPHIC_PROGRAMS = {
     "mkfs.ntfs", "mkfs.btrfs",
 }
 
-# 只读命令：确认不改工作区（重定向另判——`>` 出现即按改动算）。
-# 注意：sed / awk / xargs / tee 能写或执行，故意不入白名单。
-# find 单独处理：它默认只读，但带 -delete / -exec 就是写/执行（见 _classify_tokens）。
+# 下面几张表**不是安全边界**，只是"省一次审批"的默认值：
+# 删掉一个名字不会漏（它会落到 unknown，照样问人），只会让那条命令从"直接跑"
+# 变成"先问你"。所以列宽没有代价，列窄了要你多点几次回车。
+# 分组按「这个名字在哪个 shell 里真的存在」——三种词汇混在一起（bash coreutils /
+# Windows 自带 exe / cmd 与 PowerShell 的内建和别名）是它读起来臃肿的真正原因。
 READ_ONLY_PROGRAMS = {
-    "dir", "type", "findstr", "where", "ver", "cd", "chdir", "echo", "set",
-    "whoami", "hostname", "tasklist", "vol", "date", "title", "cls", "path",
-    "color", "mode", "more", "fc", "comp", "tree", "diff", "cmp",
+    # bash / coreutils——现在真正常用的那一批
     "ls", "cat", "head", "tail", "wc", "grep", "rg", "stat", "pwd", "basename",
     "dirname", "realpath", "md5sum", "sha1sum", "sha256sum", "which", "uname", "du",
+    "diff", "cmp", "echo", "cd",
+    # Windows 自带的 exe——在 Git Bash 里照样能调（实测 tasklist / attrib 都跑得动）
+    "where", "findstr", "tasklist", "more", "fc", "comp", "tree", "hostname", "whoami",
+    # cmd 内建 / PowerShell 别名——bash 里没有，pwsh 兜底时才真能跑
+    # （del→Remove-Item、type→Get-Content、cls→Clear-Host 这些在 pwsh5 里都是别名）
+    "dir", "type", "ver", "vol", "title", "color", "mode", "path", "cls", "chdir", "set", "date",
 }
+
+# 故意不在这张表里：sed / awk / xargs / tee（能写文件或执行）。find 单独处理——
+# 默认只读，带 -delete / -exec / -fprint 才升档（见 _classify_tokens）。
 
 # find 的危险开关：命中即从只读升到执行/改动
 FIND_WRITE_FLAGS = (
@@ -61,16 +70,19 @@ VERSION_PROGRAMS = {"python", "py", "python3", "pytest", "node", "npm", "uv", "p
 VERSION_FLAGS = {"--version", "-version", "-V", "-v"}
 
 MUTATING_PROGRAMS = {
-    "del", "erase", "rm", "rmdir", "rd", "mkdir", "md", "copy", "move", "ren",
-    "rename", "attrib", "icacls", "takeown", "xcopy", "robocopy", "mklink",
-    "fsutil", "reg", "schtasks", "sc", "net", "wmic", "tar", "unzip", "7z",
-    "expand", "compact", "chkdsk", "defrag", "cipher", "bcdedit", "shutdown",
-    "taskkill", "assoc", "ftype",
-    # bash 侧的主力写操作（换到 Git Bash 之后这些才是常见形态）
-    # 注意 dd / shred 归 catastrophic，别在这里重复列
-    "cp", "mv", "touch", "ln", "chmod", "chown", "tee", "truncate", "rsync",
-    "install", "unlink",
+    # bash / coreutils——换到 Git Bash 之后这些才是常见形态
+    "rm", "rmdir", "mkdir", "cp", "mv", "touch", "ln", "chmod", "chown",
+    "tee", "truncate", "rsync", "install", "unlink",
+    # 压缩与解包（两种 shell 下都能调）
+    "tar", "unzip", "7z", "expand", "compact",
+    # Windows 自带的管理类 exe——Git Bash 里也调得动，但都要问：改权限 / 改注册表 / 动机器
+    "icacls", "takeown", "robocopy", "xcopy", "attrib", "fsutil", "reg", "schtasks",
+    "sc", "net", "wmic", "chkdsk", "defrag", "cipher", "bcdedit", "shutdown", "taskkill",
+    # cmd 内建 / PowerShell 别名——pwsh 兜底时才真能跑（bash 里是 command not found）
+    "del", "erase", "rd", "md", "copy", "move", "ren", "rename", "mklink", "assoc", "ftype",
 }
+
+# dd / shred 归 catastrophic，别在这里重复列（重复了也不会出错，但两处真相会各自漂）
 
 # sed 默认只读；带 -i 才改文件（`sed -n '1,10p'` 是最常见的看代码方式）
 SED_WRITE_FLAGS = ("-i", "--in-place")
