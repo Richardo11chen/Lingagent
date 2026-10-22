@@ -65,7 +65,14 @@ MUTATING_PROGRAMS = {
     "fsutil", "reg", "schtasks", "sc", "net", "wmic", "tar", "unzip", "7z",
     "expand", "compact", "chkdsk", "defrag", "cipher", "bcdedit", "shutdown",
     "taskkill", "assoc", "ftype",
+    # bash 侧的主力写操作（换到 Git Bash 之后这些才是常见形态）
+    # 注意 dd / shred 归 catastrophic，别在这里重复列
+    "cp", "mv", "touch", "ln", "chmod", "chown", "tee", "truncate", "rsync",
+    "install", "unlink",
 }
+
+# sed 默认只读；带 -i 才改文件（`sed -n '1,10p'` 是最常见的看代码方式）
+SED_WRITE_FLAGS = ("-i", "--in-place")
 
 EXECUTING_PROGRAMS = {
     "python", "py", "python3", "pytest", "powershell", "pwsh", "cmd", "command",
@@ -202,7 +209,11 @@ def _command_tokens(segment: str) -> list[str]:
 
 
 def _split_segments(command: str) -> tuple[list[str], bool]:
-    """按未加引号的 & | ( ) 和换行拆段；返回 (段列表, 引号是否闭合)."""
+    """按未加引号的 & | ( ) ; 和换行拆段；返回 (段列表, 引号是否闭合)。
+
+    `;` 必须算分隔符：bash 里 `echo a; rm -rf x` 是两条命令，漏掉它就会
+    只看第一段（echo）而放过第二段——那是 fail open。
+    """
     segs: list[str] = []
     buf: list[str] = []
     quote = False
@@ -210,7 +221,7 @@ def _split_segments(command: str) -> tuple[list[str], bool]:
         if c == '"':
             quote = not quote
             buf.append(c)
-        elif not quote and (c in "&|()" or c in "\r\n"):
+        elif not quote and (c in "&|();" or c in "\r\n"):
             seg = "".join(buf).strip()
             if seg:
                 segs.append(seg)
@@ -279,6 +290,10 @@ def _classify_tokens(tokens: list[str]) -> CommandRisk:
         if any(a.lower().startswith(FIND_WRITE_FLAGS) for a in args):
             return CommandRisk(EXECUTING, "find 带执行/删除参数")
         return CommandRisk(READ_ONLY, "只读：find")
+    if prog == "sed":
+        if any(a.lower().startswith(SED_WRITE_FLAGS) for a in args):
+            return CommandRisk(MUTATING, "sed 就地改文件（-i）")
+        return CommandRisk(READ_ONLY, "只读：sed")
     if prog in VERSION_PROGRAMS:
         if len(args) == 1 and args[0].lower() in VERSION_FLAGS:
             return CommandRisk(READ_ONLY, f"只读：{prog} {args[0]}")

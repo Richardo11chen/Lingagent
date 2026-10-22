@@ -3,6 +3,8 @@ from dataclasses import dataclass
 import os
 import subprocess
 
+from .shell import detect as _shell
+
 SHELL_TIMEOUT = 120  # 秒：一条 shell 命令的默认上限（S10 真机撞出的墙——卡住的命令不许冻住整台机器）
 MAX_SHELL_TIMEOUT = 600  # 秒：模型自己能调到的上限（装包 / 全量构建偶尔要多几分钟）
 
@@ -44,23 +46,25 @@ def _clamp_timeout(value) -> float:
 def run_shell(command: str, timeout: float = SHELL_TIMEOUT) -> str:
     """跑一条 shell 命令——超时杀整棵进程树，输出合并成一个流。
 
-    三个刻意的选择：
+    用哪个 shell 由 `shell.detect()` 决定（bash 优先，其次 pwsh，cmd 只兜底）：
+    命令以 `[shell, <旗标>, command]` 的形式直接交给它，不经 `shell=True` 绕一层 cmd。
+
+    另外三个刻意的选择：
 
     1. **stderr 并入 stdout**：模型关心"发生了什么、按什么顺序"，不关心走哪个通道。
        分开收集再拼接会把时序打乱（编译错误的上下文就错位了）。
     2. **stdin 接空设备**：等 stdin 的命令（`git commit` 不带 `-m`、`more`）不该
        白挂到超时才结束，直接让它们读到 EOF 自己退出。
-    3. **抓字节自己解码**，不用 `text=True`：父进程按 locale 解、子进程按控制台代码页写，
-       两者可以不一致（`PYTHONUTF8=1` + `chcp 936` 就是典型），一旦不一致就是乱码或
+    3. **抓字节自己解码**，不用 `text=True`：父进程按 locale 解、子进程按自己的编码写，
+       两者可以不一致（`PYTHONUTF8=1` + GBK 控制台就是典型），一旦不一致就是乱码或
        `UnicodeDecodeError`。
     """
     timeout = _clamp_timeout(timeout)
     proc = subprocess.Popen(
-        command,
+        [*_shell().argv, command],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
-        shell=True,
     )
     try:
         out, _ = proc.communicate(timeout=timeout)

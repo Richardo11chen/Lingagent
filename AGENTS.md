@@ -11,7 +11,7 @@
 - 修改现有文件优先用 `edit_file`；只有新建文件或整体重写才用 `write_file`
 - 改完代码必须跑测试验证，绿了才算完成——不要没验证就宣称完成
 - 危险命令要人工审批；只能在项目目录内活动
-- shell 命令注意同名不同物：PATH 里 Git 的 unix 工具可能排在 `System32` 之前，`find` 在 GNU 语义下是文件查找（会把整盘遍历一遍），Windows 的 `find` 才是文本搜索。不确定先 `where find`
+- `run_shell` 跑在 **Git Bash**（不是 cmd.exe）：bash 语法、正斜杠路径、`find` 是 GNU 的（能 `-delete`/`-exec`，也会把整盘遍历一遍——限制范围）。`dir`/`type`/`del` 这些 cmd 内建命令不存在，用 `ls`/`cat`/`rm`
 
 ## 结构
 

@@ -182,3 +182,15 @@ def test_pure_variable_fragment_is_skipped():  # 但 for 的循环变量本身�
     assert risk("for %f in (*.py) do @echo %f") == "read_only"
 
 
+def test_semicolon_splits_commands():  # bash 里 ; 也是分隔符——漏掉就是 fail open
+    assert risk("echo a; rm -rf build") != "read_only"
+    assert risk("echo a; ls") == "read_only"
+
+
+def test_bash_write_commands_ask():  # cp / mv / touch / sed -i 是 bash 侧的主力写操作
+    for cmd in ("cp a b", "mv a b", "touch x", "sed -i 's/a/b/' f.txt"):
+        assert risk(cmd) != "read_only", cmd
+    assert risk("sed -n '1,10p' a.txt") == "read_only"  # 不带 -i 的 sed 只是看代码
+
+
+

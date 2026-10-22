@@ -57,6 +57,9 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
     - 压缩会出声：`llm.py` 加 `on_notice(text, **fields)`（构造参数，不变量协议），真压了才提示（没压不吵）；413 重试也提示。TUI 用 `⟳` 一行插入流里，网页复用 `notice` 事件；同时写一条 `kind: compact` 的 trace（`reason` / `before` / `after`），`/trace` 表格显示「81234 → 21005 字符」
     - A+ 审批模型（2026-10-22 晚）：`[guardrail] allow` 前缀规则（`git *`）+ 审批三键（Enter 批准 / Esc 驳回 / `a` 记住本会话）+ 网页第三个按钮。`classify_command(cmd, allow)` 顺序是**灾难 > 规则 > 分类**；会话内记忆按 `command_head()`（跳过语法词）归类，只在内存里。`show_approval` 返回值从原始输入改成 `approve/deny/always`
     - 护栏精度：`for / do / in` 等语法词先剥再分类（不能整段丢弃，否则 `do @del %f` 的 del 被吞）；程序位含 `*`/`?` 或以 `%`/`$` 开头视为残片；`find` 默认只读、带 `-delete/-exec/-ok/-fprint/-fls` 才升档
+    - **换 shell（2026-10-22 晚，用户拍板）**：新增 `shell.py`，顺序 bash（Git Bash）→ pwsh 7 → pwsh 5 → cmd 兜底；跳过 `System32\bash.exe`（WSL 启动器）；`AGENT_HARNESS_SHELL` 可覆盖。`run_shell` 不再用 `shell=True`，改为 `[shell, 旗标, command]`；横幅显示当前 shell
+    - 换 shell 的连带改动：护栏加 `;` 分隔符（bash 的 `echo a; rm -rf x`，漏掉就是 fail open）；`MUTATING_PROGRAMS` 补 `cp/mv/touch/ln/chmod/chown/tee/truncate/rsync/install/unlink`；`sed` 带 `-i` 才算改文件；系统提示改写成 bash 语法（`ls/cat/rm`，`command -v`）
+    - `run_shell` 也补了 timeout 参数（schema 暴露，默认 120 上限 600）与三处输出修复（stderr 合并 / 字节自解码 / stdin=DEVNULL）
     - 顺带修一个真 hang：`run_user` 里任何没被接住的异常（比如假模型没有 `set_notice`）会让前端永远等 `assistant_done`——现在给 task 挂了兜底回调，异常一律变成 `error` 事件
   - 体验一致性批次（审美审查后）：`show_note` 分 info/warn/error 三档（失败终于不是洋红色）；TUI 与网页共用 `TRACE_FIELD_CHARS` + `ellipsis_note`（同一句截断说明），工具详情两端都截 50；网页错误改独立 `.err-line`（左线 + 红字）；等第一个字时两端都有「⋯」；网页底部加 `/model` `/trace` 一行提示；断线清残留审批卡；网页加「停止」（`loop.should_stop` 每步检查 + `interrupt` 消息，正在跑的那一步会跑完）；`/model` 输入非法时不再静默吞
 

@@ -14,6 +14,7 @@ from .assembly import (
     load_settings_and_llm,
 )
 from .guardrail import command_head
+from .shell import detect as detect_shell
 from .session import (
     list_sessions,
     list_trace_files,
@@ -159,7 +160,7 @@ def main() -> None:
         max_steps=settings.max_steps, on_hook=tui.show_hook,
         allow_commands=settings.guardrail_allow,
     )
-    tui.show_banner(session_id, len(history), llm.current)
+    tui.show_banner(session_id, len(history), llm.current, detect_shell().name)
     if history:
         tui.show_history(history)  # 恢复的会话：把历史渲染出来
     tui.show_web_hint(web_started)  # 链接放历史之后（长历史时不用往上翻）

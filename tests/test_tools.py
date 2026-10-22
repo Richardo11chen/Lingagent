@@ -30,7 +30,17 @@ def test_read_file_handles_gbk(tmp_path):  # 不是 utf-8 的文件也能读（W
     assert read_file(str(p)) == "中文内容"
 
 
-PY = f'"{sys.executable}"'  # 用当前解释器，别赌 PATH
+PY = '"' + sys.executable.replace("\\", "/") + '"'  # 正斜杠：bash 和 cmd 都认，别赌 PATH
+
+
+def test_shell_prefers_bash_over_cmd():  # 顺序：bash → pwsh → cmd；System32 的 WSL 启动器不算
+    from agent_harness import shell
+
+    shell.reset_cache()
+    s = shell.detect()
+    assert "cmd" not in s.name.lower(), f"退到 cmd 了：{s.name} {s.argv[0]}"
+    assert "system32" not in s.argv[0].lower(), "选中了 WSL 启动器"
+
 
 
 def test_shell_merges_stderr_in_order():  # stderr 并入 stdout，且不丢时序

@@ -141,9 +141,31 @@ allow = ["git *", "uv *", "rg *"]   # 前缀语义：以这些词开头的命令
 
 `catastrophic` 档（`format` / `mkfs` / `dd` / `rm -rf /`）**不受 allow 影响**——写 `allow = ["*"]` 也放不出来，这是刻意留的地板。
 
+## 命令在哪个 shell 里跑
+
+`run_shell` 按这个顺序挑一个，用第一个能用的：
+
+| 顺序 | shell | 说明 |
+|---|---|---|
+| 1 | **Git Bash**（`bash -c`） | 首选。引号/管道/`for` 都是标准 bash，模型最熟 |
+| 2 | **PowerShell 7**（`pwsh -Command`） | 没装 Git Bash 时 |
+| 3 | **Windows PowerShell 5** | 再退一步 |
+| 4 | cmd.exe | 前面都没有才用（兜底） |
+
+`C:\Windows\System32\bash.exe` 是 **WSL 启动器**，不是 Git Bash，会被跳过（它会把命令扔进 Linux，路径全对不上）。
+
+指定别的 shell：
+
+```bash
+set AGENT_HARNESS_SHELL=D:\Git\bin\bash.exe      # Windows cmd
+export AGENT_HARNESS_SHELL=/usr/bin/bash         # bash
+```
+
+横幅里会显示当前用的是哪个（`会话 … · 模型 … · Git Bash`）。
+
 ## 常见坑
 
-- **同名命令不同物**：PATH 里 Git 的 unix 工具（`find` / `sort` / `awk`）可能排在 `System32` 之前。Windows 的 `find` 是逐行文本搜索，GNU 的 `find` 是文件查找——`find /c /v "" README.md` 在 GNU 语义下会把 `C:\` 整个遍历一遍（2026-10-19 就这么灌出过 91MB 输出）。不确定就先 `where find`。
+- **同一台机器上 `find` 有两个**：在 Git Bash 里 `find` 是 GNU 的（找文件），`cmd` 里是 Windows 的（逐行搜文本）。跑命令的是 bash，所以 `find . -name "*.py"` 才对；`find /c /v ""` 那套是 cmd 语法，在这里会把 `*.py` 当路径（2026-10-19 就这么灌出过 91MB 输出）。不确定就 `command -v find` 看一眼。
 - **`write_file` 覆盖整个文件**，改已有文件用 `edit_file`。
 - 项目约定写在 `AGENTS.md`，启动时自动注入 system prompt。
 

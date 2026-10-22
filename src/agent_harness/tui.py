@@ -80,11 +80,12 @@ def _session_get() -> PromptSession:
     return _session
 
 
-def show_banner(session_id: str, n_history: int, model_name: str = "") -> None:
+def show_banner(session_id: str, n_history: int, model_name: str = "", shell_name: str = "") -> None:
     tag = f" · [magenta]{model_name}[/]" if model_name else ""
+    sh = f" · [dim]{shell_name}[/]" if shell_name else ""
     console.print(
         Panel(
-            f"会话 [cyan]{session_id}[/] · {n_history} 条历史{tag} · [dim]Ctrl+C 两次 退出[/]",
+            f"会话 [cyan]{session_id}[/] · {n_history} 条历史{tag}{sh} · [dim]Ctrl+C 两次 退出[/]",
             title="Agent Harness",
             border_style="blue",
         )
