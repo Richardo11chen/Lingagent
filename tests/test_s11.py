@@ -174,3 +174,11 @@ def test_command_head_skips_syntax_words():  # 会话内记忆按"真程序名"�
     assert command_head("git status") == "git"
 
 
+def test_variable_headed_command_is_not_skipped():  # 变量里可能藏命令——带参数时必须问
+    assert risk("set x=del & %x% /q a.txt") == "unknown"
+
+
+def test_pure_variable_fragment_is_skipped():  # 但 for 的循环变量本身不是命令
+    assert risk("for %f in (*.py) do @echo %f") == "read_only"
+
+

@@ -52,6 +52,9 @@ SYNTAX_WORDS = {
     "in", "not", "rem", "setlocal", "endlocal", "goto", "exit",
 }
 
+# 允句尾出现语法词：`for %f in (*.py)` 被切开后剩「%f in」，尾巴上这个 in 要剥掉
+TRAILING_SYNTAX_WORDS = {"in", "do"}
+
 # 只打印版本号的程序：仅当唯一参数是版本旗标时算只读（其余一律按执行算）
 VERSION_PROGRAMS = {"python", "py", "python3", "pytest", "node", "npm", "uv", "pip", "pip3"}
 VERSION_FLAGS = {"--version", "-version", "-V", "-v"}
@@ -177,15 +180,23 @@ def _command_tokens(segment: str) -> list[str]:
 
     `for %f in (*.py) do @del %f` 按 ( ) & 拆开后剩下 `do @del %f`——
     只剥掉开头的 `do`、保留 `del`，否则真命令就被语法词一起吞了。
+
+    变量开头的段只在「整段就一个变量」时才当残片（`for %f in` 里的 `%f`）。
+    带参数的 `%x% /q file` 必须继续往下判——变量里可能藏着命令（`set x=del & %x% /q a`）。
     """
     tokens = _tokens(segment)
     while tokens and tokens[0].lower() in SYNTAX_WORDS:
         tokens = tokens[1:]
+    while tokens and tokens[-1].lower() in TRAILING_SYNTAX_WORDS:
+        tokens = tokens[:-1]
     if not tokens:
         return []
     head = tokens[0].lower()
-    # 程序位不可能含通配符（`*.py`）、也不可能以变量符开头（`%f` / `%%f` / `%~dp0` / `$x`）
-    if "*" in head or "?" in head or head.startswith(("%", "$")):
+    # 程序位不可能含通配符（`*.py`）
+    if "*" in head or "?" in head:
+        return []
+    # 纯变量（`%f` / `%%i` / `$x`）是 for 的循环变量，不是命令
+    if head.startswith(("%", "$")) and len(tokens) == 1:
         return []
     return tokens
 
