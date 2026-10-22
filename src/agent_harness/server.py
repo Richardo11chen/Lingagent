@@ -54,7 +54,15 @@ async def ws_endpoint(ws: WebSocket):
     loop = asyncio.get_running_loop()
     session_id = new_session_id(WORKSPACE)
     history: list[Msg] = []
-    llm, settings = load_settings_and_llm(build_system_prompt(), _CLI_MODEL)
+
+    def send(payload: dict) -> None:
+        """线程 → 事件循环 → WS（run_user 与模型适配器共用）。"""
+        asyncio.run_coroutine_threadsafe(ws.send_json(payload), loop)
+
+    llm, settings = load_settings_and_llm(
+        build_system_prompt(), _CLI_MODEL,
+        on_notice=lambda text: send({"type": "notice", "text": text}),
+    )
     approval: dict = {}  # 审批等待槽：{"event": Event, "result": bool}
     stop_event = threading.Event()  # 本轮「别继续了」——网页停止按钮置位，loop 每步看一眼
     user_task: asyncio.Task | None = None
@@ -63,9 +71,6 @@ async def ws_endpoint(ws: WebSocket):
 
     async def run_user(goal: str) -> None:
         """跑一轮 agent（旁路线程）——回调经事件循环推回 WS。"""
-
-        def send(payload: dict) -> None:
-            asyncio.run_coroutine_threadsafe(ws.send_json(payload), loop)
 
         def on_text(chunk: str) -> None:
             send({"type": "assistant_chunk", "text": chunk})

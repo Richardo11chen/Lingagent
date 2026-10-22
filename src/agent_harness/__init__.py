@@ -112,7 +112,9 @@ def main() -> None:
         return
 
     base_prompt = build_system_prompt()
-    llm, settings = load_settings_and_llm(base_prompt, args.model)  # 可切换门面（流式）
+    llm, settings = load_settings_and_llm(  # 可切换门面（流式）
+        base_prompt, args.model, on_notice=tui.show_notice,
+    )
     approver = lambda cmd, reason="": (
         tui.show_approval(cmd, reason, timeout=settings.approval_timeout).strip().lower() == "y"
     )

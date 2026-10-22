@@ -133,12 +133,12 @@ def _fake_stream(text: str = "ok"):  # 逐字符 chunk——模拟流式响应
     return [_FakeChunk(ch) for ch in text]
 
 
-def _fake_llm(monkeypatch, failures: int = 0):
+def _fake_llm(monkeypatch, failures: int = 0, **kw):
     """构造 DeepSeekLLM，client 替换为假件：前 failures 次抛 413。"""
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     from agent_harness.llm import DeepSeekLLM
 
-    llm = DeepSeekLLM("sys")
+    llm = DeepSeekLLM("sys", **kw)
     calls: list[dict] = []
 
     class FakeCompletions:
@@ -182,3 +182,47 @@ def test_reactive_gives_up_after_second_413(monkeypatch):  # 两次都 413 → �
     with pytest.raises(APIStatusError):
         llm(_long_history(6), [])
     assert len(calls) == 2
+
+
+def test_compaction_is_announced(monkeypatch):  # 压了就要出声——否则只看到这一轮莫名变慢
+    seen = []
+    llm, _ = _fake_llm(monkeypatch, compact_threshold=10, keep_last=1, on_notice=seen.append)
+    llm(_long_history(4), [])
+    assert any("已清理早期工具输出" in s for s in seen)
+
+
+def test_no_notice_when_under_threshold(monkeypatch):  # 没压就别吵
+    seen = []
+    llm, _ = _fake_llm(monkeypatch, on_notice=seen.append)
+    llm([Msg("user", "hi")], [])
+    assert seen == []
+
+
+def test_413_retry_is_announced(monkeypatch):  # 撞上限重试也要说一声
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    seen = []
+    llm, _ = _fake_llm(monkeypatch, failures=1, on_notice=seen.append)
+    llm(_long_history(6), [])
+    assert any("413" in s for s in seen)
+
+
+def test_compaction_is_announced(monkeypatch):  # 压了就要出声——否则只看到这一轮莫名变慢
+    seen = []
+    llm, _ = _fake_llm(monkeypatch, compact_threshold=10, keep_last=1, on_notice=seen.append)
+    llm(_long_history(4), [])
+    assert any("已清理早期工具输出" in s for s in seen)
+
+
+def test_no_notice_when_under_threshold(monkeypatch):  # 没压就别吵
+    seen = []
+    llm, _ = _fake_llm(monkeypatch, on_notice=seen.append)
+    llm([Msg("user", "hi")], [])
+    assert seen == []
+
+
+def test_413_retry_is_announced(monkeypatch):  # 撞上限重试也要说一声
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    seen = []
+    llm, _ = _fake_llm(monkeypatch, failures=1, on_notice=seen.append)
+    llm(_long_history(6), [])
+    assert any("413" in s for s in seen)

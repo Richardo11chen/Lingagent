@@ -344,6 +344,19 @@ def show_tool(name: str, args: dict | None = None) -> None:
         console.print(f"[dim]{line}[/]")  # Live 外（如历史渲染）直接打印
 
 
+def show_notice(text: str) -> None:
+    """模型层的提示（上下文被压缩、413 重试之类）——插进流里一行，不打断阅读。"""
+    global _waiting
+    _waiting = False
+    line = Text("⟳ " + text, style="yellow")
+    if _live:
+        _seal_current()
+        _blocks.append(line)
+        _refresh()
+    else:
+        console.print(line)
+
+
 def _approval_session() -> PromptSession:
     """审批专用输入会话：erase_when_done——答完自动擦提示行（不擦会留屏，像「又弹了一次」）。"""
     global _approval

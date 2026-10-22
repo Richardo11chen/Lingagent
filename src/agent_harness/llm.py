@@ -14,7 +14,7 @@ import time
 from openai import APIConnectionError, APIStatusError, OpenAI
 
 from .messages import Msg  # 重新导出——兼容从 llm 导入 Msg 的既有代码
-from .compact import microcompact, microcompact_if_needed, snip
+from .compact import estimate_tokens, microcompact, microcompact_if_needed, snip
 
 REQUEST_TIMEOUT = 120  # 秒：一次流式请求的硬上限（SDK 默认 600 秒——卡住十分钟太久）
 
@@ -171,6 +171,7 @@ class DeepSeekLLM:
         thinking: str = "off",
         reasoning_effort: str = "off",
         strip_think_tags: bool = False,
+        on_notice=None,  # 给人看的提示（比如「上下文偏长，已压缩」）——可为 None
     ):
         key = api_key or os.environ.get(api_key_env, "")  # 直写优先；不写回退环境变量
         if not key:
@@ -184,7 +185,13 @@ class DeepSeekLLM:
         self._thinking = thinking
         self._reasoning_effort = reasoning_effort
         self._strip_think_tags = strip_think_tags
+        self._on_notice = on_notice
         self._system_prompt = system_prompt
+
+    def _notice(self, text: str) -> None:
+        """压缩这类"背后发生了事"要让人知道，否则只看到这一轮莫名变慢。"""
+        if self._on_notice:
+            self._on_notice(text)
 
     def _request(self, api_messages: list[dict], tools: list[dict], on_text, on_reasoning=None):
         """流式发一次请求——返回 (text, raw_tool_calls, reasoning)。
@@ -264,7 +271,13 @@ class DeepSeekLLM:
         system_prompt: str | None = None,
     ) -> tuple[str, list[Action], str]:
         # 在调用 API 前进行上下文压缩（投影——不改 history）
+        before_chars = estimate_tokens(messages)
         messages = microcompact_if_needed(messages, self._compact_threshold, keep_last=self._keep_last)
+        after_chars = estimate_tokens(messages)
+        if after_chars < before_chars:  # 真压了才说，没压不吵
+            self._notice(
+                f"上下文偏长（约 {before_chars} 字符），已清理早期工具输出 → 约 {after_chars} 字符"
+            )
         sp = system_prompt or self._system_prompt  # 调用方给了就用它（子 agent 带自己的提示词）
         api_messages = to_api_messages(sp, messages)
 
@@ -275,6 +288,7 @@ class DeepSeekLLM:
         except APIStatusError as e:
             if e.status_code != 413:  # 非超限（401/500 等）——重试无意义，直接抛
                 raise
+            self._notice("请求超过模型上下文上限（413），压缩后重试一次")
             # Reactive 兜底：退避（疑限流）→ 加压（全清旧结果）→ 重试一次；
             # 第二次不在 try 内——结构上不可能有第三次（无需 has_attempted 标志）
             time.sleep(3)

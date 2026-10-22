@@ -41,7 +41,7 @@ def _no_save(workspace, session_id, msgs):  # 测试不落盘
 
 
 def test_ws_streaming_and_done(monkeypatch, tmp_path):  # 基本流：session → chunk → done
-    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None: (FakeLLM(), Settings()))
+    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings()))
     monkeypatch.setattr(server, "save_messages", _no_save)
     monkeypatch.setattr(server, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
     c = TestClient(server.app)
@@ -63,7 +63,7 @@ def test_ws_streaming_and_done(monkeypatch, tmp_path):  # 基本流：session �
 
 
 def test_ws_approval_approved(monkeypatch, tmp_path):  # 批准路径：命令真执行（run_shell 被调）
-    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None: (FakeLLM(), Settings()))
+    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings()))
     monkeypatch.setattr(server, "save_messages", _no_save)
     monkeypatch.setattr(server, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
     ran = {}
@@ -128,7 +128,7 @@ def test_ws_hook_denied_event(monkeypatch, tmp_path):  # 策略拦下 → WS 推
             self.calls += 1
             return ("", [Action(tool="write_file", args={"path": ".env", "content": "x"})], "")
 
-    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None: (EnvLLM(), Settings()))
+    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None, **kw: (EnvLLM(), Settings()))
     monkeypatch.setattr(server, "save_messages", _no_save)
     monkeypatch.setattr(server, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
     c = TestClient(server.app)
@@ -147,7 +147,7 @@ def test_ws_hook_denied_event(monkeypatch, tmp_path):  # 策略拦下 → WS 推
 
 
 def test_ws_trace_request(monkeypatch, tmp_path):  # 轨迹时间线：trace_request → trace 事件（只读）
-    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None: (FakeLLM(), Settings()))
+    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings()))
     tf = tmp_path / "t.trace.jsonl"
     tf.write_text('{"kind": "model", "step": 1, "n_actions": 0}\n', encoding="utf-8")
     monkeypatch.setattr(server, "trace_path", lambda w, s: tf)

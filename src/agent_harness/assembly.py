@@ -81,9 +81,10 @@ class SwitchableLLM:
     /model 换的是内部持有的适配器实例；history、会话全不受影响。
     """
 
-    def __init__(self, system_prompt: str, settings, name: str | None = None):
+    def __init__(self, system_prompt: str, settings, name: str | None = None, on_notice=None):
         self._sp = system_prompt
         self._settings = settings
+        self._on_notice = on_notice
         self._name = name or settings.default_model
         self._inner = self._build(self._name)
 
@@ -104,6 +105,7 @@ class SwitchableLLM:
             thinking=p.thinking,
             reasoning_effort=p.reasoning_effort,
             strip_think_tags=p.strip_think_tags,
+            on_notice=self._on_notice,  # 换模型后新的适配器也带着这个提示口
         )
 
     def switch(self, name: str) -> str:
@@ -135,7 +137,7 @@ class SwitchableLLM:
         )
 
 
-def load_settings_and_llm(system_prompt: str, model_name: str | None = None):
+def load_settings_and_llm(system_prompt: str, model_name: str | None = None, on_notice=None):
     """按 ~/.agent_harness.toml 构造可切换模型门面——返回 (llm, settings)。
 
     model_name：初始 profile（None = 配置的 default）。
@@ -146,4 +148,4 @@ def load_settings_and_llm(system_prompt: str, model_name: str | None = None):
     if model_name and model_name not in s.models:
         # fail fast：名字打错就当场说，别静默回退到别的模型
         raise SystemExit(f"未知模型 profile：{model_name}（可用：{', '.join(s.models)}）")
-    return SwitchableLLM(system_prompt, s, model_name), s
+    return SwitchableLLM(system_prompt, s, model_name, on_notice=on_notice), s

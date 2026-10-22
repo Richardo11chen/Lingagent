@@ -54,6 +54,7 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
     - 审批改为**超时驳回**（`[loop] approval_timeout`，默认 300s，0 = 一直等），TUI 用 `pre_run` 定时 `app.exit`，网页用 `Event.wait(timeout)` + `notice` 事件
     - 系统提示**不再断言环境**（"shell 是 cmd.exe" 是那次 91MB 的根）→ 改成"先 `ver` / `where` 确认，同名程序可能是两个东西"
     - 轨迹可清理：`--clean-trace DAYS`；`[trace] enabled` 一键关；`/trace` 记查看时间，30 天没看启动时提醒一次
+    - 压缩会出声：`llm.py` 加 `on_notice`（构造参数，不变量协议），真压了才提示（没压不吵）；413 重试也提示。TUI 用 `⟳` 一行插入流里，网页复用 `notice` 事件
   - 体验一致性批次（审美审查后）：`show_note` 分 info/warn/error 三档（失败终于不是洋红色）；TUI 与网页共用 `TRACE_FIELD_CHARS` + `ellipsis_note`（同一句截断说明），工具详情两端都截 50；网页错误改独立 `.err-line`（左线 + 红字）；等第一个字时两端都有「⋯」；网页底部加 `/model` `/trace` 一行提示；断线清残留审批卡；网页加「停止」（`loop.should_stop` 每步检查 + `interrupt` 消息，正在跑的那一步会跑完）；`/model` 输入非法时不再静默吞
 
 未完成：
