@@ -48,3 +48,29 @@ def test_shell_does_not_wait_on_stdin():  # 等 stdin 的命令立刻 EOF 退出
     out = run_shell(f'{PY} -c "input()"', timeout=30)
     assert time.time() - start < 10
     assert "超时" not in out
+
+
+def test_run_shell_schema_exposes_timeout():  # 模型能在菜单里看到 timeout，自己调
+    from agent_harness.schema import TOOL_SCHEMAS
+
+    params = next(
+        s for s in TOOL_SCHEMAS if s["function"]["name"] == "run_shell"
+    )["function"]["parameters"]
+    assert "timeout" in params["properties"]
+    assert params["required"] == ["command"]  # timeout 可选
+
+
+def test_shell_timeout_is_clamped():  # 调大可以，但不能无限；乱给退回默认
+    from agent_harness.tools import MAX_SHELL_TIMEOUT, SHELL_TIMEOUT, _clamp_timeout
+
+    assert _clamp_timeout(30) == 30
+    assert _clamp_timeout(99999) == MAX_SHELL_TIMEOUT
+    assert _clamp_timeout(-1) == SHELL_TIMEOUT
+    assert _clamp_timeout("abc") == SHELL_TIMEOUT
+    assert _clamp_timeout(None) == SHELL_TIMEOUT
+
+
+def test_shell_honours_a_larger_timeout():  # 放宽之后慢命令真的能跑完
+    out = run_shell("ping -n 3 127.0.0.1", timeout=20)  # 约 2 秒
+    assert "超时" not in out
+    assert "退出码" in out

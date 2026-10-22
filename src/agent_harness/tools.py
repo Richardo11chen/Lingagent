@@ -3,7 +3,8 @@ from dataclasses import dataclass
 import os
 import subprocess
 
-SHELL_TIMEOUT = 120  # 秒：一条 shell 命令的硬上限（S10 真机撞出的墙——卡住的命令不许冻住整台机器）
+SHELL_TIMEOUT = 120  # 秒：一条 shell 命令的默认上限（S10 真机撞出的墙——卡住的命令不许冻住整台机器）
+MAX_SHELL_TIMEOUT = 600  # 秒：模型自己能调到的上限（装包 / 全量构建偶尔要多几分钟）
 
 # 回灌给模型的结果上限（字符）。trace 存全文（审计账，人看），history / session 走截断版
 # （模型看）——三份拷贝各按各的读者定规格，别让一次命令把上下文和存档撑爆。
@@ -29,6 +30,17 @@ def cap_result(text: str, limit: int = MAX_RESULT_CHARS) -> str:
     )
 
 
+def _clamp_timeout(value) -> float:
+    """模型给的值当心点用：非数字 / 非正数退回默认，超过上限就截到上限。"""
+    try:
+        t = float(value)
+    except (TypeError, ValueError):
+        return float(SHELL_TIMEOUT)
+    if t <= 0:
+        return float(SHELL_TIMEOUT)
+    return min(t, float(MAX_SHELL_TIMEOUT))
+
+
 def run_shell(command: str, timeout: float = SHELL_TIMEOUT) -> str:
     """跑一条 shell 命令——超时杀整棵进程树，输出合并成一个流。
 
@@ -42,6 +54,7 @@ def run_shell(command: str, timeout: float = SHELL_TIMEOUT) -> str:
        两者可以不一致（`PYTHONUTF8=1` + `chcp 936` 就是典型），一旦不一致就是乱码或
        `UnicodeDecodeError`。
     """
+    timeout = _clamp_timeout(timeout)
     proc = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,

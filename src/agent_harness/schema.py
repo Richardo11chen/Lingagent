@@ -60,7 +60,11 @@ TOOL_SCHEMAS: list[dict] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "要执行的完整命令"},
+                    "command": {"type": "string", "description": "要执行的完整命令（cmd.exe 语法）"},
+                    "timeout": {
+                        "type": "number",
+                        "description": "超时秒数，默认 120、上限 600。只在装包/跑构建这类慢命令时才调大。",
+                    },
                 },
                 "required": ["command"],
             },
