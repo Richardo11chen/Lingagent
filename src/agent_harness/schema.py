@@ -4,7 +4,7 @@
 （**action.args 的键名契约），description 告诉模型何时用、参数什么含义。
 """
 
-from .tools import read_file, write_file, count_lines, run_shell
+from .tools import read_file, write_file, run_shell
 
 TOOL_SCHEMAS: list[dict] = [
     {
@@ -49,20 +49,6 @@ TOOL_SCHEMAS: list[dict] = [
                     "new": {"type": "string", "description": "替换后的新文本"},
                 },
                 "required": ["path", "old", "new"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "count_lines",
-            "description": "统计文件行数。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "文件路径"},
-                },
-                "required": ["path"],
             },
         },
     },

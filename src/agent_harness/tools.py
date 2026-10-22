@@ -76,8 +76,3 @@ def edit_file(path: str, old: str, new: str) -> str:
     p.write_text(content.replace(old, new), encoding="utf-8")
     return f"已编辑 {path}（替换 {len(old)} 字符 → {len(new)} 字符）。"
 
-def count_lines(path: str) -> str:
-    """统计文件行数"""
-    lines = Path(path).read_text(encoding="utf-8").splitlines()
-    return f"共 {len(lines)} 行"
-

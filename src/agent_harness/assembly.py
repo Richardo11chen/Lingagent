@@ -7,7 +7,7 @@ from .guardrail import safe_tool
 from .hooks import forbid_env_writes
 from .sensors import run_tests
 from .subagent import make_spawn_tool
-from .tools import count_lines, edit_file, read_file, run_shell, write_file
+from .tools import edit_file, read_file, run_shell, write_file
 
 SYSTEM_PROMPT = (
     "你是 agent-harness，一台会自己干活的 coding agent，工作目录是项目根。\n\n"
@@ -32,7 +32,6 @@ tools = {
     "read_file": safe_tool(read_file, WORKSPACE),
     "write_file": safe_tool(write_file, WORKSPACE),
     "edit_file": safe_tool(edit_file, WORKSPACE),
-    "count_lines": safe_tool(count_lines, WORKSPACE),
     "run_shell": run_shell,  # shell 不包——命令危险面归 H 护栏管
     "run_tests": run_tests,  # pytest 判红绿
 }

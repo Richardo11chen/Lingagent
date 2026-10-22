@@ -34,13 +34,13 @@ def test_tool_message_carries_id():  # tool 消息必须带 tool_call_id（API �
 def test_full_pair_structure():  # 完整配对：1 assistant[N calls] → N tool——数量与 id 严格对应
     raw = [
         {"id": "id_1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}},
-        {"id": "id_2", "type": "function", "function": {"name": "count_lines", "arguments": "{}"}},
+        {"id": "id_2", "type": "function", "function": {"name": "run_tests", "arguments": "{}"}},
     ]
     messages = [
         Msg("user", "干活"),
         Msg("assistant", "并行读两个", tool_calls=raw),
         Msg("tool", "内容A", tool_call_id="id_1"),
-        Msg("tool", "3 行", tool_call_id="id_2"),
+        Msg("tool", "测试全部通过。", tool_call_id="id_2"),
     ]
     out = to_api_messages("sys", messages)
     assert len(out[2]["tool_calls"]) == 2

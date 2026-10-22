@@ -121,7 +121,7 @@ def test_child_receives_own_system_prompt():  # 子 agent 的只读约束真的�
 
 def test_child_gets_all_tools():  # 用户拍板：工具面全量，只读靠提示词默认约束
     tools = {name: (lambda **kw: "ok") for name in (
-        "read_file", "count_lines", "run_shell", "run_tests", "write_file", "edit_file",
+        "read_file", "run_shell", "run_tests", "write_file", "edit_file",
     )}
     llm = RouteLLM({
         "父任务": [Action(tool="spawn_subagent", args={"subtask": "子任务"})],

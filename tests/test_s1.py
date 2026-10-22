@@ -2,13 +2,13 @@
 
 from agent_harness.llm import Action, ScriptLLM
 from agent_harness.loop import agent_loop
-from agent_harness.tools import read_file, write_file, count_lines
+from agent_harness.tools import read_file, write_file
 
 SYSTEM_PROMPT = "test system prompt"
 
 
 def make_tools():
-    return {"read_file": read_file, "write_file": write_file, "count_lines": count_lines}
+    return {"read_file": read_file, "write_file": write_file}
 
 
 def test_should_stop_ends_round_before_next_step(tmp_path):  # 停止按钮：当前这一步跑完，后面不再发起
@@ -69,7 +69,7 @@ def test_3(tmp_path):  # 工具抛异常（读不存在的文件）：回灌「�
 def test_4():  # 永不 done（剧本填满 max_steps 个动作）：步数耗尽停机
     llm = ScriptLLM([Action("read_file", {"path": "x"}) for _ in range(3)])
     reply, history = agent_loop("做点事", llm, {}, SYSTEM_PROMPT, max_steps=3)
-    assert reply == "已达到最大步数，停机。"
+    assert reply == "已达到最大步数（3），本轮停机。想接着做就再发一句话。"
     # 每步都因工具不存在回灌 user 消息，共 max_steps 轮
     assert len([m for m in history if m.role == "assistant"]) == 3
 
@@ -87,16 +87,3 @@ def test_5(tmp_path):  # 历史延续：第二轮传入第一轮的 history，�
     # 第二轮的历史包含第一轮的记录，且没丢
     assert history2[: len(history1)] == history1
     assert len(history2) > len(history1)
-
-def test_6(tmp_path): # 剧本驱动版——count_lines 的结果（「共 N 行」）出现在回灌的 user 消息里
-    target = tmp_path / "a.txt"
-    target.write_text("line1\nline2\nline3", encoding="utf-8")
-    llm = ScriptLLM(
-        [
-            Action("count_lines", {"path": str(target)}),
-        ]
-    )
-    reply, history = agent_loop("统计行数", llm, make_tools(), SYSTEM_PROMPT)
-    assert reply == "任务完成。"
-    # 工具结果作为 user 消息回灌：count_lines 的结果进了历史
-    assert any("共 3 行" in m.content for m in history if m.role == "user")
