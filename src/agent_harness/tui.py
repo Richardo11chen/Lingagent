@@ -22,6 +22,7 @@ from rich.text import Text
 from rich.panel import Panel
 from rich.table import Table
 
+from .tools import tool_detail
 from .trace import TRACE_FIELD_CHARS, ellipsis_note
 
 console = Console()
@@ -292,7 +293,7 @@ def show_trace(recs: list[dict], session_id: str) -> None:
         elif kind == "tool":
             status = {"ok": "成功", "denied": "驳回", "blocked": "拦截", "error": "错误"}.get(r.get("status"), str(r.get("status")))
             args = r.get("args") or {}
-            detail = str(args.get("command") or args.get("path") or "")
+            detail = tool_detail(args)
             if r.get("error"):
                 detail = f"{detail} {r['error']}".strip()
             table.add_row(str(i), ts, f"⚙  {r.get('tool')}", f"{status} · {detail[:50]}", _fmt_ms(r.get("duration_ms")))
@@ -341,7 +342,7 @@ def show_trace_event(rec: dict, idx: int) -> None:
 def show_tool(name: str, args: dict | None = None) -> None:
     global _waiting
     _waiting = False
-    detail = str((args or {}).get("command") or (args or {}).get("path") or "")
+    detail = tool_detail(args)
     if len(detail) > 50:
         detail = detail[:50] + "…"
     line = f"⚙  {name}{': ' + detail if detail else ''}"

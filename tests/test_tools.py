@@ -3,7 +3,7 @@
 import sys
 import time
 
-from agent_harness.tools import run_shell
+from agent_harness.tools import run_shell, task_output, task_stop
 
 
 def test_run_shell_timeout_kills_hang():
@@ -94,3 +94,40 @@ def test_shell_honours_a_larger_timeout():  # 放宽之后慢命令真的能跑�
     out = run_shell("ping -n 3 127.0.0.1", timeout=20)  # 约 2 秒
     assert "超时" not in out
     assert "退出码" in out
+
+
+def _bg_id(msg: str) -> str:
+    """从启动回执里取任务 id（第一行是「已在后台启动 tN」）。"""
+    return msg.splitlines()[0].split()[-1]
+
+
+def test_background_returns_at_once_and_then_has_output():  # 服务不会「跑完」，前台的等法根本不成立
+    from agent_harness import tasks
+
+    start = time.time()
+    msg = run_shell("echo bg-hello; sleep 30", background=True)
+    assert time.time() - start < 10  # 立刻回来，不等那 30 秒
+    tid = _bg_id(msg)
+    try:
+        assert tasks.get(tid) is not None and tasks.get(tid).alive
+        time.sleep(1.2)  # 等它把 echo 写进文件
+        out = task_output(tid)
+        assert "运行中" in out and "bg-hello" in out
+    finally:
+        task_stop(tid)
+
+
+def test_task_stop_kills_it_but_keeps_the_last_output():  # 停了还能回看日志（排错常用）
+    from agent_harness import tasks
+
+    tid = _bg_id(run_shell("echo before-kill; sleep 30", background=True))
+    time.sleep(1.2)
+    assert "已停止" in task_stop(tid)
+    assert not tasks.get(tid).alive
+    out = task_output(tid)
+    assert "已结束" in out and "before-kill" in out
+
+
+def test_task_output_rejects_unknown_id():  # 别静默返回空，让它知道 id 打错了
+    out = task_output("t999")
+    assert "没有任务" in out

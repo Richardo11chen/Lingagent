@@ -33,6 +33,7 @@ from .session import (
     save_session_model,
     trace_path,
 )
+from .tools import tool_detail
 from .trace import Tracer, TRACE_FIELD_CHARS, ellipsis_note, load_trace, mark_viewed
 
 app = FastAPI()
@@ -89,7 +90,7 @@ async def ws_endpoint(ws: WebSocket):
             send({"type": "assistant_chunk", "text": chunk})
 
         def on_tool(name: str, args: dict) -> None:
-            detail = str(args.get("command") or args.get("path") or "")
+            detail = tool_detail(args)
             send({"type": "tool", "name": name, "detail": detail[:50]})  # 与 TUI 同一个截断长度
 
         def on_reasoning(chunk: str) -> None:

@@ -56,7 +56,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "run_shell",
-            "description": "执行 shell 命令（bash，工作目录 = 项目根）。查看文件列表、跑构建等。只读命令直接执行；会改动文件、执行程序或无法判定的命令会先询问用户。",
+            "description": "执行 shell 命令（bash，工作目录 = 项目根）。查看文件列表、跑构建等。只读命令直接执行；会改动文件、执行程序或无法判定的命令会先询问用户。不会自己结束的命令（dev server / watch）加 background=true。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -65,8 +65,49 @@ TOOL_SCHEMAS: list[dict] = [
                         "type": "number",
                         "description": "超时秒数，默认 120、上限 600。只在装包/跑构建这类慢命令时才调大。",
                     },
+                    "background": {
+                        "type": "boolean",
+                        "description": (
+                            "true = 立刻返回任务 id，不等待（dev server / watch / 任何不会自己结束的命令）。"
+                            "之后用 task_output 看输出、task_stop 停止。会跑完的命令别用这个。"
+                        ),
+                    },
                 },
                 "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "task_output",
+            "description": (
+                "看后台任务（run_shell background=true 起的）现在的状态和输出末尾。"
+                "刚启动的服务通常要等一两秒才有日志。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "任务 id，如 t1"},
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "task_stop",
+            "description": (
+                "停掉后台任务（连它的子进程）。dev server 用完必须停，否则端口一直被占；"
+                "改了代码要重启服务时也用它，然后再 run_shell(background=true) 起一次。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "任务 id，如 t1"},
+                },
+                "required": ["task_id"],
             },
         },
     },

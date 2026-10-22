@@ -61,6 +61,13 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
     - 换 shell 的连带改动：护栏加 `;` 分隔符（bash 的 `echo a; rm -rf x`，漏掉就是 fail open）；`MUTATING_PROGRAMS` 补 `cp/mv/touch/ln/chmod/chown/tee/truncate/rsync/install/unlink`；`sed` 带 `-i` 才算改文件；系统提示改写成 bash 语法（`ls/cat/rm`，`command -v`）
     - `run_shell` 也补了 timeout 参数（schema 暴露，默认 120 上限 600）与三处输出修复（stderr 合并 / 字节自解码 / stdin=DEVNULL）
     - 顺带修一个真 hang：`run_user` 里任何没被接住的异常（比如假模型没有 `set_notice`）会让前端永远等 `assistant_done`——现在给 task 挂了兜底回调，异常一律变成 `error` 事件
+  - 后台任务批次（2026-10-22 晚，对齐 Claude Code 的 `run_in_background`）：
+    - `run_shell(background=true)` 立刻返回任务 id（实测 0.03s），输出重定向到 `~/.agent-harness/tasks/<时间戳>-tN.log`，不进内存（日志能刷几小时）
+    - 新增 `task_output(task_id)`：状态（运行中/已结束+退出码）+ 末尾 64KB（按行对齐读取，避免从半个字符开始解）
+    - 新增 `task_stop(task_id)`：杀整棵进程树；登记簿保留记录，停完还能回看最后的输出
+    - `CREATE_NEW_PROCESS_GROUP` / `start_new_session`：TUI 里 Ctrl+C 只中断这一轮，不连坐 dev server；`atexit` 统一收尸
+    - `tasks.py` 只做登记（id/进程/路径/时间），启动与杀树留在 `tools.py`（避免和它互相 import）
+    - 测试 3 条：立刻返回且有输出 / 停止后保留末段输出 / 未知 id 有明确提示
   - 体验一致性批次（审美审查后）：`show_note` 分 info/warn/error 三档（失败终于不是洋红色）；TUI 与网页共用 `TRACE_FIELD_CHARS` + `ellipsis_note`（同一句截断说明），工具详情两端都截 50；网页错误改独立 `.err-line`（左线 + 红字）；等第一个字时两端都有「⋯」；网页底部加 `/model` `/trace` 一行提示；断线清残留审批卡；网页加「停止」（`loop.should_stop` 每步检查 + `interrupt` 消息，正在跑的那一步会跑完）；`/model` 输入非法时不再静默吞
 
 未完成：

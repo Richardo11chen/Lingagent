@@ -163,6 +163,25 @@ export AGENT_HARNESS_SHELL=/usr/bin/bash         # bash
 
 横幅里会显示当前用的是哪个（`会话 … · 模型 … · Git Bash`）。
 
+## 后台任务（dev server 这类）
+
+有些命令**没有「跑完」这个状态**——`npm run dev`、`vite --watch`、`uvicorn --reload`。前台跑它们只有两个结局：等 120 秒被杀，或者把会话堵住。
+
+所以 `run_shell` 多了一个 `background` 参数，配套两个工具：
+
+```
+run_shell("npm run dev", background=true)   → 已在后台启动 t1（立刻返回，不等）
+task_output("t1")                            → 状态 + 输出末尾
+task_stop("t1")                              → 连子进程一起停
+```
+
+四件事要知道：
+
+- **输出写文件**：`~/.agent-harness/tasks/<时间戳>-tN.log`，留 7 天自动清。`task_output` 只读末尾 64KB——日志可以无限长，整读会先把内存吃光。
+- **Ctrl+C 不连坐**：后台任务在独立进程组里，中断当前这一轮不会顺手把 dev server 杀掉；只有 `task_stop` 或退出程序才收（退出时统一杀）。
+- **重启即忘**：任务只活在内存里，和「本会话记住的批准」同一个尺度。
+- **有的程序把输出攒在缓冲区**：迟迟看不到日志时，加 `PYTHONUNBUFFERED=1` 或 `stdbuf -oL` 再起一次。
+
 ## 常见坑
 
 - **同一台机器上 `find` 有两个**：在 Git Bash 里 `find` 是 GNU 的（找文件），`cmd` 里是 Windows 的（逐行搜文本）。跑命令的是 bash，所以 `find . -name "*.py"` 才对；`find /c /v ""` 那套是 cmd 语法，在这里会把 `*.py` 当路径（2026-10-19 就这么灌出过 91MB 输出）。不确定就 `command -v find` 看一眼。
@@ -177,7 +196,9 @@ src/agent_harness/
   loop.py       主循环：护栏 → 预钩子 → 执行 → 回灌 → 停机
   guardrail.py  命令风险分级 + 路径围栏
   llm.py        OpenAI 兼容流式适配器（含 413 反应式压缩、思考流拆分）
-  tools.py      工具实现（读 / 写 / 编辑 / shell / pytest）+ 结果截断
+  tools.py      工具实现（读 / 写 / 编辑 / shell / 后台任务 / pytest）+ 结果截断
+  shell.py      挑一个 shell（bash → pwsh7 → pwsh5 → cmd）
+  tasks.py      后台任务登记簿（id / 进程 / 输出文件）
   schema.py     工具 schema（= 模型看到的菜单）
   compact.py    投影式微压缩
   session.py    会话存档（JSONL）
@@ -185,11 +206,12 @@ src/agent_harness/
   hooks.py      策略挂载点
   subagent.py   子 agent（上下文隔离）
   settings.py   多 profile 配置
+  paths.py      应用目录（~/.agent-harness）
   assembly.py   公共装配 + SwitchableLLM
   tui.py        终端界面
   server.py     FastAPI + WebSocket 后端
   weblaunch.py  TUI 启动时拉起网页端
-tests/          test_s1 ~ test_s11（117 条）
+tests/          test_s1 ~ test_s11 + test_tools（155 条）
 web/            React + TS + Vite 前端
 docs/PLAN.md    工程真源（决策记录）
 docs/HANDOFF.md 会话交接单

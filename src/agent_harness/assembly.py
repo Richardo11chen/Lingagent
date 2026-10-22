@@ -7,7 +7,7 @@ from .guardrail import safe_tool
 from .hooks import forbid_env_writes
 from .sensors import run_tests
 from .subagent import make_spawn_tool
-from .tools import edit_file, read_file, run_shell, write_file
+from .tools import edit_file, read_file, run_shell, task_output, task_stop, write_file
 
 SYSTEM_PROMPT = (
     "你是 agent-harness，一台会自己干活的 coding agent，工作目录是项目根。\n\n"
@@ -23,6 +23,8 @@ SYSTEM_PROMPT = (
     "- 修改现有文件优先用 edit_file（old→new 精确替换，保留其余内容）；只有新建文件或整体重写才用 write_file（⚠️ 覆盖整个文件，会丢失未包含的内容）。\n"
     "- 改完代码用 run_tests 验证：红了看报告改，绿了才收工——不要没验证就宣称完成。\n"
     "- 跑其他命令用 run_shell；只读命令（ls / cat / grep / git status 等）直接放行，会改文件 / 执行程序 / 判不出来的命令会先询问用户。\n"
+    "- 不会自己结束的命令（dev server / watch / 长驻进程）加 `background=true`：立刻返回任务 id，"
+    "之后用 task_output 看输出、task_stop 停止——不要在前台干等。用完必须 task_stop，否则端口一直被占。\n"
     "- 只能在项目目录内活动，越界路径会被拦截。\n\n"
     "任务完成后直接回复总结（不再调用工具）。"
 )
@@ -38,6 +40,8 @@ tools = {
     "write_file": safe_tool(write_file, WORKSPACE),
     "edit_file": safe_tool(edit_file, WORKSPACE),
     "run_shell": run_shell,  # shell 不包——命令危险面归 H 护栏管
+    "task_output": task_output,  # 后台任务：看输出
+    "task_stop": task_stop,  # 后台任务：停止
     "run_tests": run_tests,  # pytest 判红绿
 }
 
