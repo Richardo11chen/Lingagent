@@ -24,6 +24,9 @@ class FakeLLM:
 
     current = "fake-model"  # SwitchableLLM 门面属性（server 的 session 事件带模型名）
 
+    def set_notice(self, fn):  # 门面接口：server 每轮给模型挂「压缩提示」口
+        self.notice = fn
+
     def __init__(self, *a, **kw):
         self.calls = 0
 
@@ -118,6 +121,9 @@ def test_ensure_web_spawns_missing(monkeypatch, tmp_path):
 def test_ws_hook_denied_event(monkeypatch, tmp_path):  # 策略拦下 → WS 推 hook 事件（实时流一行）
     class EnvLLM:
         current = "fake-model"
+
+        def set_notice(self, fn):
+            self.notice = fn
 
         def __init__(self, *a, **kw):
             self.calls = 0

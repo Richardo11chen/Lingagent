@@ -301,6 +301,13 @@ def show_trace(recs: list[dict], session_id: str) -> None:
             verdict = "拦下" if r.get("verdict") == "deny" else "放行"
             reason = f" · {r.get('reason', '')}" if r.get("reason") else ""
             table.add_row(str(i), ts, "⚡ 策略", f"{verdict}（{r.get('by', '')}）{reason}"[:60], "")
+        elif kind == "compact":
+            # 有结构化数字就显示「前 → 后」，否则截一句——表格里别塞整句话
+            if "before" in r and "after" in r:
+                detail = f"{r['before']} → {r['after']} 字符"
+            else:
+                detail = str(r.get("text", ""))[:36]
+            table.add_row(str(i), ts, "⟳ 压缩", detail, "")
         elif kind == "oversized":
             table.add_row(str(i), ts, "⚠ 超大", f"{r.get('bytes', '?')} 字节，超出读取上限（全文在文件里）", "")
     console.print(table)

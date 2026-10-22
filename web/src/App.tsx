@@ -39,6 +39,9 @@ type TraceRec = {
   command?: string
   decision?: string
   verdict?: string
+  text?: string
+  before?: number
+  after?: number
   by?: string
   reason?: string
   duration_ms?: number
@@ -68,6 +71,11 @@ function traceRow(r: TraceRec): { label: string; detail: string } {
     return {
       label: '⚠ 审批',
       detail: `${DECISION_ZH[r.decision ?? ''] ?? r.decision ?? ''} · ${(r.command ?? '').slice(0, 60)}`,
+    }
+  if (r.kind === 'compact')
+    return {
+      label: '⟳ 压缩',
+      detail: r.before != null && r.after != null ? `${r.before} → ${r.after} 字符` : (r.text ?? ''),
     }
   if (r.kind === 'hook')
     return {

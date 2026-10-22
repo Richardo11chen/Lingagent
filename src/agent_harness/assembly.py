@@ -108,6 +108,11 @@ class SwitchableLLM:
             on_notice=self._on_notice,  # 换模型后新的适配器也带着这个提示口
         )
 
+    def set_notice(self, fn) -> None:
+        """换提示口（新建的适配器会带着它，见 _build）。"""
+        self._on_notice = fn
+        self._inner.set_notice(fn)
+
     def switch(self, name: str) -> str:
         """切到某个 profile——返回实际模型名（供界面提示）。名字未知抛 KeyError。"""
         if name not in self._settings.models:

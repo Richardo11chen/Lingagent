@@ -186,14 +186,17 @@ def test_reactive_gives_up_after_second_413(monkeypatch):  # 两次都 413 → �
 
 def test_compaction_is_announced(monkeypatch):  # 压了就要出声——否则只看到这一轮莫名变慢
     seen = []
-    llm, _ = _fake_llm(monkeypatch, compact_threshold=10, keep_last=1, on_notice=seen.append)
+    llm, _ = _fake_llm(
+        monkeypatch, compact_threshold=10, keep_last=1,
+        on_notice=lambda text, **f: seen.append(text),
+    )
     llm(_long_history(4), [])
     assert any("已清理早期工具输出" in s for s in seen)
 
 
 def test_no_notice_when_under_threshold(monkeypatch):  # 没压就别吵
     seen = []
-    llm, _ = _fake_llm(monkeypatch, on_notice=seen.append)
+    llm, _ = _fake_llm(monkeypatch, on_notice=lambda text, **f: seen.append(text))
     llm([Msg("user", "hi")], [])
     assert seen == []
 
@@ -201,28 +204,23 @@ def test_no_notice_when_under_threshold(monkeypatch):  # 没压就别吵
 def test_413_retry_is_announced(monkeypatch):  # 撞上限重试也要说一声
     monkeypatch.setattr("time.sleep", lambda s: None)
     seen = []
-    llm, _ = _fake_llm(monkeypatch, failures=1, on_notice=seen.append)
+    llm, _ = _fake_llm(
+        monkeypatch, failures=1, on_notice=lambda text, **f: seen.append(text),
+    )
     llm(_long_history(6), [])
     assert any("413" in s for s in seen)
 
 
-def test_compaction_is_announced(monkeypatch):  # 压了就要出声——否则只看到这一轮莫名变慢
-    seen = []
-    llm, _ = _fake_llm(monkeypatch, compact_threshold=10, keep_last=1, on_notice=seen.append)
+def test_compaction_writes_a_trace_record(monkeypatch, tmp_path):  # 除了提示，还要留痕
+    from agent_harness.trace import Tracer, load_trace
+
+    tr = Tracer(tmp_path / "x.trace.jsonl")
+    llm, _ = _fake_llm(
+        monkeypatch, compact_threshold=10, keep_last=1,
+        on_notice=lambda text, **f: tr.emit("compact", text=text, **f),
+    )
     llm(_long_history(4), [])
-    assert any("已清理早期工具输出" in s for s in seen)
-
-
-def test_no_notice_when_under_threshold(monkeypatch):  # 没压就别吵
-    seen = []
-    llm, _ = _fake_llm(monkeypatch, on_notice=seen.append)
-    llm([Msg("user", "hi")], [])
-    assert seen == []
-
-
-def test_413_retry_is_announced(monkeypatch):  # 撞上限重试也要说一声
-    monkeypatch.setattr("time.sleep", lambda s: None)
-    seen = []
-    llm, _ = _fake_llm(monkeypatch, failures=1, on_notice=seen.append)
-    llm(_long_history(6), [])
-    assert any("413" in s for s in seen)
+    recs = load_trace(tmp_path / "x.trace.jsonl")
+    assert [r["kind"] for r in recs] == ["compact"]
+    assert recs[0]["reason"] == "threshold"
+    assert recs[0]["before"] > recs[0]["after"]  # 账本里存数字，表格才有东西可显示

@@ -188,10 +188,18 @@ class DeepSeekLLM:
         self._on_notice = on_notice
         self._system_prompt = system_prompt
 
-    def _notice(self, text: str) -> None:
-        """压缩这类"背后发生了事"要让人知道，否则只看到这一轮莫名变慢。"""
+    def set_notice(self, fn) -> None:
+        """换/后挂提示口——入口拿到 tracer 之后才能把「提示 + 留痕」拼在一起。"""
+        self._on_notice = fn
+
+    def _notice(self, text: str, **fields) -> None:
+        """压缩这类"背后发生了事"要让人知道，否则只看到这一轮莫名变慢。
+
+        fields 是给 trace 的结构化字段（before / after / reason）——账本存数字，
+        人看的那句话单独给，两者不互相迁就。
+        """
         if self._on_notice:
-            self._on_notice(text)
+            self._on_notice(text, **fields)
 
     def _request(self, api_messages: list[dict], tools: list[dict], on_text, on_reasoning=None):
         """流式发一次请求——返回 (text, raw_tool_calls, reasoning)。
@@ -276,7 +284,8 @@ class DeepSeekLLM:
         after_chars = estimate_tokens(messages)
         if after_chars < before_chars:  # 真压了才说，没压不吵
             self._notice(
-                f"上下文偏长（约 {before_chars} 字符），已清理早期工具输出 → 约 {after_chars} 字符"
+                f"上下文偏长（约 {before_chars} 字符），已清理早期工具输出 → 约 {after_chars} 字符",
+                reason="threshold", before=before_chars, after=after_chars,
             )
         sp = system_prompt or self._system_prompt  # 调用方给了就用它（子 agent 带自己的提示词）
         api_messages = to_api_messages(sp, messages)
@@ -288,7 +297,7 @@ class DeepSeekLLM:
         except APIStatusError as e:
             if e.status_code != 413:  # 非超限（401/500 等）——重试无意义，直接抛
                 raise
-            self._notice("请求超过模型上下文上限（413），压缩后重试一次")
+            self._notice("请求超过模型上下文上限（413），压缩后重试一次", reason="413")
             # Reactive 兜底：退避（疑限流）→ 加压（全清旧结果）→ 重试一次；
             # 第二次不在 try 内——结构上不可能有第三次（无需 has_attempted 标志）
             time.sleep(3)

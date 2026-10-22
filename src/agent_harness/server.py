@@ -69,6 +69,17 @@ async def ws_endpoint(ws: WebSocket):
 
     await ws.send_json({"type": "session", "id": session_id, "history_n": len(history), "model": llm.current})
 
+    def _report_round_failure(task: asyncio.Task) -> None:
+        """兜底：run_user 里任何没被接住的异常，都要变成前端看得见的一句话。
+
+        否则前端只在等 assistant_done，界面就永远转圈——排查时毫无线索。
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            send({"type": "error", "text": f"本轮失败：{type(exc).__name__}: {exc}"})
+
     async def run_user(goal: str) -> None:
         """跑一轮 agent（旁路线程）——回调经事件循环推回 WS。"""
 
@@ -103,6 +114,12 @@ async def ws_endpoint(ws: WebSocket):
         old_len = len(history)
         # 每轮现取——resume 换 id 后自动跟到新文件；关掉 trace 就不写盘
         tracer = Tracer(trace_path(WORKSPACE, session_id)) if settings.trace_enabled else Tracer()
+
+        def notice(text: str, **fields) -> None:  # 提示 + 留痕（tracer 每轮换，所以每轮重挂）
+            send({"type": "notice", "text": text})
+            tracer.emit("compact", text=text, **fields)
+
+        llm.set_notice(notice)
         sp = build_system_prompt()
         session_tools = build_session_tools(  # S10：本会话工具表（带 spawn_subagent）
             llm, sp, approver=approver, tracer=tracer,
@@ -144,6 +161,7 @@ async def ws_endpoint(ws: WebSocket):
                     continue  # 上一轮还在跑——忽略
                 stop_event.clear()  # 新一轮：把上一轮的「停」清掉
                 user_task = asyncio.create_task(run_user(str(msg.get("text", ""))))
+                user_task.add_done_callback(_report_round_failure)
             elif mtype == "interrupt":
                 # 停止本轮：置位给 loop 的检查点；若正卡在审批上，顺手驳回把它放出来
                 stop_event.set()

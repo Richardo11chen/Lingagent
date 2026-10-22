@@ -136,6 +136,13 @@ def main() -> None:
         save_session_model(WORKSPACE, session_id, llm.current_profile)
     # S8：轨迹与 session 同目录同 id；关掉 [trace] enabled 就给空对象（不写盘）
     tracer = Tracer(trace_path(WORKSPACE, session_id)) if settings.trace_enabled else Tracer()
+
+    def _notice(text: str, **fields) -> None:
+        """压缩这类提示：给人看一眼（流里一行），同时记进 trace（翻账时能看到）。"""
+        tui.show_notice(text)
+        tracer.emit("compact", text=text, **fields)
+
+    llm.set_notice(_notice)
     session_tools = build_session_tools(  # S10：本会话工具表（带 spawn_subagent）
         llm, base_prompt, approver=approver, tracer=tracer,
         max_steps=settings.max_steps, on_hook=tui.show_hook,
