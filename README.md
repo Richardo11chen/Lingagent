@@ -81,7 +81,7 @@ cd web && npm install && npm run dev
 ## 测试
 
 ```bash
-uv run pytest                  # 全量（167 条）
+uv run pytest                  # 全量（169 条）
 cd web && npx tsc --noEmit     # 前端类型检查
 ```
 
