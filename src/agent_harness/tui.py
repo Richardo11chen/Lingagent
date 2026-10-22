@@ -396,6 +396,7 @@ def show_approval(command: str, reason: str = "", timeout: float = 300.0) -> str
     console.print(Text("  " + command, style="dim"))  # 全文——审批不该藏东西
 
     timed_out = False
+    timers: list = []  # 人先答了就取消——否则这个 timer 会留到下一次 prompt
 
     def _arm_timeout(app) -> None:
         """到点自动收掉提示行。pre_run 拿得到 Application，这是 prompt_toolkit 给的正门。"""
@@ -408,7 +409,7 @@ def show_approval(command: str, reason: str = "", timeout: float = 300.0) -> str
             app.exit("")  # 空输入 → 走默认驳回
 
         try:
-            asyncio.get_running_loop().call_later(timeout, _fire)
+            timers.append(asyncio.get_running_loop().call_later(timeout, _fire))
         except RuntimeError:  # 没有事件循环（理论上进不到这里）——退化成不超时
             pass
 
@@ -426,6 +427,9 @@ def show_approval(command: str, reason: str = "", timeout: float = 300.0) -> str
         if restart:
             _live_open()
         raise
+    finally:
+        for t in timers:
+            t.cancel()
 
     if timed_out:
         console.print(Text(f"⚠ 审批超时（{timeout:g} 秒没人答复），按驳回处理", style="yellow"))

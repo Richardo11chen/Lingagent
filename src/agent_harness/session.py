@@ -25,12 +25,16 @@ LEGACY_SESSION_ROOT = Path.home() / ".agent_harness_sessions"  # 老位置（迁
 
 def _migrate_legacy_root() -> None:
     """老存档根 → 新目录（只搬默认根；测试/自定义根一律不动，免得误搬用户数据）。"""
-    if SESSION_ROOT != APP_DIR / "sessions" or SESSION_ROOT.exists():
+    if SESSION_ROOT != APP_DIR / "sessions":
         return
+    if SESSION_ROOT.is_dir() and any(SESSION_ROOT.iterdir()):
+        return  # 已经有内容了，别覆盖
     if not LEGACY_SESSION_ROOT.is_dir():
         return
     try:
         SESSION_ROOT.parent.mkdir(parents=True, exist_ok=True)
+        if SESSION_ROOT.is_dir():
+            SESSION_ROOT.rmdir()  # 只有空的才删得掉
         LEGACY_SESSION_ROOT.rename(SESSION_ROOT)
     except OSError:
         pass

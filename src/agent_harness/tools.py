@@ -24,7 +24,7 @@ def cap_result(text: str, limit: int = MAX_RESULT_CHARS) -> str:
     return (
         f"{text[:_HEAD_CHARS]}\n\n"
         f"[... 已省略中间 {omitted} 字符（原始输出共 {len(text)} 字符）。"
-        f"完整输出见 trace；需要细节请用带范围的命令重新取（如 head / tail / findstr 过滤）...]\n\n"
+        f"需要细节请用带范围的命令重新取（如 head / tail / findstr 过滤）...]\n\n"
         f"{text[-_TAIL_CHARS:]}"
     )
 
