@@ -30,11 +30,28 @@ def cap_result(text: str, limit: int = MAX_RESULT_CHARS) -> str:
 
 
 def run_shell(command: str, timeout: float = SHELL_TIMEOUT) -> str:
+    """跑一条 shell 命令——超时杀整棵进程树，输出合并成一个流。
+
+    三个刻意的选择：
+
+    1. **stderr 并入 stdout**：模型关心"发生了什么、按什么顺序"，不关心走哪个通道。
+       分开收集再拼接会把时序打乱（编译错误的上下文就错位了）。
+    2. **stdin 接空设备**：等 stdin 的命令（`git commit` 不带 `-m`、`more`）不该
+       白挂到超时才结束，直接让它们读到 EOF 自己退出。
+    3. **抓字节自己解码**，不用 `text=True`：父进程按 locale 解、子进程按控制台代码页写，
+       两者可以不一致（`PYTHONUTF8=1` + `chcp 936` 就是典型），一旦不一致就是乱码或
+       `UnicodeDecodeError`。
+    """
     proc = subprocess.Popen(
-        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=True
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        shell=True,
     )
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
+        out, _ = proc.communicate(timeout=timeout)
+        return f"退出码 {proc.returncode}\n{_decode(out)}"
     except subprocess.TimeoutExpired:
         if os.name == "nt":
             # Windows：shell=True 时 kill 只杀 cmd.exe，孙进程还攥着管道——communicate 会等到它跑完。
@@ -45,14 +62,32 @@ def run_shell(command: str, timeout: float = SHELL_TIMEOUT) -> str:
             )
         else:
             proc.kill()
+        tail = b""
         try:
-            proc.communicate(timeout=2)  # 收尸；极端情况下不再等（管道泄漏好过冻住）
+            tail, _ = proc.communicate(timeout=2)  # 收尸，并拿到超时前已产生的输出
         except subprocess.TimeoutExpired:
-            pass
-        return f"命令超时（>{timeout:g} 秒）已被终止：{command}"
-    return f"退出码 {proc.returncode}\n{stdout}{stderr}"
+            pass  # 极端情况下不再等（管道泄漏好过冻住）
+        msg = f"命令超时（>{timeout:g} 秒）已被终止：{command}"
+        partial = _decode(tail)
+        if partial.strip():  # 超时前的输出有诊断价值，别丢
+            msg += f"\n（下面是超时前已产生的输出，可能不完整）\n{partial}"
+        return msg
 
 _ENCODINGS = ("utf-8", "utf-8-sig", "gbk")  # Windows 项目里 GBK 文件不罕见
+
+
+def _decode(raw: bytes) -> str:
+    """字节 → 文本：utf-8 → utf-8-sig → gbk，都不行就宽松解码（坏字符变 ?）。
+
+    文件读取和 shell 输出共用这一条——它们踩的是同一个坑（写入方按自己的编码写，
+    读取方按自己的编码解）。
+    """
+    for enc in _ENCODINGS:
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
 
 
 def _read_text(p: Path) -> str:
@@ -61,13 +96,7 @@ def _read_text(p: Path) -> str:
     死认 utf-8 的代价很实在：碰到 GBK 文件工具直接抛异常，而模型改不了文件编码，
     只能绕开——等于这个文件对它不可读。
     """
-    raw = p.read_bytes()
-    for enc in _ENCODINGS:
-        try:
-            return raw.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return raw.decode("utf-8", errors="replace")
+    return _decode(p.read_bytes())
 
 
 def read_file(path: str) -> str:
