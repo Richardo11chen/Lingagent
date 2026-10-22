@@ -155,3 +155,16 @@ def test_small_result_does_not_touch_the_disk(tmp_path, monkeypatch):  # 没超�
     monkeypatch.chdir(tmp_path)
     assert cap_result("ok") == "ok"
     assert not (tmp_path / DUMP_DIR).exists()
+
+
+def test_tool_detail_covers_every_interesting_arg():  # 派活也要看得见，且不许撑成多行
+    from agent_harness.tools import tool_detail
+
+    detail = tool_detail({"subtask": "查清楚 X\n范围：src\n完成标准：给出调用链"})
+    assert detail.startswith("查清楚 X 范围")
+    assert "\n" not in detail  # 换行会把一行提示撑成三行
+
+    assert tool_detail({"command": "ls -la"}) == "ls -la"
+    assert tool_detail({"path": "a.py"}) == "a.py"
+    assert tool_detail({"task_id": "t1"}) == "t1"
+    assert tool_detail(None) == ""

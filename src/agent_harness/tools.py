@@ -260,11 +260,16 @@ atexit.register(_reap_background)
 def tool_detail(args: dict | None) -> str:
     """工具调用里「最有信息量的那个参数」——界面一行显示用。
 
-    command / path 之外还有 task_id：`task_output` / `task_stop` 既没有命令也没有路径，
-    只显示 `⚙ task_output` 等于什么都没说。这条规则放一处，TUI 与网页不会再各写一遍。
+    command / path / task_id / subtask 四选一：`task_output` 既没有命令也没有路径、
+    `spawn_subagent` 只有一段派活说明——只显示 `⚙ task_output` 等于什么都没说。
+    这条规则放一处，TUI 与网页不会再各写一遍。
+
+    空白压成单空格：派活说明通常分几行写（目标 / 范围 / 完成标准），带进 Live 会
+    把一行提示撑成三行。界面只需要「大概在干什么」，全文在 /trace 里。
     """
     a = args or {}
-    return str(a.get("command") or a.get("path") or a.get("task_id") or "")
+    raw = a.get("command") or a.get("path") or a.get("task_id") or a.get("subtask") or ""
+    return " ".join(str(raw).split())
 
 
 _ENCODINGS = ("utf-8", "utf-8-sig", "gbk")  # Windows 项目里 GBK 文件不罕见
