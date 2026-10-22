@@ -163,3 +163,12 @@ def test_auto_mode_approves_without_touching_the_terminal(monkeypatch):  # 开�
     monkeypatch.setattr(tui, "_live", None)
     monkeypatch.setattr(tui, "_approval_session", boom)
     assert tui.show_approval("del x", "改动文件：del") == "auto"
+
+
+def test_unknown_approval_result_denies():  # 白名单：只有明确的放行才算放行
+    from agent_harness import _is_approved
+
+    for ok in ("approve", "always", "auto"):
+        assert _is_approved(ok) is True
+    for bad in ("deny", "timeout", "error", "", "APPROVE"):
+        assert _is_approved(bad) is False  # 将来新增结局时，默认落到「不执行」这一侧

@@ -75,6 +75,7 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
     - `show_approval` 命中 auto 时不弹提示、不动 Live，返回 `"auto"`；`approver` 据此写一条 `kind: auto` 的 trace（TUI 表格与网页都渲染成 `⚡ 自动批准`）
     - **`catastrophic` 碰不到这条路**：`loop` 在执行前就直拒，连审批都不进（有测试 `test_loop_catastrophic_blocked_without_asking` 守着）
     - 顺手把"往流里插一行"的四份重复收成 `tui._stream_line`（工具行 / 提示 / 策略拦截 / 自动批准）
+    - 审批结果改成白名单 `_is_approved()`（`approve` / `always` / `auto`）：原来是 `decision != "deny"`，属 fail-open——将来 `show_approval` 多返回一种结局（超时 / 界面出错）就会被当成批准。现在未知值一律驳回，有测试守着
   - `run_tests` 不再写死 pytest（用户问"只对 py 项目有用要不要留"，答：留，但泛化）：
     - `sensors.detect_runner()` 按项目根标记认入口：pyproject/pytest.ini/tox.ini/setup.cfg → pytest；package.json 且**有 `scripts.test`** → npm；go.mod → go；Cargo.toml → cargo；Makefile 且有 `test:` → make
     - 认不出就明说"没找到测试入口，用 run_shell 跑本项目的命令"——不伪造成一条红的测试报告（原来在非 Python 项目上会跑 pytest 然后报红，等于骗人）
@@ -86,7 +87,7 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
 
 未完成：
 
-- 已知边界（未收口）：OS 级沙箱 / shell 绕过；子 agent 中间过程不进实时流（只进 trace；用户拍板不做）；子 agent 只读靠提示词（用户拍板）；**网页审批真机已验证**（用户，2026-10-19）；**审批无超时 = 有意设计**（人说了算，不自动驳回；用户拍板不修）；流式 chunk 未节流；微压缩占位文案可加恢复指引；`/model` 列表未显示「profile → 实际模型名」
+- 已知边界（未收口）：OS 级沙箱 / shell 绕过；子 agent 中间过程不进实时流（只进 trace；用户拍板不做）；子 agent 只读靠提示词（用户拍板）；**网页审批真机已验证**（用户，2026-10-19）；**审批默认 300 秒超时驳回**（`[loop] approval_timeout`，0 = 一直等；原「不设超时」已于 2026-10-22 翻案）；流式 chunk 未节流；微压缩占位文案可加恢复指引；`/model` 列表未显示「profile → 实际模型名」
 
 重要决策及原因：
 - 主循环 / LLM 抽象层必须自实现；机制必须是代码不是提示词（规格硬要求）

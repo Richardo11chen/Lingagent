@@ -72,6 +72,15 @@ def choose_session(workspace: Path) -> tuple[str, list[Msg]]:
 
 NUDGE_DAYS = 30  # 轨迹这么久没人看，就该考虑清掉或关掉
 
+# 审批「算放行」的返回值白名单。写成白名单而不是 `!= "deny"`：那是 fail-open——
+# 将来 show_approval 多返回一种结局（超时 / 界面出错），谁忘了改这行，它就变成"批准"。
+# 现在未知值一律按驳回走；驳回只会让命令不执行，误伤看得见，静默放行看不见。
+_APPROVED = ("approve", "always", "auto")
+
+
+def _is_approved(decision: str) -> bool:
+    return decision in _APPROVED
+
 
 def _trace_nudge(settings) -> None:
     """轨迹堆着没人看时提醒一句（只提示：删/关都由人决定）。"""
@@ -132,7 +141,7 @@ def main() -> None:
         if decision == "always" and head:
             session_allowed.add(head)
             tui.show_note(f"本会话不再询问 {head}", "info")
-        return decision != "deny"
+        return _is_approved(decision)
 
     web_started: list[str] = []
     if settings.web_autostart and tui.interactive():  # 管道/脚本模式不拉网页端
