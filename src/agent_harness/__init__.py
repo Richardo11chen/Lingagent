@@ -126,6 +126,9 @@ def main() -> None:
             tui.show_note(f"本会话已允许 {head}，直接执行")  # 留痕：不是静默放行
             return True
         decision = tui.show_approval(cmd, reason, timeout=settings.approval_timeout)
+        if decision == "auto":
+            # 自动批准也要留账：屏幕上那行会滚走，trace 才是事后能查的地方
+            tracer.emit("auto", command=cmd, reason=reason)
         if decision == "always" and head:
             session_allowed.add(head)
             tui.show_note(f"本会话不再询问 {head}", "info")

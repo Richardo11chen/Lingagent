@@ -72,6 +72,8 @@ function traceRow(r: TraceRec): { label: string; detail: string } {
       label: '⚠ 审批',
       detail: `${DECISION_ZH[r.decision ?? ''] ?? r.decision ?? ''} · ${(r.command ?? '').slice(0, 60)}`,
     }
+  if (r.kind === 'auto')
+    return { label: '⚡ 自动批准', detail: r.reason ?? '' }
   if (r.kind === 'compact')
     return {
       label: '⟳ 压缩',

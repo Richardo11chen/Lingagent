@@ -142,3 +142,24 @@ def test_approval_keys_map_to_three_decisions():  # Enter 批准 / Esc 驳回 / 
     assert _to_decision("n") == "deny"
     assert _to_decision("qwe") == "deny"        # 打错字不该变成放行
     assert _to_decision(None) == "deny"         # 读尽 / 超时
+
+
+def test_shift_tab_toggles_auto_mode(monkeypatch):  # 一键切换，状态可反悔
+    from agent_harness import tui
+
+    monkeypatch.setattr(tui, "_auto", False)
+    assert tui.auto_on() is False
+    assert tui.toggle_auto() is True and tui.auto_on() is True
+    assert tui.toggle_auto() is False and tui.auto_on() is False
+
+
+def test_auto_mode_approves_without_touching_the_terminal(monkeypatch):  # 开着就别再弹审批行
+    from agent_harness import tui
+
+    def boom(*a, **kw):
+        raise AssertionError("自动批准不该打开审批界面")
+
+    monkeypatch.setattr(tui, "_auto", True)
+    monkeypatch.setattr(tui, "_live", None)
+    monkeypatch.setattr(tui, "_approval_session", boom)
+    assert tui.show_approval("del x", "改动文件：del") == "auto"

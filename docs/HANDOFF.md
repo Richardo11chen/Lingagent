@@ -69,6 +69,12 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
     - `tasks.py` 只做登记（id/进程/路径/时间），启动与杀树留在 `tools.py`（避免和它互相 import）
     - 测试 3 条：立刻返回且有输出 / 停止后保留末段输出 / 未知 id 有明确提示
     - 超限结果落盘（用户选 B）：`tools.cap_result` 把被省略的全文写到工作目录 `.agent-harness-out/`（gitignore，7 天自动清），提示里给出路径 + `sed -n` 示例；原来只说"用带范围的命令重新取"，等于让模型把最贵的命令（全量 grep / 构建日志）再跑一遍。放工作目录、不放 `~/.agent-harness`，是为了不放松 `read_file` 的路径围栏（那是唯一的真边界）；代价是仓库里多一个隐藏目录
+  - 自动批准（用户要的"auto 模式"，2026-10-22 晚）：
+    - `Shift+Tab` 切换（`tui._auto`，只在内存，重启回手动）；toolbar 平时是灰横线 + `Shift+Tab 自动批准`，开着时整条变黄 + `⚡ 自动批准 · Shift+Tab 关闭`——状态必须一直看得见
+    - 键绑定用 `~has_completions` 过滤：补全菜单开着时 Shift+Tab 是"往回选"，不抢那个键；自定义绑定在 `merge_key_bindings` 里排在最后，`key_processor` 取 `matches[-1]`，所以优先于默认的 `menu-complete-backward`
+    - `show_approval` 命中 auto 时不弹提示、不动 Live，返回 `"auto"`；`approver` 据此写一条 `kind: auto` 的 trace（TUI 表格与网页都渲染成 `⚡ 自动批准`）
+    - **`catastrophic` 碰不到这条路**：`loop` 在执行前就直拒，连审批都不进（有测试 `test_loop_catastrophic_blocked_without_asking` 守着）
+    - 顺手把"往流里插一行"的四份重复收成 `tui._stream_line`（工具行 / 提示 / 策略拦截 / 自动批准）
   - 体验一致性批次（审美审查后）：`show_note` 分 info/warn/error 三档（失败终于不是洋红色）；TUI 与网页共用 `TRACE_FIELD_CHARS` + `ellipsis_note`（同一句截断说明），工具详情两端都截 50；网页错误改独立 `.err-line`（左线 + 红字）；等第一个字时两端都有「⋯」；网页底部加 `/model` `/trace` 一行提示；断线清残留审批卡；网页加「停止」（`loop.should_stop` 每步检查 + `interrupt` 消息，正在跑的那一步会跑完）；`/model` 输入非法时不再静默吞
 
 未完成：

@@ -10,8 +10,10 @@ import time
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.filters import has_completions
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.styles import Style
 from wcwidth import wcswidth
 from rich import box
@@ -37,6 +39,7 @@ _in_reasoning = False
 _waiting = False  # 已发出请求、还没等到第一个字——先给人一个「它在动」的信号
 _ctrl_c_at = 0.0  # 上次按 Ctrl+C 的时刻（两次之内 = 退出）
 CTRL_C_WINDOW = 2.0  # 秒
+_auto = False  # 自动批准（Shift+Tab 切换）——只在内存里，退出即恢复手动
 
 
 class _CommandCompleter(Completer):
@@ -67,16 +70,54 @@ def _width() -> int:
     return shutil.get_terminal_size((80, 24)).columns
 
 
+def auto_on() -> bool:
+    return _auto
+
+
+def toggle_auto() -> bool:
+    """切换自动批准，返回切换后的状态。"""
+    global _auto
+    _auto = not _auto
+    return _auto
+
+
+def _toolbar() -> FormattedText:
+    """底部一行：平时一条灰横线；自动批准开着时整行变黄并写明状态。
+
+    状态必须一直看得见——「不需要你点头」是个危险状态，藏起来比不提供更糟。
+    """
+    hint = "⚡ 自动批准 · Shift+Tab 关闭" if _auto else "Shift+Tab 自动批准"
+    pad = max(_width() - wcswidth(hint) - 2, 0)
+    style = "fg:ansiyellow bold" if _auto else "fg:ansibrightblack"
+    return FormattedText([(style, "─" * pad + " " + hint + " ")])
+
+
+def _main_key_bindings():
+    """Shift+Tab 切换自动批准。
+
+    用 `~has_completions` 过滤：补全菜单开着时 Shift+Tab 是「往回选」，别抢那个键。
+    """
+    kb = KeyBindings()
+
+    @kb.add(Keys.BackTab, filter=~has_completions)
+    def _toggle(event):
+        toggle_auto()
+        event.app.invalidate()  # 唯一即时反馈就是这条 toolbar——变色即切换
+
+    return kb
+
+
 def _session_get() -> PromptSession:
     global _session
     if _session is None:
         _session = PromptSession(
             message=[("fg:ansicyan bold", "❯ ")],
-            bottom_toolbar=lambda: FormattedText([("fg:ansibrightblack", "─" * _width())]),
+            bottom_toolbar=_toolbar,
             # toolbar 默认样式是反色（Windows 上呈灰底）——显式 noreverse + 默认背景
             style=Style.from_dict({"bottom-toolbar": "noreverse bg:ansidefault"}),
             completer=_CommandCompleter(),
             complete_while_typing=True,
+            key_bindings=_main_key_bindings(),
         )
     return _session
 
@@ -113,15 +154,8 @@ def show_sessions(rows: list[dict], page: int, total_pages: int, total: int) -> 
 
 def show_hook(by: str, reason: str) -> None:
     """策略拦截提示（实时流里冒一行）——内容走 Text，不走 markup 解析。"""
-    global _waiting
-    _waiting = False
     line = f"⚡ 策略拦截：{by}" + (f" · {reason[:50]}" if reason else "")
-    if _live:
-        _seal_current()
-        _blocks.append(Text(line, style="yellow"))
-        _refresh()
-    else:
-        console.print(Text(line, style="yellow"))
+    _stream_line(Text(line, style="yellow"))
 
 
 def show_web_hint(started: list[str] | None = None) -> None:
@@ -304,6 +338,8 @@ def show_trace(recs: list[dict], session_id: str) -> None:
             verdict = "拦下" if r.get("verdict") == "deny" else "放行"
             reason = f" · {r.get('reason', '')}" if r.get("reason") else ""
             table.add_row(str(i), ts, "⚡ 策略", f"{verdict}（{r.get('by', '')}）{reason}"[:60], "")
+        elif kind == "auto":
+            table.add_row(str(i), ts, "⚡ 自动批准", str(r.get("reason", ""))[:36], "")
         elif kind == "compact":
             # 有结构化数字就显示「前 → 后」，否则截一句——表格里别塞整句话
             if "before" in r and "after" in r:
@@ -340,25 +376,25 @@ def show_trace_event(rec: dict, idx: int) -> None:
 
 
 def show_tool(name: str, args: dict | None = None) -> None:
-    global _waiting
-    _waiting = False
     detail = tool_detail(args)
     if len(detail) > 50:
         detail = detail[:50] + "…"
-    line = f"⚙  {name}{': ' + detail if detail else ''}"
-    if _live:
-        _seal_current()
-        _blocks.append(Text(line, style="dim"))
-        _refresh()
-    else:
-        console.print(f"[dim]{line}[/]")  # Live 外（如历史渲染）直接打印
+    _stream_line(Text(f"⚙  {name}{': ' + detail if detail else ''}", style="dim"))
 
 
 def show_notice(text: str) -> None:
     """模型层的提示（上下文被压缩、413 重试之类）——插进流里一行，不打断阅读。"""
+    _stream_line(Text("⟳ " + text, style="yellow"))
+
+
+def _stream_line(line: Text) -> None:
+    """往「当前这一屏的流」里插一行。
+
+    Live 开着就塞进块列表让下次重绘带上（不闪屏），没开就直接打印。
+    工具行、提示、自动批准都走这一条——三处各写一遍的话，早晚有一处忘了 seal。
+    """
     global _waiting
     _waiting = False
-    line = Text("⟳ " + text, style="yellow")
     if _live:
         _seal_current()
         _blocks.append(line)
@@ -406,7 +442,8 @@ def _to_decision(raw: str | None) -> str:
 def show_approval(command: str, reason: str = "", timeout: float = 300.0) -> str:
     """人工审批：先说「为什么问你」，再给完整命令，然后等一个键。
 
-    返回 "approve" / "deny" / "always"（always = 本会话不再问这个程序）。
+    返回 "approve" / "deny" / "always"（always = 本会话不再问这个程序）/"auto"（自动批准开着）。
+    自动批准也走这里而不是绕过它——审批是唯一知道「什么被放过了」的地方，绕过去就没有痕迹。
 
     只给命令不够——`find /c /v "" README.md` 看着像只读统计，在 GNU find 语义下
     却会遍历整盘。判定原因必须跟着命令一起递到人眼前，否则审批只是走过场。
@@ -414,6 +451,9 @@ def show_approval(command: str, reason: str = "", timeout: float = 300.0) -> str
     timeout：没人答复就按驳回处理（0 = 一直等）。人走开了不该把整台机器卡死。
     """
     hint = "Enter 执行 · Esc 驳回 · a 记住(本会话) "
+    if _auto:  # 自动批准：不弹提示、也不停 Live（界面不闪），但一定要留痕
+        _stream_line(Text(f"⚡ 自动批准 · {reason or '需要确认'}", style="yellow"))
+        return "auto"
     global _live, _blocks
     restart = False
     if _live is not None:
