@@ -184,7 +184,10 @@ def test_toolbar_shows_context_share(monkeypatch):  # 底部要看得见上下�
     assert "上下文" not in line()  # 没接探针时不显示（也不该崩）
 
     monkeypatch.setattr(tui, "_context_probe", lambda: (35_000, 70_000))
-    assert "上下文 50%" in line()
+    assert "上下文 35k/70k (50%)" in line()  # 绝对值 + 占比，两个都要
+
+    monkeypatch.setattr(tui, "_context_probe", lambda: (820, 70_000))  # 不足 1k 就不带 k
+    assert "上下文 820/70k" in line()
 
     monkeypatch.setattr(tui, "_context_probe", lambda: (1, 0))  # 分母为 0 → 跳过
     assert "上下文" not in line()

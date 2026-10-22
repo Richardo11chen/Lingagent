@@ -93,8 +93,19 @@ def set_context_probe(fn) -> None:
     _context_probe = fn
 
 
+def _short_chars(n: int) -> str:
+    """800 / 8.4k / 70k——底部只有一行的预算，别写 84000。"""
+    if n < 1000:
+        return str(n)
+    return f"{n / 1000:.1f}".rstrip("0").rstrip(".") + "k"
+
+
 def _context_ratio() -> tuple[str, str] | None:
-    """(占比文本, 样式)；拿不到就返回 None，toolbar 少显示一段而已，不该影响输入。"""
+    """(用量文本, 样式)；拿不到就返回 None，toolbar 少显示一段而已，不该影响输入。
+
+    文本形如 `上下文 8.4k/70k (12%)`：绝对值在前（这是「还剩多少」），占比在括号里
+    （这是「什么时候会被压」）。分母是压缩阈值，不是模型的物理窗口——到这个数就会压。
+    """
     if _context_probe is None:
         return None
     try:
@@ -103,13 +114,14 @@ def _context_ratio() -> tuple[str, str] | None:
         return None
     if not limit or limit <= 0:
         return None
-    pct = max(0, round(used * 100 / limit))
+    used = max(0, int(used))
+    pct = round(used * 100 / limit)
     style = "fg:ansibrightblack"
     if pct >= 95:
         style = "fg:ansired bold"  # 压缩已经/即将发生
     elif pct >= 70:
         style = "fg:ansiyellow"
-    return f"上下文 {pct}%", style
+    return f"上下文 {_short_chars(used)}/{_short_chars(limit)} ({pct}%)", style
 
 
 def _toolbar() -> FormattedText:
