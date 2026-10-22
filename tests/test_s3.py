@@ -50,6 +50,16 @@ def test_in_workspace_resolves_traversal(tmp_path):  # 路径穿越判定：../ 
     assert not in_workspace(str(Path.cwd() / "x.txt"), tmp_path)    # 工作目录外绝对路径 → False
 
 
+def test_relative_path_follows_the_given_workspace(tmp_path, monkeypatch):  # 别暗中依赖进程 cwd
+    from agent_harness.guardrail import in_workspace
+
+    other = tmp_path / "other"
+    other.mkdir()
+    monkeypatch.chdir(tmp_path)  # cwd 故意不等于 workspace
+    assert in_workspace("a.txt", other)  # 相对路径该按 workspace 解析 → 在界内
+    assert not in_workspace("../escape.txt", other)  # 穿出去仍然是 False
+
+
 def test_safe_tool_blocks_outside_workspace(tmp_path):  # safe_tool：界外拦截返回越界语，界内正常执行
     from agent_harness.guardrail import in_workspace, safe_tool
     safe_write = safe_tool(write_file, tmp_path)

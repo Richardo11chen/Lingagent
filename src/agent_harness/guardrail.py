@@ -55,7 +55,8 @@ SYNTAX_WORDS = {
 # 允句尾出现语法词：`for %f in (*.py)` 被切开后剩「%f in」，尾巴上这个 in 要剥掉
 TRAILING_SYNTAX_WORDS = {"in", "do"}
 
-# 只打印版本号的程序：仅当唯一参数是版本旗标时算只读（其余一律按执行算）
+# 只有一个版本旗标时算只读的程序：`python --version` 不该问人，`python x.py` 必须问。
+# 这些名字本来就在 EXECUTING_PROGRAMS 里，这张表只负责「版本例外」，不重复登记风险。
 VERSION_PROGRAMS = {"python", "py", "python3", "pytest", "node", "npm", "uv", "pip", "pip3"}
 VERSION_FLAGS = {"--version", "-version", "-V", "-v"}
 
@@ -85,6 +86,18 @@ NETWORK_PROGRAMS = {
     "curl", "wget", "certutil", "bitsadmin", "ftp", "sftp", "scp", "ssh",
     "telnet", "nc", "ncat", "ping", "tracert", "nslookup",
 }
+
+# 程序名 → 风险 + 理由前缀。**顺序即优先级**：先命中先返回。
+# 做成一张表而不是五段 if，是因为优先级原来藏在语句顺序里——把 NETWORK 那段
+# 挪到 EXECUTING 上面，行为就悄悄变了，而没人会注意到。表里一眼看得见。
+# （同一程序不得同时出现在两张表里；有测试守着，否则结果会取决于表序。）
+# catastrophic 不在这张表里：它由上面那道显式判断处理（还要看目标是不是根路径）。
+_PROGRAM_TABLE: tuple[tuple[set[str], str, str], ...] = (
+    (READ_ONLY_PROGRAMS, READ_ONLY, "只读"),
+    (MUTATING_PROGRAMS, MUTATING, "改动文件"),
+    (EXECUTING_PROGRAMS, EXECUTING, "执行程序"),
+    (NETWORK_PROGRAMS, NETWORK, "网络命令"),
+)
 
 GIT_READ_SUBCOMMANDS = {
     "status", "log", "diff", "show", "rev-parse", "blame", "ls-files", "shortlog",
@@ -294,18 +307,11 @@ def _classify_tokens(tokens: list[str]) -> CommandRisk:
         if any(a.lower().startswith(SED_WRITE_FLAGS) for a in args):
             return CommandRisk(MUTATING, "sed 就地改文件（-i）")
         return CommandRisk(READ_ONLY, "只读：sed")
-    if prog in VERSION_PROGRAMS:
-        if len(args) == 1 and args[0].lower() in VERSION_FLAGS:
-            return CommandRisk(READ_ONLY, f"只读：{prog} {args[0]}")
-        return CommandRisk(EXECUTING, f"执行程序：{prog}")
-    if prog in READ_ONLY_PROGRAMS:
-        return CommandRisk(READ_ONLY, f"只读：{prog}")
-    if prog in MUTATING_PROGRAMS:
-        return CommandRisk(MUTATING, f"改动文件：{prog}")
-    if prog in EXECUTING_PROGRAMS:
-        return CommandRisk(EXECUTING, f"执行程序：{prog}")
-    if prog in NETWORK_PROGRAMS:
-        return CommandRisk(NETWORK, f"网络命令：{prog}")
+    if prog in VERSION_PROGRAMS and len(args) == 1 and args[0].lower() in VERSION_FLAGS:
+        return CommandRisk(READ_ONLY, f"只读：{prog} {args[0]}")  # 只问「跑什么」，版本号不算跑
+    for programs, risk, label in _PROGRAM_TABLE:
+        if prog in programs:
+            return CommandRisk(risk, f"{label}：{prog}")
     return CommandRisk(UNKNOWN, f"未知命令：{prog}")
 
 
@@ -352,9 +358,16 @@ def _worse(a: CommandRisk, b: CommandRisk) -> CommandRisk:
 # ---- 路径围栏（S3，未变）----
 
 def in_workspace(path: str, workspace: Path) -> bool:
-    """路径是否在工作目录内：先 resolve（解析 .. 和符号链接），再比前缀。"""
-    resolved = Path(path).resolve()
-    return resolved == workspace or workspace in resolved.parents
+    """路径是否在工作目录内：先 resolve（解析 .. 和符号链接），再比前缀。
+
+    相对路径按**传进来的 workspace** 解析，不是按进程 cwd——签名里有这个参数，
+    行为就该跟它走。靠"反正启动时 cwd 就是项目根"是隐式耦合：换个入口（比如以后
+    给某个会话指定别的根）就会静默判错，而这是个安全边界，判错不该是静默的。
+    """
+    ws = workspace.resolve()
+    p = Path(path)
+    resolved = p.resolve() if p.is_absolute() else (ws / p).resolve()
+    return resolved == ws or ws in resolved.parents
 
 
 def safe_tool(fn, workspace: Path):

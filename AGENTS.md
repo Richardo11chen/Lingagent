@@ -17,7 +17,7 @@
 ## 结构
 
 - `src/agent_harness/`：`llm`（模型适配器，OpenAI 兼容）· `loop`（主循环）· `tools`（工具 + 结果截断 + 后台任务）· `shell`（挑 shell）· `tasks`（后台任务登记簿）· `paths`（应用目录）· `guardrail`（护栏/围栏）· `sensors`（反馈校验）· `session`（会话持久化）· `trace`（轨迹）· `hooks`（策略挂载）· `subagent`（子 agent）· `compact`（上下文压缩）· `config`（规则加载）· `messages`（Msg 结构）· `settings`（多模型配置）· `assembly`（公共装配 + SwitchableLLM）· `tui`（终端界面）· `server`（Web 服务）· `weblaunch`（拉起网页端）
-- `tests/`：`test_s1` ~ `test_s11` + `test_tools`（含 `test_s4b` / `test_s4c` / `test_s6a` / `test_s6b` / `test_s10` / `test_s11`），157 条
+- `tests/`：`test_s1` ~ `test_s11` + `test_tools`（含 `test_s4b` / `test_s4c` / `test_s6a` / `test_s6b` / `test_s10` / `test_s11`），160 条
 - 文档在 `docs/`（PLAN 工程真源 / HANDOFF 交接单）；根目录只留 README、AGENTS、CLAUDE 这类「工具要读」的文件
 - 网页端：后端 `uv run agent-harness-web`（FastAPI，默认 127.0.0.1:8000）；前端 `cd web && npm run dev`（Vite + React）
 - 结果长度约定：trace 存全文（审计账）；进 history / session 的那份截断到 32k（`tools.cap_result`）

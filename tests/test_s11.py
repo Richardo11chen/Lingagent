@@ -193,4 +193,18 @@ def test_bash_write_commands_ask():  # cp / mv / touch / sed -i 是 bash 侧的�
     assert risk("sed -n '1,10p' a.txt") == "read_only"  # 不带 -i 的 sed 只是看代码
 
 
+def test_program_tables_do_not_overlap():  # 同一条程序只能属于一档——重叠会让结果取决于表序
+    from agent_harness import guardrail as g
+
+    table = [g.READ_ONLY_PROGRAMS, g.MUTATING_PROGRAMS, g.EXECUTING_PROGRAMS, g.NETWORK_PROGRAMS]
+    for i, a in enumerate(table):
+        for b in table[i + 1:]:
+            assert not (a & b), sorted(a & b)
+
+
+def test_version_flag_is_the_only_read_only_form():  # `python --version` 不问，`python x.py` 必须问
+    assert risk("uv --version") == "read_only"
+    assert risk("python script.py") != "read_only"
+
+
 
