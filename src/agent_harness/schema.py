@@ -115,11 +115,11 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "run_tests",
-            "description": "跑 pytest 并返回红绿报告（失败时只给输出尾部摘要，比 run_shell 更省上下文）。改完代码后用它验证——红了看报告改，绿了才收工。",
+            "description": "跑本项目的测试并返回红绿报告（按项目根自动认 pytest / npm test / go test / cargo test / make test）。绿了只回一句话，红了只给失败清单和详情——比 run_shell 省上下文。改完代码后用它验证：红了看报告改，绿了才收工。认不出测试入口时会明说，让你改用 run_shell。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "测试路径，默认 '.' 跑全部"},
+                    "path": {"type": "string", "description": "只跑这个路径 / 过滤条件（pytest、go、npm、cargo 支持；默认 '.' 跑全部）"},
                 },
                 "required": [],
             },

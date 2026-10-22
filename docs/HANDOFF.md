@@ -75,6 +75,13 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
     - `show_approval` 命中 auto 时不弹提示、不动 Live，返回 `"auto"`；`approver` 据此写一条 `kind: auto` 的 trace（TUI 表格与网页都渲染成 `⚡ 自动批准`）
     - **`catastrophic` 碰不到这条路**：`loop` 在执行前就直拒，连审批都不进（有测试 `test_loop_catastrophic_blocked_without_asking` 守着）
     - 顺手把"往流里插一行"的四份重复收成 `tui._stream_line`（工具行 / 提示 / 策略拦截 / 自动批准）
+  - `run_tests` 不再写死 pytest（用户问"只对 py 项目有用要不要留"，答：留，但泛化）：
+    - `sensors.detect_runner()` 按项目根标记认入口：pyproject/pytest.ini/tox.ini/setup.cfg → pytest；package.json 且**有 `scripts.test`** → npm；go.mod → go；Cargo.toml → cargo；Makefile 且有 `test:` → make
+    - 认不出就明说"没找到测试入口，用 run_shell 跑本项目的命令"——不伪造成一条红的测试报告（原来在非 Python 项目上会跑 pytest 然后报红，等于骗人）
+    - pytest 保留结构化提取（失败清单 + 详情）；其余 runner 格式各异，只给尾部 20 行——所有框架都把结论放最后
+    - pytest 退出码 5（没收集到测试）单独报"没有测试"，不算失败
+    - 顺手修同一个坑：不再用 `text=True`，改抓字节走 `_decode`（子进程按自己编码写，父进程按 locale 解会乱码）
+    - 顺手删掉 `loop.py` 里没人用的 `run_sensors` 导入
   - 体验一致性批次（审美审查后）：`show_note` 分 info/warn/error 三档（失败终于不是洋红色）；TUI 与网页共用 `TRACE_FIELD_CHARS` + `ellipsis_note`（同一句截断说明），工具详情两端都截 50；网页错误改独立 `.err-line`（左线 + 红字）；等第一个字时两端都有「⋯」；网页底部加 `/model` `/trace` 一行提示；断线清残留审批卡；网页加「停止」（`loop.should_stop` 每步检查 + `interrupt` 消息，正在跑的那一步会跑完）；`/model` 输入非法时不再静默吞
 
 未完成：

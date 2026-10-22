@@ -81,9 +81,21 @@ cd web && npm install && npm run dev
 ## 测试
 
 ```bash
-uv run pytest                  # 全量（117 条）
+uv run pytest                  # 全量（167 条）
 cd web && npx tsc --noEmit     # 前端类型检查
 ```
+
+agent 自己的 `run_tests` 工具按项目根的标记文件认测试入口，所以换个项目也能用：
+
+| 标记文件 | 跑什么 |
+|---|---|
+| `pyproject.toml` / `pytest.ini` / `tox.ini` / `setup.cfg` | `python -m pytest -q`（红了按段提取失败清单 + 详情） |
+| `package.json` 且 `scripts.test` 存在 | `npm test` |
+| `go.mod` | `go test ./...` |
+| `Cargo.toml` | `cargo test` |
+| `Makefile` 且有 `test:` 目标 | `make test` |
+
+一个都认不出就直说"没找到测试入口"，让模型改用 `run_shell`——不会伪造成一条红的测试报告。它认的是**工作目录**（项目根），子目录里的子包（比如 `web/`）不管。
 
 ## 数据都在哪
 

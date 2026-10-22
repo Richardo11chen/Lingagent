@@ -4,7 +4,6 @@ from collections.abc import Sequence
 from typing import Callable
 from .llm import LLM, Action
 from .messages import Msg
-from .sensors import run_sensors
 from .guardrail import classify_command
 from .schema import TOOL_SCHEMAS
 from .tools import cap_result
