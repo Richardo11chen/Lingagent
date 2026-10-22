@@ -102,20 +102,6 @@ def test_pipe_exhausted_exits_cleanly(tmp_path):
     assert "EOFError" not in r.stderr and "Traceback" not in r.stderr
 
 
-def test_slash_commands_autocomplete():  # 输入 / 就列命令——不用记口令，也不用查文档
-    from prompt_toolkit.document import Document
-
-    from agent_harness.tui import _CommandCompleter
-
-    c = _CommandCompleter()
-    assert {x.text for x in c.get_completions(Document("/", 1), None)} == {"/model", "/trace"}
-    assert [x.text for x in c.get_completions(Document("/tr", 3), None)] == ["/trace"]
-    assert list(c.get_completions(Document("hello", 5), None)) == []  # 普通输入不弹菜单
-    # 打全了就收菜单——否则 Enter 会去「接受补全」，用户得按两次才发得出去
-    assert list(c.get_completions(Document("/model", 6), None)) == []
-    # 打全了就收菜单——否则 Enter 会去「接受补全」，用户得按两次才发得出去
-    assert list(c.get_completions(Document("/model", 6), None)) == []
-
 
 def test_slash_commands_autocomplete():  # 输入 / 就列命令——不用记口令，也不用查文档
     from prompt_toolkit.document import Document
@@ -128,5 +114,19 @@ def test_slash_commands_autocomplete():  # 输入 / 就列命令——不用记�
     assert list(c.get_completions(Document("hello", 5), None)) == []  # 普通输入不弹菜单
     # 打全了就收菜单——否则 Enter 会去「接受补全」，用户得按两次才发得出去
     assert list(c.get_completions(Document("/model", 6), None)) == []
-    # 打全了就收菜单——否则 Enter 会去「接受补全」，用户得按两次才发得出去
-    assert list(c.get_completions(Document("/model", 6), None)) == []
+
+
+def test_approval_ui_failure_denies_instead_of_raising(monkeypatch):
+    """审批界面自己坏了也要按驳回走——真机上 pre_run 签名不匹配，TypeError 把整轮打死了。"""
+    from agent_harness import tui
+
+    class Broken:
+        app = None
+
+        def prompt(self, **kw):
+            raise TypeError("boom")
+
+    monkeypatch.setattr(tui, "interactive", lambda: True)
+    monkeypatch.setattr(tui, "_approval_session", lambda: Broken())
+    monkeypatch.setattr(tui, "_live", None)
+    assert tui.show_approval("del x", "改动文件：del") == "n"

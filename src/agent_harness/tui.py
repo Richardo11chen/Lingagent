@@ -397,10 +397,19 @@ def show_approval(command: str, reason: str = "", timeout: float = 300.0) -> str
 
     timed_out = False
     timers: list = []  # 人先答了就取消——否则这个 timer 会留到下一次 prompt
+    sess = _approval_session() if interactive() else None
 
-    def _arm_timeout(app) -> None:
-        """到点自动收掉提示行。pre_run 拿得到 Application，这是 prompt_toolkit 给的正门。"""
-        if timeout <= 0:
+    def _arm_timeout(*_args) -> None:
+        """到点自动收掉提示行（timeout <= 0 = 不超时）。
+
+        签名写成 `*_args` 是踩出来的：不同版本的 prompt_toolkit 调 pre_run 时
+        传不传 Application 并不一致（真机上是零参，直接 TypeError 把整轮打死了）。
+        所以不依赖参数，从 session 上取 app。
+        """
+        if timeout <= 0 or sess is None:
+            return
+        app = getattr(sess, "app", None) or (_args[0] if _args else None)
+        if app is None:
             return
 
         def _fire() -> None:
@@ -410,19 +419,22 @@ def show_approval(command: str, reason: str = "", timeout: float = 300.0) -> str
 
         try:
             timers.append(asyncio.get_running_loop().call_later(timeout, _fire))
-        except RuntimeError:  # 没有事件循环（理论上进不到这里）——退化成不超时
+        except Exception:  # 定时都挂不上就算了——超时是贴心，不是必需
             pass
 
     ans = "n"  # 默认驳回——异常路径也有一张安全票
     try:
-        if not interactive():
+        if sess is None:
             ans = input(prompt_text)
         else:
-            ans = _approval_session().prompt(
+            ans = sess.prompt(
                 message=[("fg:ansiyellow bold", prompt_text + "❯ ")], pre_run=_arm_timeout,
             )
     except EOFError:
         pass  # 输入读尽（管道喂完 / Ctrl+Z）——维持默认驳回
+    except Exception as e:  # 审批界面自己坏了：按驳回处理，别把这一轮打死
+        console.print(Text(f"⚠ 审批界面出错（{type(e).__name__}: {e}），按驳回处理", style="red"))
+        ans = "n"
     except BaseException:  # Ctrl+C 等：Live 先归位再抛
         if restart:
             _live_open()
