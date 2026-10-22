@@ -5,8 +5,10 @@
 
 import shutil
 import sys
+import time
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.styles import Style
 from wcwidth import wcswidth
@@ -30,6 +32,27 @@ _reasoning_buf = ""
 _text_buf = ""
 _in_reasoning = False
 _waiting = False  # 已发出请求、还没等到第一个字——先给人一个「它在动」的信号
+_ctrl_c_at = 0.0  # 上次按 Ctrl+C 的时刻（两次之内 = 退出）
+CTRL_C_WINDOW = 2.0  # 秒
+
+
+class _CommandCompleter(Completer):
+    """输入 / 就自动列出命令——不用记，也不用先查文档。"""
+
+    COMMANDS = (
+        ("/model", "切换模型"),
+        ("/trace", "查看本轮轨迹（/trace N 看单条）"),
+    )
+
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        if not text.startswith("/") or " " in text:
+            return
+        if any(text == cmd for cmd, _ in self.COMMANDS):
+            return  # 已经打全了：收起菜单，别让 Enter 去「接受补全」而不是发送
+        for cmd, desc in self.COMMANDS:
+            if cmd.startswith(text):
+                yield Completion(cmd, start_position=-len(text), display=cmd, display_meta=desc)
 
 
 def interactive() -> bool:
@@ -49,6 +72,8 @@ def _session_get() -> PromptSession:
             bottom_toolbar=lambda: FormattedText([("fg:ansibrightblack", "─" * _width())]),
             # toolbar 默认样式是反色（Windows 上呈灰底）——显式 noreverse + 默认背景
             style=Style.from_dict({"bottom-toolbar": "noreverse bg:ansidefault"}),
+            completer=_CommandCompleter(),
+            complete_while_typing=True,
         )
     return _session
 
@@ -57,7 +82,7 @@ def show_banner(session_id: str, n_history: int, model_name: str = "") -> None:
     tag = f" · [magenta]{model_name}[/]" if model_name else ""
     console.print(
         Panel(
-            f"会话 [cyan]{session_id}[/] · {n_history} 条历史{tag} · [dim]exit 退出[/]",
+            f"会话 [cyan]{session_id}[/] · {n_history} 条历史{tag} · [dim]Ctrl+C 两次 退出[/]",
             title="Agent Harness",
             border_style="blue",
         )
@@ -102,11 +127,21 @@ def show_web_hint(started: list[str] | None = None) -> None:
 
 
 def ask() -> str:
-    """底部输入：上线 + ❯ 输入行 + 下线（bottom_toolbar）。非终端环境降级。"""
+    """底部输入。Ctrl+D 退出；Ctrl+C 按一次清空、连按两次退出（都不打 traceback）。"""
+    global _ctrl_c_at
     console.print() # 输出空行
     if not interactive():
         return input("❯ ")
-    text = _session_get().prompt()
+    try:
+        text = _session_get().prompt()
+    except KeyboardInterrupt:
+        now = time.monotonic()
+        if now - _ctrl_c_at <= CTRL_C_WINDOW:
+            raise EOFError  # 第二次：走 main 的收工路径——干净退出，不是错误
+        _ctrl_c_at = now
+        console.print("[dim]再按一次 Ctrl+C 退出（或 Ctrl+D）[/]")
+        return ""  # 第一次：当作清空当前输入，回到提示行
+    _ctrl_c_at = 0.0
     _erase_input_echo(text)  # 擦掉输入回显——避免与「用户」面板重复
     return text
 

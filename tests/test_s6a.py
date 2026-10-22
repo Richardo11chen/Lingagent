@@ -100,3 +100,33 @@ def test_pipe_exhausted_exits_cleanly(tmp_path):
     )
     assert r.returncode == 0, r.stderr
     assert "EOFError" not in r.stderr and "Traceback" not in r.stderr
+
+
+def test_slash_commands_autocomplete():  # 输入 / 就列命令——不用记口令，也不用查文档
+    from prompt_toolkit.document import Document
+
+    from agent_harness.tui import _CommandCompleter
+
+    c = _CommandCompleter()
+    assert {x.text for x in c.get_completions(Document("/", 1), None)} == {"/model", "/trace"}
+    assert [x.text for x in c.get_completions(Document("/tr", 3), None)] == ["/trace"]
+    assert list(c.get_completions(Document("hello", 5), None)) == []  # 普通输入不弹菜单
+    # 打全了就收菜单——否则 Enter 会去「接受补全」，用户得按两次才发得出去
+    assert list(c.get_completions(Document("/model", 6), None)) == []
+    # 打全了就收菜单——否则 Enter 会去「接受补全」，用户得按两次才发得出去
+    assert list(c.get_completions(Document("/model", 6), None)) == []
+
+
+def test_slash_commands_autocomplete():  # 输入 / 就列命令——不用记口令，也不用查文档
+    from prompt_toolkit.document import Document
+
+    from agent_harness.tui import _CommandCompleter
+
+    c = _CommandCompleter()
+    assert {x.text for x in c.get_completions(Document("/", 1), None)} == {"/model", "/trace"}
+    assert [x.text for x in c.get_completions(Document("/tr", 3), None)] == ["/trace"]
+    assert list(c.get_completions(Document("hello", 5), None)) == []  # 普通输入不弹菜单
+    # 打全了就收菜单——否则 Enter 会去「接受补全」，用户得按两次才发得出去
+    assert list(c.get_completions(Document("/model", 6), None)) == []
+    # 打全了就收菜单——否则 Enter 会去「接受补全」，用户得按两次才发得出去
+    assert list(c.get_completions(Document("/model", 6), None)) == []
