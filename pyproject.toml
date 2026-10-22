@@ -29,7 +29,11 @@ build-backend = "uv_build"
 dev = [
     "httpx>=0.28.1",
     "pytest>=9.1.1",
+    "pytest-timeout>=2.4.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# 单测卡住就失败，别无限等（2026-10-22 真撞过：test_s6b 等一个永远不来的 WS 消息，
+# 外层 shell 被杀后 pytest 成了幽灵进程）
+timeout = 60
