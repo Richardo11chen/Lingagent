@@ -12,7 +12,9 @@ from .tools import edit_file, read_file, run_shell, write_file
 SYSTEM_PROMPT = (
     "你是 agent-harness，一台会自己干活的 coding agent，工作目录是项目根。\n\n"
     "不必理会项目根目录下的CLAUDE.md 和 README.md。\n\n"
-    "运行环境：Windows（shell 是 cmd.exe）——用本平台原生命令。\n\n"
+    "开工前先确认环境：`ver` 看是什么系统，`where`（或 `which`）看命令到底解析到谁——"
+    "同名程序可能是两个东西（Windows 自带的 find 是文本搜索，GNU find 是找文件，"
+    "一条 find 可能扫遍整个盘）。不确定就用最保守的写法。\n\n"
     "工具使用策略：\n"
     "- 读代码/文件用 read_file。\n"
     "- 修改现有文件优先用 edit_file（old→new 精确替换，保留其余内容）；只有新建文件或整体重写才用 write_file（⚠️ 覆盖整个文件，会丢失未包含的内容）。\n"
@@ -38,7 +40,8 @@ tools = {
 
 
 def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
-                        max_steps: int | None = None, on_hook=None) -> dict:
+                        max_steps: int | None = None, on_hook=None,
+                        should_stop=None) -> dict:
     """每个会话的工具表：基础工具 + spawn_subagent（闭包持有该会话的装配）。
 
     模型 / 审批 / trace 都是会话级的——所以 spawn 不能一次性注册进模块级 tools。
@@ -55,6 +58,7 @@ def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
         depth=0,
         max_steps=max_steps,
         on_hook=on_hook,
+        should_stop=should_stop,
     )
     return session_tools
 
@@ -99,6 +103,7 @@ class SwitchableLLM:
             snip_keep_groups=self._settings.snip_keep_groups,
             thinking=p.thinking,
             reasoning_effort=p.reasoning_effort,
+            strip_think_tags=p.strip_think_tags,
         )
 
     def switch(self, name: str) -> str:

@@ -16,10 +16,9 @@ import uuid
 from pathlib import Path
 
 from .messages import Msg
+from .paths import APP_DIR
 
-# 存档根在应用目录下（~/.agent-harness/sessions）——项目目录干净、工具够不着，
-# 也不往家目录撒第二个点文件
-APP_DIR = Path.home() / ".agent-harness"
+# 存档根在应用目录下（~/.agent-harness/sessions）——项目目录干净、工具够不着
 SESSION_ROOT = APP_DIR / "sessions"
 LEGACY_SESSION_ROOT = Path.home() / ".agent_harness_sessions"  # 老位置（迁移用）
 
@@ -190,6 +189,11 @@ def save_messages(workspace: Path, session_id: str, msgs: list[Msg]) -> None:
             f.write(json.dumps(_msg_to_dict(m), ensure_ascii=False) + "\n")
 
 
+def list_trace_files(workspace: Path) -> list[Path]:
+    """本项目所有轨迹文件（清理与体检用）。"""
+    return sorted(_session_dir(workspace).glob("*.trace.jsonl"))
+
+
 def list_sessions(workspace: Path) -> list[dict]:
     """列历史会话（mtime 倒序）：[{id, mtime, first_user_msg}]。"""
     d = _session_dir(workspace)
@@ -215,6 +219,35 @@ def list_sessions(workspace: Path) -> list[dict]:
     return out
 
 
+def _repair_tool_pairs(msgs: list[Msg]) -> list[Msg]:
+    """补上「assistant 发了 tool_calls 但没有对应 tool 回应」的洞。
+
+    为什么非补不可：协议要求 N 个调用 ↔ N 条回应。断点/写坏一行之后历史里留一个
+    悬空调用，之后每次请求都是 400——整个会话再也打不开，只能手改 JSONL。
+    """
+    answered = {m.tool_call_id for m in msgs if m.role == "tool" and m.tool_call_id}
+    out: list[Msg] = []
+    for m in msgs:
+        out.append(m)
+        if m.role != "assistant" or not m.tool_calls:
+            continue
+        for tc in m.tool_calls:
+            tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+            name = ""
+            fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
+            if isinstance(fn, dict):
+                name = fn.get("name", "")
+            elif fn is not None:
+                name = getattr(fn, "name", "")
+            if tc_id and tc_id not in answered:
+                out.append(Msg(
+                    "tool", "（上次会话在这里中断，这次调用没有结果）",
+                    tool_name=name or None, tool_call_id=tc_id,
+                ))
+                answered.add(tc_id)
+    return out
+
+
 def load_session(workspace: Path, session_id: str) -> list[Msg]:
     """读回 Msg 列表——坏行跳过；meta 行（会话属性，如模型选择）不进消息。"""
     path = session_path(workspace, session_id)
@@ -231,7 +264,7 @@ def load_session(workspace: Path, session_id: str) -> list[Msg]:
             if not isinstance(rec, dict) or rec.get("kind") == "meta":
                 continue
             msgs.append(_dict_to_msg(rec))
-    return msgs
+    return _repair_tool_pairs(msgs)
 
 
 def save_session_model(workspace: Path, session_id: str, profile: str) -> None:

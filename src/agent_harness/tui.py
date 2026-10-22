@@ -3,6 +3,7 @@
 分工：prompt_toolkit 管交互（输入行）；rich 管渲染（消息面板、流式 Markdown、工具提示）。
 """
 
+import asyncio
 import shutil
 import sys
 import time
@@ -351,11 +352,13 @@ def _approval_session() -> PromptSession:
     return _approval
 
 
-def show_approval(command: str, reason: str = "") -> str:
+def show_approval(command: str, reason: str = "", timeout: float = 300.0) -> str:
     """人工审批：先说「为什么问你」，再给完整命令，最后一行问要不要执行。
 
     只给命令不够——`find /c /v "" README.md` 看着像只读统计，在 GNU find 语义下
     却会遍历整盘。判定原因必须跟着命令一起递到人眼前，否则审批只是走过场。
+
+    timeout：没人答复就按驳回处理（0 = 一直等）。人走开了不该把整台机器卡死。
     """
     prompt_text = "允许执行吗？(y/n) "
     global _live, _blocks
@@ -372,18 +375,41 @@ def show_approval(command: str, reason: str = "") -> str:
     console.print(Text(f"⚠ {reason or '需要确认'}", style="yellow"))
     console.print(Text("  " + command, style="dim"))  # 全文——审批不该藏东西
 
+    timed_out = False
+
+    def _arm_timeout(app) -> None:
+        """到点自动收掉提示行。pre_run 拿得到 Application，这是 prompt_toolkit 给的正门。"""
+        if timeout <= 0:
+            return
+
+        def _fire() -> None:
+            nonlocal timed_out
+            timed_out = True
+            app.exit("")  # 空输入 → 走默认驳回
+
+        try:
+            asyncio.get_running_loop().call_later(timeout, _fire)
+        except RuntimeError:  # 没有事件循环（理论上进不到这里）——退化成不超时
+            pass
+
     ans = "n"  # 默认驳回——异常路径也有一张安全票
     try:
         if not interactive():
             ans = input(prompt_text)
         else:
-            ans = _approval_session().prompt(message=[("fg:ansiyellow bold", prompt_text + "❯ ")])
+            ans = _approval_session().prompt(
+                message=[("fg:ansiyellow bold", prompt_text + "❯ ")], pre_run=_arm_timeout,
+            )
     except EOFError:
         pass  # 输入读尽（管道喂完 / Ctrl+Z）——维持默认驳回
     except BaseException:  # Ctrl+C 等：Live 先归位再抛
         if restart:
             _live_open()
         raise
+
+    if timed_out:
+        console.print(Text(f"⚠ 审批超时（{timeout:g} 秒没人答复），按驳回处理", style="yellow"))
+        ans = "n"
 
     # 此时 Live 仍停着——这一行永久落屏（审批的屏幕侧留痕；文件侧在 trace）
     # 不重复命令：上面两行已经印着原因和全文，这行只记「谁按了哪个键」

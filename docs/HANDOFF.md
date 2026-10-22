@@ -47,6 +47,13 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
     - 退出：`Ctrl+C` 两次或 `Ctrl+D`，都不打 traceback；banner 不再教人敲 exit
     - 输入 `/` 自动弹命令菜单（`prompt_toolkit` completer，`/model` `/trace`）
     - `list_sessions` 不再把 `*.trace.jsonl` 当会话（数字终于对得上：46 会话 / 7 轨迹）
+  - 与 Pi 对齐批次（用户逐条拍板）：
+    - `ThinkSplitter` 变成 profile 开关 `strip_think_tags`（只有 MiniMax 开）——别家不在每条流上付这份延迟
+    - 工具菜单/注册表加了守门测试（`test_tool_menu_matches_registry`），漏一边直接红
+    - 补四条"不补就回不来"的：`load_session` 自愈悬空 tool_calls（否则恢复后 400 打不开）、停止信号透传子 agent、`read_file`/`edit_file` 认 GBK/UTF-8-sig、WS 断开时释放审批线程
+    - 审批改为**超时驳回**（`[loop] approval_timeout`，默认 300s，0 = 一直等），TUI 用 `pre_run` 定时 `app.exit`，网页用 `Event.wait(timeout)` + `notice` 事件
+    - 系统提示**不再断言环境**（"shell 是 cmd.exe" 是那次 91MB 的根）→ 改成"先 `ver` / `where` 确认，同名程序可能是两个东西"
+    - 轨迹可清理：`--clean-trace DAYS`；`[trace] enabled` 一键关；`/trace` 记查看时间，30 天没看启动时提醒一次
   - 体验一致性批次（审美审查后）：`show_note` 分 info/warn/error 三档（失败终于不是洋红色）；TUI 与网页共用 `TRACE_FIELD_CHARS` + `ellipsis_note`（同一句截断说明），工具详情两端都截 50；网页错误改独立 `.err-line`（左线 + 红字）；等第一个字时两端都有「⋯」；网页底部加 `/model` `/trace` 一行提示；断线清残留审批卡；网页加「停止」（`loop.should_stop` 每步检查 + `interrupt` 消息，正在跑的那一步会跑完）；`/model` 输入非法时不再静默吞
 
 未完成：

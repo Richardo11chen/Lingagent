@@ -52,9 +52,27 @@ def run_shell(command: str, timeout: float = SHELL_TIMEOUT) -> str:
         return f"命令超时（>{timeout:g} 秒）已被终止：{command}"
     return f"退出码 {proc.returncode}\n{stdout}{stderr}"
 
+_ENCODINGS = ("utf-8", "utf-8-sig", "gbk")  # Windows 项目里 GBK 文件不罕见
+
+
+def _read_text(p: Path) -> str:
+    """按常见编码依次尝试；都失败了宽松解码（坏字符变 ?，至少能读能改）。
+
+    死认 utf-8 的代价很实在：碰到 GBK 文件工具直接抛异常，而模型改不了文件编码，
+    只能绕开——等于这个文件对它不可读。
+    """
+    raw = p.read_bytes()
+    for enc in _ENCODINGS:
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
 def read_file(path: str) -> str:
     """读取文件内容"""
-    return Path(path).read_text(encoding="utf-8")
+    return _read_text(Path(path))
 
 def write_file(path: str, content: str):
     """写入文件内容"""
@@ -67,7 +85,7 @@ def edit_file(path: str, old: str, new: str) -> str:
     old 必须在文件中唯一出现——0 次（不匹配）或多次（歧义）都拒绝并回灌原因。
     """
     p = Path(path)
-    content = p.read_text(encoding="utf-8")
+    content = _read_text(p)
     count = content.count(old)
     if count == 0:
         return "编辑失败：未找到要替换的文本（old 与文件当前内容不匹配，请先读文件确认）。"

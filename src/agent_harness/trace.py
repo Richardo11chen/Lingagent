@@ -14,9 +14,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from .paths import APP_DIR
+
 # 单条事件的读入上限：trace 存全文（审计账），但读的时候不必把 90MB 的一行
 # 也塞进内存和界面。超限的记录只留一条摘要占位（原始字节仍在文件里，需要时直接看文件）。
 MAX_RECORD_BYTES = 2 * 1024 * 1024
+
+# 上一次「人看过轨迹」的时间戳——用来判断这个功能是不是已经没人用了
+VIEW_STAMP = APP_DIR / "last_trace_view"
 
 # 单字段显示上限：终端和网页共用同一个数、同一句话——两处不一样会让人以为数据不同
 TRACE_FIELD_CHARS = 2000
@@ -94,3 +99,40 @@ class _Timed:
             self.fields["error"] = f"{type(exc).__name__}: {exc}"
         self._tracer.emit(self._kind, **self.fields)
         return False  # 不吞异常——照常往外抛
+
+
+def mark_viewed() -> None:
+    """记一笔「有人看过轨迹」。忽略失败——这只是一条体温计，不是账本。"""
+    try:
+        VIEW_STAMP.parent.mkdir(parents=True, exist_ok=True)
+        VIEW_STAMP.write_text(str(int(time.time())), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def days_since_viewed() -> float | None:
+    """多久没看过 /trace（天；从没看过 = None）。"""
+    try:
+        return (time.time() - int(VIEW_STAMP.read_text(encoding="utf-8").strip())) / 86400
+    except (OSError, ValueError):
+        return None
+
+
+def clean_traces(root: Path, older_than_days: float = 0) -> tuple[int, int]:
+    """删掉 root 下所有 `.trace.jsonl`（0 = 全删，否则只删够老的）。返回 (个数, 字节)。
+
+    只动轨迹：session 是模型的账，trace 是给人看的账——前者不能碰。
+    """
+    cutoff = time.time() - older_than_days * 86400
+    count = freed = 0
+    for p in root.rglob("*.trace.jsonl"):
+        try:
+            st = p.stat()
+            if older_than_days and st.st_mtime > cutoff:
+                continue
+            p.unlink()
+            count += 1
+            freed += st.st_size
+        except OSError:
+            continue
+    return count, freed

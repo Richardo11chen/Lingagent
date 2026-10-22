@@ -32,7 +32,7 @@ from .session import (
     save_session_model,
     trace_path,
 )
-from .trace import Tracer, TRACE_FIELD_CHARS, ellipsis_note, load_trace
+from .trace import Tracer, TRACE_FIELD_CHARS, ellipsis_note, load_trace, mark_viewed
 
 app = FastAPI()
 
@@ -89,15 +89,20 @@ async def ws_endpoint(ws: WebSocket):
             approval["event"] = ev
             approval["result"] = False
             send({"type": "approval_request", "command": command, "reason": reason})
-            ev.wait()
+            waited = ev.wait(timeout=settings.approval_timeout or None)
+            if not waited:  # 没人回答：按驳回处理，别让这一轮永远挂着
+                send({"type": "notice", "text": f"审批超时（{settings.approval_timeout:g} 秒无人答复），已按驳回处理。"})
+                return False
             return approval["result"]
 
         old_len = len(history)
-        tracer = Tracer(trace_path(WORKSPACE, session_id))  # 每轮现取——resume 换 id 后自动跟到新文件
+        # 每轮现取——resume 换 id 后自动跟到新文件；关掉 trace 就不写盘
+        tracer = Tracer(trace_path(WORKSPACE, session_id)) if settings.trace_enabled else Tracer()
         sp = build_system_prompt()
         session_tools = build_session_tools(  # S10：本会话工具表（带 spawn_subagent）
             llm, sp, approver=approver, tracer=tracer,
             max_steps=settings.max_steps, on_hook=on_hook,
+            should_stop=stop_event.is_set,
         )
         run = partial(
             agent_loop,
@@ -162,6 +167,7 @@ async def ws_endpoint(ws: WebSocket):
                     )
             elif mtype == "trace_request":  # S8：轨迹时间线（只读投影——决策 4）
                 recs = load_trace(trace_path(WORKSPACE, session_id))
+                mark_viewed()
                 await ws.send_json(
                     {"type": "trace", "list": [_slim(r) for r in recs[-1000:]], "total": len(recs)}
                 )
@@ -196,6 +202,12 @@ async def ws_endpoint(ws: WebSocket):
                     await ws.send_json({"type": "history", "messages": rendered})
     except WebSocketDisconnect:
         pass
+    finally:
+        # 连接没了 = 没人能回答那条审批：放掉阻塞的线程（否则每断一次线泄漏一个）
+        ev = approval.get("event")
+        if ev is not None:
+            approval["result"] = False
+            ev.set()
 
 
 def main() -> None:

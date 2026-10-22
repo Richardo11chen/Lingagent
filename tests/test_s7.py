@@ -183,7 +183,7 @@ def test_request_extracts_think_to_reasoning(monkeypatch):  # 走一遍 _request
     from agent_harness.messages import Msg
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
-    llm = DeepSeekLLM("sys")
+    llm = DeepSeekLLM("sys", strip_think_tags=True)  # 剥离是按 profile 开的（只有这类网关才挂）
 
     def delta(content):
         return SimpleNamespace(content=content, tool_calls=None, reasoning_content=None)
@@ -211,7 +211,7 @@ def test_request_assembles_tool_calls_with_think_split(monkeypatch):
     from agent_harness.messages import Msg
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
-    llm = DeepSeekLLM("sys")
+    llm = DeepSeekLLM("sys", strip_think_tags=True)  # 只有开了开关的 profile 才剥
 
     def delta(content=None, tc=None):
         return SimpleNamespace(content=content, tool_calls=tc, reasoning_content=None)
@@ -275,3 +275,49 @@ def test_request_carries_private_params_when_set(monkeypatch):
 
     assert captured["extra_body"] == {"thinking": {"type": "enabled"}}
     assert captured["reasoning_effort"] == "high"
+
+
+def test_think_tags_kept_when_profile_does_not_ask(monkeypatch):  # 没开开关：正文一字不动
+    from types import SimpleNamespace
+
+    from agent_harness.llm import DeepSeekLLM
+    from agent_harness.messages import Msg
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
+    llm = DeepSeekLLM("sys")  # 默认不剥
+
+    def delta(content):
+        return SimpleNamespace(content=content, tool_calls=None, reasoning_content=None)
+
+    chunks = [
+        SimpleNamespace(choices=[SimpleNamespace(delta=delta("<mm:think>想"))]),
+        SimpleNamespace(choices=[SimpleNamespace(delta=delta("</mm:think>答"))]),
+    ]
+    llm._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: iter(chunks)))
+    )
+    text, _, reasoning = llm([Msg("user", "hi")], [])
+    assert text == "<mm:think>想</mm:think>答" and reasoning == ""
+
+
+def test_think_tags_kept_when_profile_does_not_ask(monkeypatch):  # 没开开关：正文一字不动
+    from types import SimpleNamespace
+
+    from agent_harness.llm import DeepSeekLLM
+    from agent_harness.messages import Msg
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
+    llm = DeepSeekLLM("sys")  # 默认不剥
+
+    def delta(content):
+        return SimpleNamespace(content=content, tool_calls=None, reasoning_content=None)
+
+    chunks = [
+        SimpleNamespace(choices=[SimpleNamespace(delta=delta("<mm:think>想"))]),
+        SimpleNamespace(choices=[SimpleNamespace(delta=delta("</mm:think>答"))]),
+    ]
+    llm._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: iter(chunks)))
+    )
+    text, _, reasoning = llm([Msg("user", "hi")], [])
+    assert text == "<mm:think>想</mm:think>答" and reasoning == ""

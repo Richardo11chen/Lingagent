@@ -15,6 +15,7 @@ from .assembly import (
 )
 from .session import (
     list_sessions,
+    list_trace_files,
     load_session,
     load_session_model,
     new_session_id,
@@ -25,7 +26,7 @@ from .session import (
 )
 from .loop import agent_loop
 from .llm import Msg, DeepSeekLLM
-from .trace import Tracer, load_trace
+from .trace import Tracer, days_since_viewed, load_trace, mark_viewed
 from .weblaunch import ensure_web
 
 def choose_session(workspace: Path) -> tuple[str, list[Msg]]:
@@ -67,16 +68,54 @@ def choose_session(workspace: Path) -> tuple[str, list[Msg]]:
         else:
             tui.show_note("没这个选项——按提示来", "warn")
 
+NUDGE_DAYS = 30  # 轨迹这么久没人看，就该考虑清掉或关掉
+
+
+def _trace_nudge(settings) -> None:
+    """轨迹堆着没人看时提醒一句（只提示：删/关都由人决定）。"""
+    if not settings.trace_enabled:
+        return
+    days = days_since_viewed()
+    if days is None:  # 从没看过：拿最早的轨迹文件当基准，别对新项目唠叨
+        files = list_trace_files(WORKSPACE)
+        if not files:
+            return
+        try:
+            days = (time.time() - min(f.stat().st_mtime for f in files)) / 86400
+        except OSError:
+            return
+    if days >= NUDGE_DAYS:
+        tui.show_note(
+            f"轨迹已 {int(days)} 天没打开过——清空间：uv run agent-harness --clean-trace 30；"
+            f"不需要就在配置里设 [trace] enabled = false",
+            "warn",
+        )
+
+
 def main() -> None:
     import argparse
 
     ap = argparse.ArgumentParser(description="Agent Harness CLI")
     ap.add_argument("--model", help="模型 profile 名（配置 [models.*]；缺省用 default）")
+    ap.add_argument(
+        "--clean-trace", type=int, metavar="DAYS",
+        help="删掉 DAYS 天前的轨迹文件（0 = 全部），腾空间；不启动会话",
+    )
     args = ap.parse_args()
+
+    if args.clean_trace is not None:  # 清理不该要求 API key
+        from .session import SESSION_ROOT
+        from .trace import clean_traces
+
+        n, freed = clean_traces(SESSION_ROOT, older_than_days=args.clean_trace)
+        print(f"清掉 {n} 个轨迹文件，释放 {freed / 1048576:.1f} MB")
+        return
 
     base_prompt = build_system_prompt()
     llm, settings = load_settings_and_llm(base_prompt, args.model)  # 可切换门面（流式）
-    approver = lambda cmd, reason="": tui.show_approval(cmd, reason).strip().lower() == "y"
+    approver = lambda cmd, reason="": (
+        tui.show_approval(cmd, reason, timeout=settings.approval_timeout).strip().lower() == "y"
+    )
 
     web_started: list[str] = []
     if settings.web_autostart and tui.interactive():  # 管道/脚本模式不拉网页端
@@ -93,7 +132,8 @@ def main() -> None:
         llm.switch(target)
     if args.model:  # 显式指定 → 落账（这个会话从此认它）
         save_session_model(WORKSPACE, session_id, llm.current_profile)
-    tracer = Tracer(trace_path(WORKSPACE, session_id))  # S8：轨迹与 session 同目录同 id
+    # S8：轨迹与 session 同目录同 id；关掉 [trace] enabled 就给空对象（不写盘）
+    tracer = Tracer(trace_path(WORKSPACE, session_id)) if settings.trace_enabled else Tracer()
     session_tools = build_session_tools(  # S10：本会话工具表（带 spawn_subagent）
         llm, base_prompt, approver=approver, tracer=tracer,
         max_steps=settings.max_steps, on_hook=tui.show_hook,
@@ -102,6 +142,7 @@ def main() -> None:
     if history:
         tui.show_history(history)  # 恢复的会话：把历史渲染出来
     tui.show_web_hint(web_started)  # 链接放历史之后（长历史时不用往上翻）
+    _trace_nudge(settings)
     while True:
         try:
             goal = tui.ask().strip()
@@ -111,6 +152,7 @@ def main() -> None:
             break
         if goal == "/trace" or goal.startswith("/trace "):  # S8：轨迹时间线（只读投影）
             recs = load_trace(trace_path(WORKSPACE, session_id))
+            mark_viewed()  # 体温计：这个功能还有人在用吗
             arg = goal[len("/trace"):].strip()
             if not arg:
                 tui.show_trace(recs, session_id)      # 总览

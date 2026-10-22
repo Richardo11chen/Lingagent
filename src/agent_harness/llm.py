@@ -170,6 +170,7 @@ class DeepSeekLLM:
         snip_keep_groups: int = 3,
         thinking: str = "off",
         reasoning_effort: str = "off",
+        strip_think_tags: bool = False,
     ):
         key = api_key or os.environ.get(api_key_env, "")  # 直写优先；不写回退环境变量
         if not key:
@@ -182,6 +183,7 @@ class DeepSeekLLM:
         self._snip_keep_groups = snip_keep_groups
         self._thinking = thinking
         self._reasoning_effort = reasoning_effort
+        self._strip_think_tags = strip_think_tags
         self._system_prompt = system_prompt
 
     def _request(self, api_messages: list[dict], tools: list[dict], on_text, on_reasoning=None):
@@ -206,7 +208,9 @@ class DeepSeekLLM:
         stream = self._client.chat.completions.create(**kwargs)
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
-        splitter = ThinkSplitter()  # 正文里的 <mm:think> 剥去思考通道（MiniMax 形态）
+        # 只有正文里包 <mm:think> 的网关才挂拆分器（MiniMax 形态）；
+        # 别家不该为一个厂商的输出格式在每条流上付延迟和维护成本
+        splitter = ThinkSplitter() if self._strip_think_tags else None
 
         def _emit(piece: str, is_think: bool) -> None:
             if is_think:
@@ -231,8 +235,11 @@ class DeepSeekLLM:
                 if on_reasoning:
                     on_reasoning(rc)
             if delta.content:
-                for piece, is_think in splitter.feed(delta.content):
-                    _emit(piece, is_think)
+                if splitter is None:
+                    _emit(delta.content, False)
+                else:
+                    for piece, is_think in splitter.feed(delta.content):
+                        _emit(piece, is_think)
             if delta.tool_calls:
                 for tcd in delta.tool_calls:
                     slot = acc.setdefault(
@@ -246,8 +253,9 @@ class DeepSeekLLM:
                             slot["function"]["name"] = tcd.function.name
                         if tcd.function.arguments:  # arguments 分片累积
                             slot["function"]["arguments"] += tcd.function.arguments
-        for piece, is_think in splitter.flush():  # 收尾：派发残留缓冲
-            _emit(piece, is_think)
+        if splitter is not None:
+            for piece, is_think in splitter.flush():  # 收尾：派发残留缓冲
+                _emit(piece, is_think)
         raw = [acc[i] for i in sorted(acc)]  # 按 index 排序——与到达顺序无关
         return "".join(text_parts), raw, "".join(reasoning_parts)
 

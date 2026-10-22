@@ -1,4 +1,4 @@
-"""配置（配置维·运行时超参）：读 ~/.agent_harness.toml。
+"""配置（配置维·运行时超参）：读 ~/.agent-harness/config.toml。
 
 模型：多套 profile（[models.*] + [model].default）——只覆盖 OpenAI 兼容面
 （换 name/base_url/api_key_env 即可接厂商或中转站）；老格式单个 [model] 节自动兼容。
@@ -10,8 +10,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# 应用目录：所有自己的东西都收在一个带连字符的目录里，不往家目录撒点文件
-APP_DIR = Path.home() / ".agent-harness"
+from .paths import APP_DIR
 
 # 默认 ~/.agent-harness/config.toml；AGENT_HARNESS_CONFIG 可覆盖（测试/多环境）
 CONFIG_PATH = Path(os.environ.get("AGENT_HARNESS_CONFIG") or (APP_DIR / "config.toml"))
@@ -41,6 +40,7 @@ class ModelProfile:
     base_url: str = "https://api.deepseek.com"
     api_key_env: str = "DEEPSEEK_API_KEY"
     api_key: str = ""  # 直写密钥（优先于 api_key_env；明文落盘——示例文件别提交进仓库）
+    strip_think_tags: bool = False  # 正文里包 <mm:think>…</mm:think> 的网关才开（MiniMax 形态）
     temperature: float = 1.0
     thinking: str = "off"  # "enabled" / "disabled" / "off"（off = 不传）
     reasoning_effort: str = "off"  # "low" / "high" / "max" / "off"（off = 不传）
@@ -52,12 +52,14 @@ class Settings:
     models: dict[str, ModelProfile] = field(default_factory=lambda: {"default": ModelProfile()})
     # 全局（与模型无关）
     max_steps: int = 40
+    approval_timeout: float = 300.0  # 秒：没人答复就按驳回处理（0 = 一直等）
     compact_threshold: int = 70_000
     keep_last: int = 5
     snip_keep_groups: int = 3
     server_host: str = "127.0.0.1"
     server_port: int = 8000
     web_autostart: bool = True  # 进 TUI 时自动把网页端（后端 + 前端 dev server）拉起来
+    trace_enabled: bool = True  # 写轨迹文件（关掉 = 只留 session，省磁盘）
 
     def model(self, name: str | None = None) -> ModelProfile:
         """取 profile（指定名 或 default）；名字不存在回退 default。"""
@@ -71,6 +73,7 @@ def _profile_from(data: dict) -> ModelProfile:
     p.api_key_env = str(data.get("api_key_env", p.api_key_env))
     p.api_key = str(data.get("api_key", p.api_key))
     p.temperature = float(data.get("temperature", p.temperature))
+    p.strip_think_tags = bool(data.get("strip_think_tags", p.strip_think_tags))
     th = str(data.get("thinking", p.thinking)).lower()
     p.thinking = th if th in ("enabled", "disabled", "off") else "off"  # 非法回退 off（不传）
     eff = str(data.get("reasoning_effort", p.reasoning_effort)).lower()
@@ -99,6 +102,7 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
 
     lp = data.get("loop", {})
     s.max_steps = int(lp.get("max_steps", s.max_steps))
+    s.approval_timeout = float(lp.get("approval_timeout", s.approval_timeout))
 
     ctx = data.get("context", {})
     s.compact_threshold = int(ctx.get("compact_threshold", s.compact_threshold))
@@ -111,6 +115,9 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
 
     wb = data.get("web", {})
     s.web_autostart = bool(wb.get("autostart", s.web_autostart))
+
+    tr = data.get("trace", {})
+    s.trace_enabled = bool(tr.get("enabled", s.trace_enabled))
 
     if s.default_model not in s.models:  # default 指向不存在的 profile → 当场说清楚（别等 KeyError）
         raise SystemExit(
