@@ -15,3 +15,6 @@ wheels/
 
 # 项目身份（harness 自己用；跟着工作目录走，不该进版本库）
 .agent-harness-id
+
+# 超长工具输出的全文（临时，7 天自动清）
+.agent-harness-out/

@@ -3,7 +3,7 @@
 import sys
 import time
 
-from agent_harness.tools import run_shell, task_output, task_stop
+from agent_harness.tools import read_file, run_shell, task_output, task_stop
 
 
 def test_run_shell_timeout_kills_hang():
@@ -131,3 +131,27 @@ def test_task_stop_kills_it_but_keeps_the_last_output():  # 停了还能回看�
 def test_task_output_rejects_unknown_id():  # 别静默返回空，让它知道 id 打错了
     out = task_output("t999")
     assert "没有任务" in out
+
+
+def test_oversized_result_lands_in_a_readable_file(tmp_path, monkeypatch):
+    """超限时两件事：上下文里给头尾，全文落盘并给出可读路径（省掉重跑原命令）。"""
+    from agent_harness.tools import DUMP_DIR, cap_result
+
+    monkeypatch.chdir(tmp_path)
+    big = "A" * 40_000 + "MIDDLE" + "TAIL-ERR"
+    out = cap_result(big)
+
+    assert DUMP_DIR in out and "sed -n" in out  # 提示里能直接照着做
+    dumps = list((tmp_path / DUMP_DIR).glob("*.txt"))
+    assert len(dumps) == 1
+    assert read_file(str(dumps[0])) == big  # 全文一字不少，且 read_file 读得到（围栏内）
+    assert out.startswith("A" * 100) and out.endswith("TAIL-ERR")  # 头尾照旧
+    assert len(out) < 33_000
+
+
+def test_small_result_does_not_touch_the_disk(tmp_path, monkeypatch):  # 没超限就不该拉目录
+    from agent_harness.tools import DUMP_DIR, cap_result
+
+    monkeypatch.chdir(tmp_path)
+    assert cap_result("ok") == "ok"
+    assert not (tmp_path / DUMP_DIR).exists()

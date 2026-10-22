@@ -93,6 +93,8 @@ cd web && npx tsc --noEmit     # 前端类型检查
 | 会话存档 | `~/.agent-harness/sessions/<项目名-身份前8位>/<会话id>.jsonl` | 一行一条消息，append-only |
 | 轨迹 | 同目录 `<会话id>.trace.jsonl` | 一步一条事件，含工具结果**全文**，只增不减 |
 | 项目身份 | 工作目录下的 `.agent-harness-id` | 一行 uuid，决定历史归谁 |
+| 超长输出的全文 | 工作目录下的 `.agent-harness-out/` | 已 gitignore，留 7 天；给模型分段读用 |
+| 后台任务日志 | `~/.agent-harness/tasks/<时间戳>-tN.log` | 留 7 天 |
 
 旧版本把这两样放在 `~/.agent_harness.toml` 和 `~/.agent_harness_sessions/`，首次运行会自动搬到新位置。
 
@@ -109,7 +111,7 @@ cd web && npx tsc --noEmit     # 前端类型检查
 
 真发生压缩时会往对话里插一行提示（`⟳ 上下文偏长…`），不会静默改小上下文。
 
-关于结果长度：进模型上下文（history / session）的那份截断到 32k 字符（头 24k + 尾 8k，中间注明省略）；**trace 里保留全文**。读取侧也有护栏——单条超过 2MB 的事件不解析（只显示摘要），网页端单字段最多 2k 字符。
+关于结果长度：进模型上下文（history / session）的那份截断到 32k 字符（头 24k + 尾 8k，中间注明省略）；**被省略的中间那段不丢**——落在项目根的 `.agent-harness-out/`（已 gitignore，留 7 天）并把路径写进提示，模型可以直接 `read_file` 或 `sed -n` 读那一段，不用把原命令重跑一遍。trace 里保留全文。读取侧也有护栏——单条超过 2MB 的事件不解析（只显示摘要），网页端单字段最多 2k 字符。
 
 ## 已知边界（有意不做的）
 

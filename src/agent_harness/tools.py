@@ -16,22 +16,64 @@ MAX_RESULT_CHARS = 32_000
 _HEAD_CHARS = 24_000  # 截断时保留头尾：开头是定位信息，结尾是报错摘要
 _TAIL_CHARS = 8_000
 
+# 超限结果的全文落这里（工作目录内，已 gitignore）。为什么不放 ~/.agent-harness：
+# 模型手里的 read_file 只认项目内路径——路径围栏是这套东西里唯一的真边界，
+# 不为了省一次命令去放宽它。dump 留 7 天，和后台任务日志一个规矩。
+DUMP_DIR = ".agent-harness-out"
+DUMP_KEEP_DAYS = 7
+
 
 def cap_result(text: str, limit: int = MAX_RESULT_CHARS) -> str:
     """把工具结果压到上限内（头 + 尾 + 省略说明）——只用于进 history 的那一份。
 
     为什么保留尾部：命令失败的原因、traceback 结尾、pytest 总结都在最后几行，
     只留开头会让模型看不到红在哪。
+
+    中间那段不是丢掉而是**落盘并给出路径**：原来只写"请用带范围的命令重新取"，
+    等于让模型把最贵的那条命令（全量 grep / 整份构建日志）再跑一遍；有了路径，
+    它第一次就能按需读那一段。
     """
     if len(text) <= limit:
         return text
     omitted = len(text) - _HEAD_CHARS - _TAIL_CHARS
+    where = _dump_full(text)
+    if where:
+        hint = f"全文在 {where}（相对项目根）——用 read_file 或 `sed -n '1,200p' {where}` 分段看"
+    else:
+        hint = "需要细节请用带范围的命令重新取（如 head / tail / grep 过滤）"
     return (
         f"{text[:_HEAD_CHARS]}\n\n"
-        f"[... 已省略中间 {omitted} 字符（原始输出共 {len(text)} 字符）。"
-        f"需要细节请用带范围的命令重新取（如 head / tail / findstr 过滤）...]\n\n"
+        f"[... 已省略中间 {omitted} 字符（原始输出共 {len(text)} 字符）。{hint}]\n\n"
         f"{text[-_TAIL_CHARS:]}"
     )
+
+
+def _dump_full(text: str) -> str:
+    """把全文写到工作目录的 `.agent-harness-out/`，返回相对路径；失败返回 ""。
+
+    落盘只是便利，不该让一次工具调用失败——写不进去就退回"重新取"那句提示。
+    """
+    try:
+        root = Path.cwd()
+        d = root / DUMP_DIR
+        d.mkdir(exist_ok=True)
+        _prune_dumps(d)
+        p = d / f"{time.strftime('%Y%m%d-%H%M%S')}-{os.urandom(3).hex()}.txt"
+        p.write_text(text, encoding="utf-8")
+        return p.relative_to(root).as_posix()
+    except OSError:
+        return ""
+
+
+def _prune_dumps(d: Path) -> None:
+    """顺手清掉过期 dump——临时文件不该攒成垃圾场。"""
+    cutoff = time.time() - DUMP_KEEP_DAYS * 86400
+    for p in d.glob("*.txt"):
+        try:
+            if p.stat().st_mtime < cutoff:
+                p.unlink()
+        except OSError:
+            continue
 
 
 def _clamp_timeout(value) -> float:
