@@ -247,20 +247,35 @@ def show_trace(recs: list[dict], session_id: str) -> None:
             verdict = "拦下" if r.get("verdict") == "deny" else "放行"
             reason = f" · {r.get('reason', '')}" if r.get("reason") else ""
             table.add_row(str(i), ts, "⚡ 策略", f"{verdict}（{r.get('by', '')}）{reason}"[:60], "")
+        elif kind == "oversized":
+            table.add_row(str(i), ts, "⚠ 超大", f"{r.get('bytes', '?')} 字节，超出读取上限（全文在文件里）", "")
     console.print(table)
     console.print("[dim]看某条全文：/trace N[/]")
+
+
+TRACE_DETAIL_CHARS = 4000  # 单字段钻取显示上限——一次命令能刷出几十 MB，全打出来会冻住终端
 
 
 def show_trace_event(rec: dict, idx: int) -> None:
     """单条事件的完整内容（/trace N）——总览表里钻进去看全文。
 
     内容走 Text（不走 markup 解析）——工具结果里带 [exit=0] 这类方括号是常态。
+    超长字段截断（trace 文件本身仍是全文）：看全文请直接开存档目录里的 .trace.jsonl。
     """
     body = Text()
     body.append(f"#{idx} · {rec.get('kind', '')}\n", style="bold")
     for k, v in rec.items():
+        text_v = v if isinstance(v, str) else str(v)
         body.append(f"{k}：", style="dim")
-        body.append(f"{v}\n")
+        if len(text_v) > TRACE_DETAIL_CHARS:
+            body.append(f"{text_v[:TRACE_DETAIL_CHARS]}\n")
+            body.append(
+                f"…（本字段共 {len(text_v)} 字符，此处只显示前 {TRACE_DETAIL_CHARS}；"
+                f"全文见存档目录下同名 .trace.jsonl）\n",
+                style="yellow",
+            )
+        else:
+            body.append(f"{text_v}\n")
     console.print(Panel(body, title="轨迹明细", title_align="left", border_style="dim"))
 
 
@@ -285,8 +300,13 @@ def _approval_session() -> PromptSession:
     return _approval
 
 
-def show_approval(command: str) -> str:
-    prompt_text = f"⚠️ 允许执行「{command}」吗？(y/n) "
+def show_approval(command: str, reason: str = "") -> str:
+    """人工审批：先说「为什么问你」，再给完整命令，最后一行问要不要执行。
+
+    只给命令不够——`find /c /v "" README.md` 看着像只读统计，在 GNU find 语义下
+    却会遍历整盘。判定原因必须跟着命令一起递到人眼前，否则审批只是走过场。
+    """
+    prompt_text = "允许执行吗？(y/n) "
     global _live, _blocks
     restart = False
     if _live is not None:
@@ -297,6 +317,9 @@ def show_approval(command: str) -> str:
         _live = None
         _blocks = []  # 旧块已印在屏幕上——新 Live 不重画，避免同一份内容印两遍
         restart = True
+
+    console.print(Text(f"⚠ {reason or '需要确认'}", style="yellow"))
+    console.print(Text("  " + command, style="dim"))  # 全文——审批不该藏东西
 
     ans = "n"  # 默认驳回——异常路径也有一张安全票
     try:
@@ -312,7 +335,10 @@ def show_approval(command: str) -> str:
         raise
 
     # 此时 Live 仍停着——这一行永久落屏（审批的屏幕侧留痕；文件侧在 trace）
-    console.print(f"[yellow]⚠  审批：{'已批准' if ans.strip().lower() == 'y' else '已驳回'}[/] [dim]· {command[:60]}[/]")
+    # 不重复命令：上面两行已经印着原因和全文，这行只记「谁按了哪个键」
+    decision = "已批准" if ans.strip().lower() == "y" else "已驳回"
+    tail = f" · {reason}" if reason else ""
+    console.print(f"[yellow]⚠  审批：{decision}{tail}[/]")
     if restart:
         _live_open()
     return ans

@@ -19,7 +19,7 @@ def make_tools():
 def test_approver_approves_executes_command(tmp_path):  # approver 批准 → 危险命令真执行（回灌执行输出，无驳回语）
     target = tmp_path / "demo_trash"
     llm = ScriptLLM([Action("run_shell", {"command": f"rm -rf {target}"})])
-    _, history = agent_loop("干活", llm, make_tools(), "sys", approver=lambda cmd: True)
+    _, history = agent_loop("干活", llm, make_tools(), "sys", approver=lambda cmd, reason: True)
     # 没有驳回语；回灌的是 run_shell 的执行输出（退出码开头）——证明命令真执行了
     assert not any("被驳回" in m.content for m in history if m.role == "user")
     assert any("退出码" in m.content for m in history if m.role == "user")
@@ -28,7 +28,7 @@ def test_approver_approves_executes_command(tmp_path):  # approver 批准 → �
 def test_approver_rejects_blocks_command(tmp_path):  # approver 驳回 → 回灌驳回语，命令不执行
     target = tmp_path / "demo_trash"
     llm = ScriptLLM([Action("run_shell", {"command": f"rm -rf {target}"})])
-    _, history = agent_loop("干活", llm, make_tools(), "sys", approver=lambda cmd: False)
+    _, history = agent_loop("干活", llm, make_tools(), "sys", approver=lambda cmd, reason: False)
     assert any("命令被驳回" in m.content for m in history if m.role == "user")
     # 没有任何执行输出（退出码）——命令没跑
     assert not any("退出码" in m.content for m in history if m.role == "user")

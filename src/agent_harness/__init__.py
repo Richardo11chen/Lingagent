@@ -76,7 +76,7 @@ def main() -> None:
 
     base_prompt = build_system_prompt()
     llm, settings = load_settings_and_llm(base_prompt, args.model)  # 可切换门面（流式）
-    approver = lambda cmd: tui.show_approval(cmd).strip().lower() == "y"
+    approver = lambda cmd, reason="": tui.show_approval(cmd, reason).strip().lower() == "y"
 
     web_started: list[str] = []
     if settings.web_autostart and tui.interactive():  # 管道/脚本模式不拉网页端
@@ -132,16 +132,26 @@ def main() -> None:
         tui.show_user(goal)
         tui.begin_stream()
         old_len = len(history)
-        reply, history = agent_loop(
-            goal, llm, session_tools, base_prompt,
-            approver=approver, history=history,
-            on_text=tui.stream_chunk, on_tool=tui.show_tool,
-            on_reasoning=tui.reasoning_chunk,
-            tracer=tracer,
-            pre_hooks=PRE_HOOKS, post_hooks=POST_HOOKS,
-            on_hook=tui.show_hook,
-            max_steps=settings.max_steps,
-        )
+        try:
+            reply, history = agent_loop(
+                goal, llm, session_tools, base_prompt,
+                approver=approver, history=history,
+                on_text=tui.stream_chunk, on_tool=tui.show_tool,
+                on_reasoning=tui.reasoning_chunk,
+                tracer=tracer,
+                pre_hooks=PRE_HOOKS, post_hooks=POST_HOOKS,
+                on_hook=tui.show_hook,
+                max_steps=settings.max_steps,
+            )
+        except KeyboardInterrupt:  # Ctrl+C：结束本轮，回到输入行（不是退出程序）
+            tui.end_stream()
+            tui.show_note("已中断本轮（这一轮的历史未落盘）")
+            continue
+        except Exception as e:  # 网络断了 / 模型报错 / 参数解析炸了——报一句，保住会话
+            # history 是被 agent_loop 换成新列表的（history + [...]），失败时原列表没被改写
+            tui.end_stream()
+            tui.show_note(f"本轮失败：{type(e).__name__}: {e}")
+            continue
         tui.end_stream()
         save_messages(WORKSPACE, session_id, history[old_len:])
 

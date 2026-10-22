@@ -118,7 +118,7 @@ def test_loop_traces_denied_dangerous(tmp_path):  # 驳回路径：审批与工�
     p = tmp_path / "t.trace.jsonl"
     llm = ScriptLLM([Action(tool="run_shell", args={"command": "rm -rf x"})])
     agent_loop("干活", llm, {"run_shell": lambda **kw: "不该执行"}, "sys",
-               approver=lambda cmd: False, tracer=Tracer(p), max_steps=5)
+               approver=lambda cmd, reason: False, tracer=Tracer(p), max_steps=5)
     recs = _recs(p)
     approval = next(r for r in recs if r["kind"] == "approval")
     tool = next(r for r in recs if r["kind"] == "tool")

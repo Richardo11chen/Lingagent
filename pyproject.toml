@@ -13,6 +13,7 @@ dependencies = [
     "prompt-toolkit>=3.0.53",
     "rich>=15.0.0",
     "uvicorn>=0.53.0",
+    "wcwidth>=0.2.13",
     "websockets>=17.2",
 ]
 

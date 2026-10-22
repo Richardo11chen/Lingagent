@@ -1,11 +1,16 @@
 """反馈校验器：跑测试 → 判红绿 → 生成报告（反馈必须是代码机制，规格 A.4(B)）。"""
 
 import subprocess
+import sys
 
 
 def run_tests(path: str = ".") -> str:
-    """工具化的判定：跑 pytest 拿红绿报告（触发自觉、判定代码化——决策 B）。"""
-    return run_sensors(["pytest", "-q", path])
+    """工具化的判定：跑 pytest 拿红绿报告（触发自觉、判定代码化——决策 B）。
+
+    用当前解释器 `-m pytest` 而不是裸 `pytest`：不依赖 PATH 里恰好有 venv 的 bin
+    （网页后端是被 TUI 派生的子进程，PATH 不保证一样）。
+    """
+    return run_sensors([sys.executable, "-m", "pytest", "-q", path])
 
 
 def _section(lines: list[str], marker: str) -> list[str]:

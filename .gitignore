@@ -12,3 +12,6 @@ wheels/
 
 # 本地环境变量 / 密钥（不入仓）
 .env
+
+# 项目身份（harness 自己用；跟着工作目录走，不该进版本库）
+.agent-harness-id

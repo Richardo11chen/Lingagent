@@ -99,7 +99,7 @@ def test_child_inherits_approver():
         "父任务": [Action(tool="spawn_subagent", args={"subtask": "子任务"})],
         "子任务": [Action(tool="run_shell", args={"command": "rm -rf x"})],
     })
-    spawn = _spawn(llm, tools, approver=lambda cmd: asked.append(cmd) or False)
+    spawn = _spawn(llm, tools, approver=lambda cmd, reason: asked.append(cmd) or False)
     agent_loop("父任务", llm, {**tools, "spawn_subagent": spawn}, "sys", max_steps=5)
     assert asked and "rm -rf" in asked[0]  # 同一个审批者：子 agent 的危险动作照样问人
 

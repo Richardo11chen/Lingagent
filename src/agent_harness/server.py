@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import os
 import threading
 from functools import partial
 
@@ -34,6 +35,19 @@ from .session import (
 from .trace import Tracer, load_trace
 
 app = FastAPI()
+
+TRACE_WIRE_CHARS = 2000  # 网页端单字段上限——result 可能是几十 MB，整条推给浏览器会冻住页面
+
+
+def _slim(rec: dict) -> dict:
+    """把一条轨迹记录压到适合过 WS 的大小（看全文请开存档目录里的 .trace.jsonl）。"""
+    out: dict = {}
+    for k, v in rec.items():
+        if isinstance(v, str) and len(v) > TRACE_WIRE_CHARS:
+            out[k] = v[:TRACE_WIRE_CHARS] + f"…（共 {len(v)} 字符，已截断）"
+        else:
+            out[k] = v
+    return out
 
 
 @app.websocket("/ws")
@@ -67,12 +81,15 @@ async def ws_endpoint(ws: WebSocket):
         def on_hook(by: str, reason: str) -> None:
             send({"type": "hook", "by": by, "reason": reason})
 
-        def approver(command: str) -> bool:
-            """线程内阻塞等前端答复——收消息 task 唤醒 Event。"""
+        def approver(command: str, reason: str) -> bool:
+            """线程内阻塞等前端答复——收消息 task 唤醒 Event。
+
+            reason 一起推给前端：只给命令的话，批的人不知道自己批的是什么风险。
+            """
             ev = threading.Event()
             approval["event"] = ev
             approval["result"] = False
-            send({"type": "approval_request", "command": command})
+            send({"type": "approval_request", "command": command, "reason": reason})
             ev.wait()
             return approval["result"]
 
@@ -99,7 +116,11 @@ async def ws_endpoint(ws: WebSocket):
             on_hook=on_hook,
             max_steps=settings.max_steps,
         )
-        reply, new_history = await asyncio.to_thread(run)
+        try:
+            reply, new_history = await asyncio.to_thread(run)
+        except Exception as e:  # 网络断了 / 模型报错 / 参数解析炸了——推给前端，别让界面一直转圈
+            send({"type": "error", "text": f"本轮失败：{type(e).__name__}: {e}"})
+            return
         history[:] = new_history  # 原地更新（闭包外的引用同步）
         save_messages(WORKSPACE, session_id, new_history[old_len:])
         await ws.send_json({"type": "assistant_done", "text": reply})
@@ -133,7 +154,9 @@ async def ws_endpoint(ws: WebSocket):
                     )
             elif mtype == "trace_request":  # S8：轨迹时间线（只读投影——决策 4）
                 recs = load_trace(trace_path(WORKSPACE, session_id))
-                await ws.send_json({"type": "trace", "list": recs[-1000:], "total": len(recs)})
+                await ws.send_json(
+                    {"type": "trace", "list": [_slim(r) for r in recs[-1000:]], "total": len(recs)}
+                )
             elif mtype == "sessions_request":  # 列历史会话（前端启动时问）
                 prune_empty_sessions(WORKSPACE)  # 顺手打扫（浏览器每刷新一次就留一个空占位）
                 items = [
@@ -177,11 +200,18 @@ def main() -> None:
     args = ap.parse_args()
 
     s = load_settings()
+    name = args.model or s.default_model
+    if args.model and args.model not in s.models:  # fail fast：别等 WS 连上才在 handler 里炸（前端只看到连接即断）
+        raise SystemExit(f"未知模型 profile：{args.model}（可用：{', '.join(s.models)}）")
     if args.model:
-        if args.model not in s.models:  # fail fast：别等 WS 连上才在 handler 里炸（前端只看到连接即断）
-            raise SystemExit(f"未知模型 profile：{args.model}（可用：{', '.join(s.models)}）")
         global _CLI_MODEL
         _CLI_MODEL = args.model  # ws_endpoint 构造 llm 时用
+    # 同样在这里把密钥也验掉：否则要等浏览器连上那一刻才 SystemExit，前端只看到「连接闪断」
+    p = s.model(name)
+    if not p.api_key and not os.environ.get(p.api_key_env):
+        raise SystemExit(
+            f"缺少 API key：profile {name} 没写 api_key，环境变量 {p.api_key_env} 也没设置"
+        )
     print("前端（网页界面）: http://localhost:5173（在 web/ 下 npm run dev）")
     uvicorn.run(app, host=s.server_host, port=s.server_port)
 

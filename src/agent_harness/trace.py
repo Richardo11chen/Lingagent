@@ -14,14 +14,28 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+# 单条事件的读入上限：trace 存全文（审计账），但读的时候不必把 90MB 的一行
+# 也塞进内存和界面。超限的记录只留一条摘要占位（原始字节仍在文件里，需要时直接看文件）。
+MAX_RECORD_BYTES = 2 * 1024 * 1024
+
 
 def load_trace(path: Path) -> list[dict]:
-    """读回轨迹：坏行跳过（与 session.load_session 同规矩）；文件不存在 = 空列表。"""
+    """读回轨迹：坏行跳过（与 session.load_session 同规矩）；文件不存在 = 空列表。
+
+    超大行（一次命令刷出几十 MB）不解析，换成摘要占位——否则 /trace 一次要吃进整份。
+    """
     if not path.exists():
         return []
     recs: list[dict] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
+    for raw in path.open("rb"):
+        if len(raw) > MAX_RECORD_BYTES:
+            recs.append({
+                "kind": "oversized",
+                "bytes": len(raw),
+                "note": f"单条事件 {len(raw)} 字节，超出读取上限，已省略（全文在 trace 文件里）",
+            })
+            continue
+        line = raw.decode("utf-8", "replace").strip()
         if not line:
             continue
         try:

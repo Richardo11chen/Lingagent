@@ -132,3 +132,41 @@ def test_session_model_meta_roundtrip(tmp_path):  # 会话级模型：meta 行�
     assert load_session_model(tmp_path, sid) == "deepseek-flash"
     assert [m.content for m in load_session(tmp_path, sid)] == ["hi"]  # meta 不进消息
     assert list_sessions(tmp_path)[0]["first_user_msg"] == "hi"        # 预览不受扰
+
+
+def test_project_id_file_is_created_once(tmp_path):  # 身份文件：一个项目一个 uuid，反复调用不变
+    sid = new_session_id(tmp_path)
+    first = (tmp_path / session_mod.PROJECT_ID_FILE).read_text(encoding="utf-8").strip()
+    assert first and sid
+    new_session_id(tmp_path)  # 再开一个会话——身份不该变
+    assert (tmp_path / session_mod.PROJECT_ID_FILE).read_text(encoding="utf-8").strip() == first
+
+
+def test_archive_survives_project_rename(tmp_path):  # 项目改名：历史跟着走（这是整个身份的用处）
+    ws = tmp_path / "proj"
+    ws.mkdir()
+    sid = new_session_id(ws)
+    save_messages(ws, sid, [Msg("user", "改名前写的")])
+
+    moved = tmp_path / "proj-renamed"
+    ws.rename(moved)
+
+    assert [s["id"] for s in list_sessions(moved)] == [sid]
+    assert [m.content for m in load_session(moved, sid)] == ["改名前写的"]
+
+
+def test_legacy_archive_is_migrated(tmp_path):  # 换布局前的老目录（纯路径名）→ 首次访问自动搬过来
+    ws = tmp_path / "proj"
+    ws.mkdir()
+    legacy = session_mod.SESSION_ROOT / session_mod._project_key(ws)
+    legacy.mkdir(parents=True)
+    (legacy / "20260101-000000-000000.jsonl").write_text(
+        json.dumps({"role": "user", "content": "老会话"}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    listed = list_sessions(ws)
+
+    assert [s["first_user_msg"] for s in listed] == ["老会话"]
+    assert not legacy.exists()                                    # 老目录已经搬走
+    assert listed[0]["id"] in {p.stem for p in session_mod._session_dir(ws).glob("*.jsonl")}

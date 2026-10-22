@@ -5,6 +5,29 @@ import subprocess
 
 SHELL_TIMEOUT = 120  # 秒：一条 shell 命令的硬上限（S10 真机撞出的墙——卡住的命令不许冻住整台机器）
 
+# 回灌给模型的结果上限（字符）。trace 存全文（审计账，人看），history / session 走截断版
+# （模型看）——三份拷贝各按各的读者定规格，别让一次命令把上下文和存档撑爆。
+MAX_RESULT_CHARS = 32_000
+_HEAD_CHARS = 24_000  # 截断时保留头尾：开头是定位信息，结尾是报错摘要
+_TAIL_CHARS = 8_000
+
+
+def cap_result(text: str, limit: int = MAX_RESULT_CHARS) -> str:
+    """把工具结果压到上限内（头 + 尾 + 省略说明）——只用于进 history 的那一份。
+
+    为什么保留尾部：命令失败的原因、traceback 结尾、pytest 总结都在最后几行，
+    只留开头会让模型看不到红在哪。
+    """
+    if len(text) <= limit:
+        return text
+    omitted = len(text) - _HEAD_CHARS - _TAIL_CHARS
+    return (
+        f"{text[:_HEAD_CHARS]}\n\n"
+        f"[... 已省略中间 {omitted} 字符（原始输出共 {len(text)} 字符）。"
+        f"完整输出见 trace；需要细节请用带范围的命令重新取（如 head / tail / findstr 过滤）...]\n\n"
+        f"{text[-_TAIL_CHARS:]}"
+    )
+
 
 def run_shell(command: str, timeout: float = SHELL_TIMEOUT) -> str:
     proc = subprocess.Popen(

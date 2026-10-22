@@ -75,7 +75,7 @@ def test_loop_read_only_no_approval():  # 只读命令不问人
     asked, ran = [], []
     llm = ScriptLLM([Action(tool="run_shell", args={"command": "dir"})])
     agent_loop("干活", llm, {"run_shell": lambda **kw: ran.append(1) or "退出码 0"},
-               "sys", approver=lambda c: asked.append(c) or True, max_steps=3)
+               "sys", approver=lambda c, reason: asked.append(c) or True, max_steps=3)
     assert asked == [] and ran == [1]
 
 
@@ -83,8 +83,16 @@ def test_loop_mutating_asks_and_runs_when_approved():  # 非只读问人；批�
     asked, ran = [], []
     llm = ScriptLLM([Action(tool="run_shell", args={"command": "del x"})])
     agent_loop("干活", llm, {"run_shell": lambda **kw: ran.append(1) or "退出码 0"},
-               "sys", approver=lambda c: asked.append(c) or True, max_steps=3)
+               "sys", approver=lambda c, reason: asked.append(c) or True, max_steps=3)
     assert asked == ["del x"] and ran == [1]
+
+
+def test_approver_receives_reason():  # 审批回调同时拿到「为什么问」——只给命令等于让人盲批
+    seen = []
+    llm = ScriptLLM([Action(tool="run_shell", args={"command": "weirdtool"})])
+    agent_loop("干活", llm, {"run_shell": lambda **kw: "x"},
+               "sys", approver=lambda c, reason: seen.append((c, reason)) or False, max_steps=2)
+    assert seen == [("weirdtool", "未知命令：weirdtool")]
 
 
 def test_loop_unknown_without_approver_blocked():  # 无审批者 → fail closed
@@ -100,7 +108,7 @@ def test_loop_catastrophic_blocked_without_asking():  # 极危险：直接拒，
     asked, ran = [], []
     llm = ScriptLLM([Action(tool="run_shell", args={"command": "format c:"})])
     _, hist = agent_loop("干活", llm, {"run_shell": lambda **kw: ran.append(1) or "x"},
-                         "sys", approver=lambda c: asked.append(c) or True, max_steps=3)
+                         "sys", approver=lambda c, reason: asked.append(c) or True, max_steps=3)
     assert asked == [] and ran == []
     assert any("直接拒绝" in m.content for m in hist if m.role == "user")
 

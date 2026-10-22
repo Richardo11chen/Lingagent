@@ -15,7 +15,8 @@ type Ev =
   | { type: 'model_switched'; model: string; error?: string }
   | { type: 'trace'; list: TraceRec[]; total: number }
   | { type: 'hook'; by: string; reason: string }
-  | { type: 'approval_request'; command: string }
+  | { type: 'approval_request'; command: string; reason?: string }
+  | { type: 'error'; text: string }
 
 type Msg =
   | { kind: 'user'; text: string }
@@ -23,6 +24,7 @@ type Msg =
   | { kind: 'tool'; name: string; detail?: string }
   | { kind: 'reasoning'; text: string }
   | { kind: 'hook'; text: string }
+  | { kind: 'error'; text: string }
 
 type TraceRec = {
   ts: string
@@ -42,7 +44,9 @@ type TraceRec = {
   duration_ms?: number
 }
 
-const WS_URL = 'ws://127.0.0.1:8000/ws'
+// 端口跟后端配置走：web/.env 里写 VITE_WS_PORT=xxxx 即可（缺省 8000，与 [server] port 默认值一致）
+const WS_PORT = import.meta.env.VITE_WS_PORT ?? '8000'
+const WS_URL = `ws://${location.hostname || '127.0.0.1'}:${WS_PORT}/ws`
 
 const fmtMs = (v?: number) => (v == null ? '' : v < 1000 ? `${Math.round(v)}ms` : `${(v / 1000).toFixed(1)}s`)
 const STATUS_ZH: Record<string, string> = { ok: '成功', denied: '驳回', blocked: '拦截', error: '错误' }
@@ -79,7 +83,7 @@ function App() {
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [input, setInput] = useState('')
   const [sessionId, setSessionId] = useState('')
-  const [approval, setApproval] = useState<string | null>(null)
+  const [approval, setApproval] = useState<{ command: string; reason: string } | null>(null)
   const [connected, setConnected] = useState(false)
   const [sessions, setSessions] = useState<{ id: string; preview: string }[] | null>(null)
   const [modelName, setModelName] = useState('')
@@ -87,20 +91,38 @@ function App() {
   const [trace, setTrace] = useState<{ list: TraceRec[]; total: number } | null>(null)
   const [traceSel, setTraceSel] = useState<number | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const sidRef = useRef('')  // 当前会话 id（重连时用它 resume，否则后端会悄悄开一个空会话）
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    const ws = new WebSocket(WS_URL)
-    wsRef.current = ws
-    ws.onopen = () => {
-      setConnected(true)
-      ws.send(JSON.stringify({ type: 'sessions_request' }))
+    let sock: WebSocket | null = null
+    let retry: number | undefined
+    let unmounted = false
+
+    const connect = () => {
+      sock = new WebSocket(WS_URL)
+      wsRef.current = sock
+      sock.onopen = () => {
+        setConnected(true)
+        const sid = sidRef.current
+        if (sid) sock?.send(JSON.stringify({ type: 'resume', id: sid }))
+        else sock?.send(JSON.stringify({ type: 'sessions_request' }))
+      }
+      // 后端还没起来（TUI 是异步拉起的）时会连不上——1.5 秒后重试，直到连上
+      sock.onclose = () => {
+        setConnected(false)
+        wsRef.current = null
+        if (!unmounted) retry = window.setTimeout(connect, 1500)
+      }
+      sock.onmessage = onMessage
     }
-    ws.onclose = () => setConnected(false)
-    ws.onmessage = (e) => {
+
+    // 收消息的处理独立成函数（连接可以重连，处理逻辑只写一份）
+    const onMessage = (e: MessageEvent) => {
       const ev: Ev = JSON.parse(e.data)
       if (ev.type === 'session') {
         setSessionId(ev.id)
+        sidRef.current = ev.id
         if (ev.model) setModelName(ev.model)  // 会话级模型：恢复时把实际模型带给表头
       } else if (ev.type === 'history') {
         setMsgs(
@@ -151,10 +173,18 @@ function App() {
       } else if (ev.type === 'hook') {
         setMsgs((ms) => [...ms, { kind: 'hook', text: `⚡ 策略拦截：${ev.by} · ${ev.reason}` }])
       } else if (ev.type === 'approval_request') {
-        setApproval(ev.command)
+        setApproval({ command: ev.command, reason: ev.reason ?? '' })
+      } else if (ev.type === 'error') {
+        setMsgs((ms) => [...ms, { kind: 'error', text: ev.text }])
       }
     }
-    return () => ws.close()
+
+    connect()
+    return () => {
+      unmounted = true
+      window.clearTimeout(retry)
+      sock?.close()
+    }
   }, [])
 
   useEffect(() => {
@@ -206,6 +236,10 @@ function App() {
           ) : m.kind === 'hook' ? (
             <div key={i} className="tool hook">
               {m.text}
+            </div>
+          ) : m.kind === 'error' ? (
+            <div key={i} className="tool err">
+              ⚠ {m.text}
             </div>
           ) : (
             <div key={i} className={`bubble ${m.kind}`}>
@@ -304,9 +338,13 @@ function App() {
       )}
       {approval !== null && (
         <div className="approval">
-          ⚠️ 允许执行「{approval}」吗？
-          <button onClick={() => answer(true)}>批准</button>
-          <button onClick={() => answer(false)}>驳回</button>
+          {/* 先给「为什么问」，再给命令本身——只给命令等于让人盲批 */}
+          <div className="approval-reason">⚠ {approval.reason || '需要确认'}</div>
+          <code className="approval-cmd">{approval.command}</code>
+          <div className="approval-actions">
+            <button onClick={() => answer(true)}>批准</button>
+            <button onClick={() => answer(false)}>驳回</button>
+          </div>
         </div>
       )}
       <footer>

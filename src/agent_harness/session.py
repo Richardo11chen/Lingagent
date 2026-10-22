@@ -2,10 +2,17 @@
 
 设计定案（2026-09-22）：时间戳 id + 原子创建；JSONL append-only；投影式读回；
 坏行（崩溃残留，只可能在末尾）跳过。
+
+布局（2026-10-22 改）：`<SESSION_ROOT>/<项目名>-<身份前8位>/`。
+项目身份 = 工作目录里的 `.agent-harness-id`（一个 uuid 文件，跟着文件夹走）——
+所以项目改名、移动目录，历史都还认得。旧布局（纯路径派生名）首次访问时自动搬过来。
 """
 
 import json
+import os
+import shutil
 import time
+import uuid
 from pathlib import Path
 
 from .messages import Msg
@@ -13,18 +20,96 @@ from .messages import Msg
 # 存档根在用户目录（Claude Code 形态）——项目目录干净、工具（含 shell 猜路径）够不着
 SESSION_ROOT = Path.home() / ".agent_harness_sessions"
 
+# 项目身份文件：放在工作目录里，一行 uuid。删掉它 = 换一个新身份（旧历史不会丢，但不再列出）
+PROJECT_ID_FILE = ".agent-harness-id"
+
 
 def _project_key(workspace: Path) -> str:
-    """项目路径 → 目录名：非字母数字一律转义成 '-'（Claude Code 形态）。
+    """老规则：路径 → 目录名（非字母数字一律转义成 '-'）。
 
-    已知边界：不同路径理论上可转义碰撞（如 D:\\a-b 与 D:\\a\\b）——学习项目接受，
-    真撞再加 hash 后缀。
+    现在只用于两处：迁移旧目录、以及工作目录不可写（身份文件建不出来）时的兜底。
     """
     return "".join(c if c.isalnum() else "-" for c in str(workspace.resolve()))
 
 
+def _project_id(workspace: Path) -> str:
+    """读项目身份；没有就建一个。
+
+    为什么不是路径哈希：路径会变（改名、移动），身份不能跟着变。一个跟着文件夹走的
+    小文件是唯一既省事又稳的做法——`git clone` 出来的新副本没有它，自然就是新身份。
+    """
+    p = workspace / PROJECT_ID_FILE
+    if p.exists():
+        try:
+            got = p.read_text(encoding="utf-8").strip()
+        except OSError:
+            return _project_key(workspace)
+        if got:
+            return got
+        # 存在但空的（手动 touch 过 / 写一半崩了）——补写一个
+        got = uuid.uuid4().hex
+        try:
+            p.write_text(got + "\n", encoding="utf-8")
+        except OSError:
+            return _project_key(workspace)
+        return got
+
+    got = uuid.uuid4().hex
+    try:
+        with open(p, "x", encoding="utf-8") as f:  # 独占创建：两个进程同时跑也只有一个赢
+            f.write(got + "\n")
+        return got
+    except FileExistsError:  # 别的进程刚建好——用它的，别覆盖
+        try:
+            return p.read_text(encoding="utf-8").strip() or _project_key(workspace)
+        except OSError:
+            return _project_key(workspace)
+    except OSError:  # 目录不可写（只读挂载等）——退回路径派生，功能不残
+        return _project_key(workspace)
+
+
+def _label(workspace: Path) -> str:
+    """目录名里的可读部分（项目目录名，转义掉不安全字符）——纯装饰，身份看 id 后缀。"""
+    label = "".join(
+        c if (c.isalnum() or c in "-_") else "-" for c in workspace.resolve().name
+    )
+    return label or "workspace"
+
+
+def _find_by_id(project_id: str) -> Path | None:
+    """按身份找回已存在的目录：项目改过名时 label 变了，id 后缀不会变。"""
+    if not SESSION_ROOT.is_dir():
+        return None
+    matches = [p for p in SESSION_ROOT.glob(f"*-{project_id[:8]}") if p.is_dir()]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _migrate_legacy(workspace: Path, new_dir: Path) -> None:
+    """老目录（纯路径派生名）→ 新目录。空目录删掉，有内容整体搬；搬不动就不硬来。"""
+    old = SESSION_ROOT / _project_key(workspace)
+    if old == new_dir or not old.is_dir():
+        return
+    try:
+        if any(old.iterdir()):
+            shutil.move(str(old), str(new_dir))
+        else:
+            old.rmdir()
+    except OSError:  # 被占用 / 权限不够——本次用新目录，旧数据原样留着
+        pass
+
+
 def _session_dir(workspace: Path) -> Path:
-    d = SESSION_ROOT / _project_key(workspace)
+    project_id = _project_id(workspace)
+    d = SESSION_ROOT / f"{_label(workspace)}-{project_id[:8]}"
+    if not d.exists():
+        prev = _find_by_id(project_id)
+        if prev is not None:  # 项目改过名/搬过家：目录改个名就行，数据原地不动
+            try:
+                prev.rename(d)
+            except OSError:
+                d = prev  # 改不动就用老目录——宁可名字难看，也不丢历史
+        else:  # 换布局后第一次访问：把老的路径派生目录搬过来
+            _migrate_legacy(workspace, d)
     d.mkdir(parents=True, exist_ok=True)
     return d
 

@@ -11,10 +11,16 @@ import json
 import os
 import time
 
-from openai import APIStatusError, OpenAI
+from openai import APIConnectionError, APIStatusError, OpenAI
 
 from .messages import Msg  # 重新导出——兼容从 llm 导入 Msg 的既有代码
 from .compact import microcompact, microcompact_if_needed, snip
+
+REQUEST_TIMEOUT = 120  # 秒：一次流式请求的硬上限（SDK 默认 600 秒——卡住十分钟太久）
+
+
+class LLMError(RuntimeError):
+    """模型层可预期故障（连不上 / 超时）——上层捕获后给人一句干净的话，别甩 traceback。"""
 
 
 @dataclass
@@ -25,6 +31,7 @@ class Action:
     args: dict = field(default_factory=dict)  # call_tool 时用：参数
     tool_call_id: str | None = None  # 真模型路径：API 的 tool_call id（回灌 tool 消息时用）
     tool_calls: list | None = None  # 真模型路径：API 原始 tool_calls（assistant 消息重发用）
+    args_error: str | None = None  # arguments 不是合法 JSON 时的原因（loop 据此拒绝执行并回灌）
 
 
 class LLM(Protocol):
@@ -167,7 +174,7 @@ class DeepSeekLLM:
         key = api_key or os.environ.get(api_key_env, "")  # 直写优先；不写回退环境变量
         if not key:
             raise SystemExit(f"缺少 API key：profile 没写 api_key，环境变量 {api_key_env} 也没设置")
-        self._client = OpenAI(api_key=key, base_url=base_url)
+        self._client = OpenAI(api_key=key, base_url=base_url, timeout=REQUEST_TIMEOUT)
         self._model = model
         self._temperature = temperature
         self._compact_threshold = compact_threshold
@@ -255,6 +262,8 @@ class DeepSeekLLM:
 
         try:
             text, raw, reasoning = self._request(api_messages, tools, on_text, on_reasoning)
+        except APIConnectionError as e:  # 断网 / 超时（APITimeoutError 是它的子类）
+            raise LLMError(f"模型服务连不上（{type(e).__name__}）：{e}") from e
         except APIStatusError as e:
             if e.status_code != 413:  # 非超限（401/500 等）——重试无意义，直接抛
                 raise
@@ -272,12 +281,33 @@ class DeepSeekLLM:
 
         actions: list[Action] = []
         for tc in raw:
-            args = json.loads(tc["function"]["arguments"])
+            args, args_error = _parse_args(tc["function"].get("arguments"))
             actions.append(Action(
                 tool=tc["function"]["name"],
                 args=args,
                 tool_call_id=tc["id"],
                 tool_calls=raw,  # 原始结构——assistant 消息重发时原样带回
+                args_error=args_error,
             ))
 
         return (text, actions, reasoning)
+
+
+def _parse_args(raw_args) -> tuple[dict, str | None]:
+    """把 API 的 arguments 解析成 dict——失败不抛（一次坏 JSON 不该打死整轮对话）。
+
+    返回 (参数, 错误原因)。错误原因非 None 时 loop 会拒绝执行并把原因回灌给模型，
+    让它在下一轮重发合法 JSON——比让异常穿透到 REPL 强得多。
+    """
+    if isinstance(raw_args, dict):  # 个别网关直接给对象
+        return raw_args, None
+    text = raw_args or ""
+    if not text.strip():  # 无参工具常见形态：空串 = 没有参数
+        return {}, None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as e:
+        return {}, f"JSON 不合法（{e.msg}，第 {e.pos} 字符）"
+    if not isinstance(parsed, dict):
+        return {}, f"参数应为 JSON 对象，实际是 {type(parsed).__name__}"
+    return parsed, None

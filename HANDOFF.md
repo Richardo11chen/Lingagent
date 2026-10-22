@@ -21,8 +21,7 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
   - `src/agent_harness/assembly.py` 公共装配（tools / PRE_HOOKS / SwitchableLLM / `build_session_tools`）
   - `src/agent_harness/settings.py` 多 profile 配置；`tui.py` / `server.py` / `weblaunch.py`；`web/` React 前端
   - `tools.py`（`run_shell` 120s 超时 + Windows `taskkill /T` 树杀；`safe_tool` 路径围栏）/ `schema.py`（工具菜单 = 注册表）/ `compact.py` / `config.py` / `messages.py` / `sensors.py`
-- 学习侧（AI 负责落盘）：`C:\Users\ypchen\Documents\notes\build-to-learn\AgentHarness\`（`学习地图.md` + `学习记录/` S1–S11）
-- 接管用 skill：`C:\Users\ypchen\.claude\skills\build-to-learn\`（SKILL.md + references/）
+
 - 入口命令：TUI `uv run agent-harness`；网页后端 `uv run agent-harness-web`（8000）；前端 `cd web && npm run dev`（5173；TUI 启动时会自动拉起两者）
 
 已完成：
@@ -31,9 +30,18 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
 - S10 子 agent「分身」：`spawn_subagent`（上下文隔离、depth 1、摘要模板、治理同一套、trace 分层；工具全量 + 提示词默认只读）
 - S11 命令风险分级「换锁」：黑名单 → 只读放行 / 非只读与未知问人 / 极危险直拒；`run_shell` 与 approval 事件记 `risk`
 - 尾巴批次：会话级模型 / mm:think 转轨 / 空占位打扫 / 分页会话选择器 / 实时流拦截行 / 两 bug 修复（`system_prompt` 死参数、`run_shell` 无超时）
+- 2026-10-22 收尾清扫（审查后按 D/E 清单修）：
+  - `README.md` 重写（原来只有 10 字节）；`memory.py`（取消的提取器残留、且语法错误）、`demo.py`、`test_demo.py`、`web/src/assets/*` 删除
+  - 结果长度分流：`loop.py` 把工具结果**全文**给 trace、`cap_result` 截断到 32k 给 history/session（一次 `find /c` 曾灌出 91.8MB）
+  - 读侧护栏：`trace.load_trace` 跳过 >2MB 单条事件、`tui.show_trace_event` 单字段截 4k、网页 trace 单字段截 2k
+  - `llm.py`：`_parse_args` 容错（坏 JSON 不再穿透 REPL，改由 loop 拒绝执行并回灌）、请求超时 120s、连接异常包成 `LLMError`
+  - 双端失败兜底：TUI 每轮 try/except（Ctrl+C 只中断本轮）、网页推 `error` 事件 + WS 自动重连 + `VITE_WS_PORT`
+  - `server.main` 前置校验密钥；`sensors.run_tests` 改用 `sys.executable -m pytest`；`wcwidth` 写进依赖
+  - 存档布局迁移（用户批准）：`session.py` 改为 `~/.agent_harness_sessions/<项目名>-<身份前8位>/`，身份 = 工作目录里的 `.agent-harness-id`（uuid，已 gitignore）→ **项目改名/移动不再丢历史**；老的路径派生目录首次访问自动搬过来（本机已迁：53 个会话 → `AgentHarness-d619b9f5`）；新增 3 条测试覆盖身份稳定 / 改名后仍可读 / 旧目录迁移
+  - 审批带判定原因（用户批准，改接口）：`approver` 签名 `(command, reason)`；TUI 先印「⚠ 未知命令：find」再印命令全文，网页审批卡改成 原因 / 命令 / 按钮 三行；`loop` 把 `risk.reason` 递出去；新增 1 条测试 + 8 处测试回调跟着改签名
 
 未完成：
-- S6a–S11 大考**全部弃考**——2026-10-19 前五档已 AI 代答；S10/S11 迁移题与协议配对回头题同日代答；**认知未验**（答案在对话里）
+
 - 已知边界（未收口）：OS 级沙箱 / shell 绕过；子 agent 中间过程不进实时流（只进 trace；用户拍板不做）；子 agent 只读靠提示词（用户拍板）；**网页审批真机已验证**（用户，2026-10-19）；**审批无超时 = 有意设计**（人说了算，不自动驳回；用户拍板不修）；流式 chunk 未节流；微压缩占位文案可加恢复指引；`/model` 列表未显示「profile → 实际模型名」
 
 重要决策及原因：
@@ -45,8 +53,7 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
 - 细节与翻案记录在 `PLAN.md` 决策记录 + 各阶段学习记录
 
 坑 / 禁忌 / 不能改的东西：
-- **协作规矩（CLAUDE.md）**：禁止直接给完整实现（除非用户说「给参考实现」）；用户先交方案只评审（行 + 问题 + 为什么）；解释落 CPython 语义；结尾给验证问题；**git 提交不署 AI 名**
-- **build-to-learn 流程**：手是用户的手（用户明确委托时可代跑，如「你来跑」）；施工期零设问；**落盘是 AI 的活，且排在回话之后**
+- **git 提交不署 AI 名**
 - 协议红线：N 个 tool_calls → N 条 tool 回灌；assistant 带 tool_calls 必须原样重发（含 reasoning_content）；流解析容忍 `delta=None` / 空 choices / tool_calls 分片 / mm:think 标签被切断
 - 密钥：**别把真 key 写进 `harness.example.toml`**；用户的 `~/.agent_harness.toml` 允许明文 `api_key`
 - 测试不许污染真实存档（test_s6b 的 SESSION_ROOT 隔离 fixture 不能删）
@@ -68,8 +75,6 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
 
 可选余项（不阻塞）：
 1. 小件：微压缩占位文案加恢复指引 / 流式 chunk 节流 / `/model` 列表显示 profile → 实际模型名
-2. S12+ 待定（做到再拆）
-（大考已弃考、AI 代答；子 agent 流式不做；审批超时保持不修——均为 2026-10-19 拍板。）
 
 验收标准：
 - 每阶段：部件图所有部件完工 + 整体跑通 + **用户亲眼看过真机现象**；`uv run pytest` 全绿
@@ -77,8 +82,8 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
 - 学习收口：用户对没教过的新需求能答「学会四问」（动哪个部件 / 照哪个形状 / 踩哪个坑 / 怎么验）
 
 新会话必须先读哪些文件（按序）：
-1. `C:\Users\ypchen\Documents\notes\build-to-learn\AgentHarness\学习地图.md`（**接管协议 + 「现在在哪」**——先按它接上）
+
+1. `D:\workspace\self-study\AgentHarness\CLAUDE.md`（协作规矩）
 2. 本文件 `D:\workspace\self-study\AgentHarness\HANDOFF.md`
 3. `D:\workspace\self-study\AgentHarness\PLAN.md`（工程真源）
-4. skill `C:\Users\ypchen\.claude\skills\build-to-learn\SKILL.md` + `references/`（按路由表；落盘规矩在 `4-笔记.md`）
-5. 最近的阶段学习记录：`学习记录/S11 · 换锁.md`、`S10 · 分身.md`
+

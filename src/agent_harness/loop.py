@@ -6,6 +6,7 @@ from .messages import Msg
 from .sensors import run_sensors
 from .guardrail import classify_command
 from .schema import TOOL_SCHEMAS
+from .tools import cap_result
 from .trace import Tracer
 from .hooks import run_post, run_pre
 
@@ -17,7 +18,7 @@ def agent_loop(
     llm: LLM,
     tools: dict[str, Tool],
     system_prompt: str,
-    approver: Callable[[str], bool] | None = None,
+    approver: Callable[[str, str], bool] | None = None,  # (命令, 为什么要问) → 放行吗
     history: list[Msg] | None = None,
     max_steps: int = MAX_STEPS,
     on_text: Callable[[str], None] | None = None,  # 流式文本增量回调（透传给模型适配器）
@@ -84,7 +85,9 @@ def agent_loop(
                                 "approval", step=step,
                                 command=action.args["command"], risk=risk.risk,
                             ) as aev:
-                                approved = approver(action.args["command"])
+                                # 把「为什么问」一起递出去：只给命令的话，
+                                # `find /c /v "" README.md` 看着像只读统计，批的人没得判
+                                approved = approver(action.args["command"], risk.reason)
                                 aev.fields["decision"] = "approved" if approved else "denied"
                             if not approved:
                                 result = "命令被驳回，未执行。"
@@ -110,6 +113,11 @@ def agent_loop(
                             on_hook(pre.by, pre.reason)  # 实时流冒一行（只在拦下时——放行不冒，防噪音）
 
                 # 第三道：真执行
+                if may_run and action.args_error:
+                    # 模型给的 arguments 不是合法 JSON——不执行，把解析结果回灌让它重发
+                    result = f"工具参数解析失败（{action.args_error}），未执行。请重新调用并给出合法 JSON。"
+                    ev.fields["status"] = "error"
+                    may_run = False
                 if may_run:
                     if tool_func:
                         try:
@@ -124,13 +132,16 @@ def agent_loop(
                     else:
                         result = f"工具不存在：未知工具 {action.tool}。"
                         ev.fields["status"] = "error"
-                ev.fields["result"] = result  # 全文（S8 决策 3）
+                ev.fields["result"] = result  # 全文（S8 决策 3）——trace 是审计账，不截断
 
+            # 回灌历史的那一份要截断：history 会进下一次请求、也会落进 session 存档，
+            # 一次 `find /c` 就能灌进 90MB（2026-10-19 真机撞过）——trace 那份保持完整。
+            fed = cap_result(result)
             if action.tool_call_id:
                 # 回灌 tool 消息：模型发出的原始 tool_calls → 解析成 Action → 执行 → 回灌结果
-                history.append(Msg("tool", result, tool_name=action.tool, tool_call_id=action.tool_call_id))  # 只回灌一次
+                history.append(Msg("tool", fed, tool_name=action.tool, tool_call_id=action.tool_call_id))  # 只回灌一次
             else:
-                history.append(Msg("user", result, tool_name=action.tool, tool_call_id=action.tool_call_id))  # 假模型
+                history.append(Msg("user", fed, tool_name=action.tool, tool_call_id=action.tool_call_id))  # 假模型
 
     if answer is None:
         answer = "已达到最大步数，停机。"
