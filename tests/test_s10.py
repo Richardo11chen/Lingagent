@@ -164,15 +164,3 @@ def test_child_stops_when_parent_stops():  # 父按了停止：子 agent 下一�
     spawn = _spawn(llm, tools, should_stop=lambda: len(ran) >= 1)
     agent_loop("父任务", llm, {**tools, "spawn_subagent": spawn}, "sys", max_steps=3)
     assert len(ran) == 1  # 子 agent 跑完第一个动作就停了
-
-
-def test_child_stops_when_parent_stops():  # 父按了停止：子 agent 下一步也停（不再空转）
-    ran = []
-    tools = {"probe": lambda: ran.append(1) or "ok"}
-    llm = RouteLLM({
-        "父任务": [Action(tool="spawn_subagent", args={"subtask": "子任务"})],
-        "子任务": [Action(tool="probe", args={}), Action(tool="probe", args={})],
-    })
-    spawn = _spawn(llm, tools, should_stop=lambda: len(ran) >= 1)
-    agent_loop("父任务", llm, {**tools, "spawn_subagent": spawn}, "sys", max_steps=3)
-    assert len(ran) == 1  # 子 agent 跑完第一个动作就停了

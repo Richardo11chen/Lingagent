@@ -183,16 +183,3 @@ def test_load_session_repairs_dangling_tool_calls(tmp_path):  # 悬空调用补�
     assert [m.tool_call_id for m in tool_msgs] == ["c1"]
     assert tool_msgs[0].tool_name == "read_file"
     assert loaded.index(tool_msgs[0]) == 2  # 补在发起它的那条之后
-
-
-def test_load_session_repairs_dangling_tool_calls(tmp_path):  # 悬空调用补一条回应，否则之后每次请求都 400
-    sid = new_session_id(tmp_path)
-    raw = [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]
-    save_messages(tmp_path, sid, [Msg("user", "干活"), Msg("assistant", "", tool_calls=raw)])
-
-    loaded = load_session(tmp_path, sid)
-
-    tool_msgs = [m for m in loaded if m.role == "tool"]
-    assert [m.tool_call_id for m in tool_msgs] == ["c1"]
-    assert tool_msgs[0].tool_name == "read_file"
-    assert loaded.index(tool_msgs[0]) == 2  # 补在发起它的那条之后
