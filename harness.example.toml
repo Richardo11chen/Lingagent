@@ -1,5 +1,5 @@
 # Agent Harness 配置示例
-# 复制到 ~/.agent_harness.toml 后按需修改。
+# 复制到 ~/.agent-harness/config.toml 后按需修改。
 # 密钥两种写法：① 只写「从哪个环境变量读」（api_key_env，默认）② 直写 api_key（明文落盘——写了优先）
 
 [model]
@@ -33,7 +33,7 @@ reasoning_effort = "high"   # DeepSeek 私有：强度——"low" / "high" / "ma
 # ---- 全局（与模型无关）----
 
 [loop]
-max_steps = 20
+max_steps = 40   # 一轮最多走多少个「模型回合」（不是工具调用数）
 
 [context]
 compact_threshold = 70000   # 软阈值（字符当量）——超了触发微压缩

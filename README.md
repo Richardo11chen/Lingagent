@@ -29,8 +29,8 @@ uv sync
 复制示例配置到用户目录（**不在仓库里**，也不该提交）：
 
 ```bash
-cp harness.example.toml ~/.agent_harness.toml
-# Windows: copy harness.example.toml %USERPROFILE%\.agent_harness.toml
+mkdir -p ~/.agent-harness && cp harness.example.toml ~/.agent-harness/config.toml
+# Windows: mkdir %USERPROFILE%\.agent-harness && copy harness.example.toml %USERPROFILE%\.agent-harness\config.toml
 ```
 
 最小可用配置：
@@ -61,7 +61,8 @@ uv run agent-harness --model deepseek-v4-pro  # 临时指定 profile
 
 首次启动会：列出历史会话让你选（`0` 开新会话、`n`/`p` 翻页）→ 自动拉起网页端（`[web] autostart = false` 可关）。
 
-界面内命令：`/model` 切模型、`/trace` 看本轮轨迹（`/trace N` 钻取单条）、`exit` 退出。
+界面内命令：输入 `/` 会弹出命令菜单——`/model` 切模型、`/trace` 看本轮轨迹（`/trace N` 钻取单条）。
+退出：`Ctrl+C` 连按两次，或 `Ctrl+D`。
 
 **网页界面：**
 
@@ -88,10 +89,12 @@ cd web && npx tsc --noEmit     # 前端类型检查
 
 | 内容 | 位置 | 说明 |
 |---|---|---|
-| 配置 | `~/.agent_harness.toml` | 含密钥，**不要提交** |
-| 会话存档 | `~/.agent_harness_sessions/<项目名-身份前8位>/<会话id>.jsonl` | 一行一条消息，append-only |
+| 配置 | `~/.agent-harness/config.toml` | 含密钥，**不要提交** |
+| 会话存档 | `~/.agent-harness/sessions/<项目名-身份前8位>/<会话id>.jsonl` | 一行一条消息，append-only |
 | 轨迹 | 同目录 `<会话id>.trace.jsonl` | 一步一条事件，含工具结果**全文**，只增不减 |
 | 项目身份 | 工作目录下的 `.agent-harness-id` | 一行 uuid，决定历史归谁 |
+
+旧版本把这两样放在 `~/.agent_harness.toml` 和 `~/.agent_harness_sessions/`，首次运行会自动搬到新位置。
 
 注意两件事：
 
@@ -137,6 +140,6 @@ src/agent_harness/
   weblaunch.py  TUI 启动时拉起网页端
 tests/          test_s1 ~ test_s11（117 条）
 web/            React + TS + Vite 前端
-PLAN.md         工程真源（决策记录）
-HANDOFF.md      会话交接单
+docs/PLAN.md    工程真源（决策记录）
+docs/HANDOFF.md 会话交接单
 ```

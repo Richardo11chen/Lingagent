@@ -12,7 +12,7 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
 除 `CLAUDE.md` 有一处未提交改动外（2026-10-19 13:20 被清空，非本轮代码所改，待用户确认），工作区干净；117 测试全绿（2026-10-19）。
 
 关键文件与入口：
-- 代码（工程真源 = 同目录 `PLAN.md`）：
+- 代码（工程真源 = `docs/PLAN.md`）：
   - `src/agent_harness/loop.py` 主循环（三道理序：护栏 → 预钩子名单 → 执行；S11 风险判定接入；每步带 `system_prompt`）
   - `src/agent_harness/guardrail.py` 治理判定（S11：`classify_command` 命令风险分级）+ 路径围栏
   - `src/agent_harness/subagent.py` S10 子 agent（`make_spawn_tool`：递归 + depth 1 + 固定模板摘要 + trace `sub` 分层）
@@ -37,8 +37,16 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
   - `llm.py`：`_parse_args` 容错（坏 JSON 不再穿透 REPL，改由 loop 拒绝执行并回灌）、请求超时 120s、连接异常包成 `LLMError`
   - 双端失败兜底：TUI 每轮 try/except（Ctrl+C 只中断本轮）、网页推 `error` 事件 + WS 自动重连 + `VITE_WS_PORT`
   - `server.main` 前置校验密钥；`sensors.run_tests` 改用 `sys.executable -m pytest`；`wcwidth` 写进依赖
-  - 存档布局迁移（用户批准）：`session.py` 改为 `~/.agent_harness_sessions/<项目名>-<身份前8位>/`，身份 = 工作目录里的 `.agent-harness-id`（uuid，已 gitignore）→ **项目改名/移动不再丢历史**；老的路径派生目录首次访问自动搬过来（本机已迁：53 个会话 → `AgentHarness-d619b9f5`）；新增 3 条测试覆盖身份稳定 / 改名后仍可读 / 旧目录迁移
+  - 存档布局迁移（用户批准）：`session.py` 改为 `~/.agent-harness/sessions/<项目名>-<身份前8位>/`，身份 = 工作目录里的 `.agent-harness-id`（uuid，已 gitignore）→ **项目改名/移动不再丢历史**；老的路径派生目录首次访问自动搬过来（本机已迁：53 个会话 → `AgentHarness-d619b9f5`）；新增 3 条测试覆盖身份稳定 / 改名后仍可读 / 旧目录迁移
   - 审批带判定原因（用户批准，改接口）：`approver` 签名 `(command, reason)`；TUI 先印「⚠ 未知命令：find」再印命令全文，网页审批卡改成 原因 / 命令 / 按钮 三行；`loop` 把 `risk.reason` 递出去；新增 1 条测试 + 8 处测试回调跟着改签名
+  - 简化批次（用户第二轮审美意见）：
+    - 删 `count_lines` 工具（`read_file` 就够，多一个菜单项只添乱）；连带 schema/装配/3 个测试
+    - 根目录分类：`PLAN.md` / `HANDOFF.md` → `docs/`（README/AGENTS/CLAUDE 必须留根：pyproject 与规则注入要读）
+    - `max_steps` 默认 20 → 40（20 个「模型回合」真活不够用），停机文案改成可操作的「想接着做就再发一句」
+    - 配置与会话收进 `~/.agent-harness/`（`config.toml` + `sessions/`），老位置首次运行自动迁移；只搬默认路径，测试/自定义根不碰
+    - 退出：`Ctrl+C` 两次或 `Ctrl+D`，都不打 traceback；banner 不再教人敲 exit
+    - 输入 `/` 自动弹命令菜单（`prompt_toolkit` completer，`/model` `/trace`）
+    - `list_sessions` 不再把 `*.trace.jsonl` 当会话（数字终于对得上：46 会话 / 7 轨迹）
   - 体验一致性批次（审美审查后）：`show_note` 分 info/warn/error 三档（失败终于不是洋红色）；TUI 与网页共用 `TRACE_FIELD_CHARS` + `ellipsis_note`（同一句截断说明），工具详情两端都截 50；网页错误改独立 `.err-line`（左线 + 红字）；等第一个字时两端都有「⋯」；网页底部加 `/model` `/trace` 一行提示；断线清残留审批卡；网页加「停止」（`loop.should_stop` 每步检查 + `interrupt` 消息，正在跑的那一步会跑完）；`/model` 输入非法时不再静默吞
 
 未完成：
@@ -51,12 +59,12 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
 - trace 与 session 分家（两个读者）；hooks 三道理序、首个 deny 短路、异常默认拦截
 - S10：子 agent = 上下文隔离（Isolate）；深度 1；固定模板摘要；治理同一套；**全量工具 + 只读靠提示词**（用户改判，翻案记档）
 - S11：命令风险分级——只读放行 / 非只读与未知问人（fail closed）/ 极危险直拒；复合命令按最严段算
-- 细节与翻案记录在 `PLAN.md` 决策记录 + 各阶段学习记录
+- 细节与翻案记录在 `docs/PLAN.md` 决策记录 + 各阶段学习记录
 
 坑 / 禁忌 / 不能改的东西：
 - **git 提交不署 AI 名**
 - 协议红线：N 个 tool_calls → N 条 tool 回灌；assistant 带 tool_calls 必须原样重发（含 reasoning_content）；流解析容忍 `delta=None` / 空 choices / tool_calls 分片 / mm:think 标签被切断
-- 密钥：**别把真 key 写进 `harness.example.toml`**；用户的 `~/.agent_harness.toml` 允许明文 `api_key`
+- 密钥：**别把真 key 写进 `harness.example.toml`**；用户的 `~/.agent-harness/config.toml` 允许明文 `api_key`
 - 测试不许污染真实存档（test_s6b 的 SESSION_ROOT 隔离 fixture 不能删）
 - Windows 环境（shell = cmd.exe）；函数名英文 + 注释中文
 - S11 教训：判定失败方向必须朝安全侧（判不出 = 问人）；`2>&1` 先剔除；白名单按能力面判（find / sed / awk / xargs / tee / sort -o 不收）

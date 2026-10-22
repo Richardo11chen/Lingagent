@@ -10,8 +10,23 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# 默认 ~/.agent_harness.toml；AGENT_HARNESS_CONFIG 可覆盖（测试/多环境）
-CONFIG_PATH = Path(os.environ.get("AGENT_HARNESS_CONFIG") or (Path.home() / ".agent_harness.toml"))
+# 应用目录：所有自己的东西都收在一个带连字符的目录里，不往家目录撒点文件
+APP_DIR = Path.home() / ".agent-harness"
+
+# 默认 ~/.agent-harness/config.toml；AGENT_HARNESS_CONFIG 可覆盖（测试/多环境）
+CONFIG_PATH = Path(os.environ.get("AGENT_HARNESS_CONFIG") or (APP_DIR / "config.toml"))
+LEGACY_CONFIG_PATH = Path.home() / ".agent_harness.toml"  # 老位置（迁移用）
+
+
+def _migrate_legacy_config(path: Path) -> None:
+    """老位置的文件搬到新目录：只搬默认路径，自定义路径不碰，失败就算了。"""
+    if path != CONFIG_PATH or path.exists() or not LEGACY_CONFIG_PATH.exists():
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        LEGACY_CONFIG_PATH.rename(path)
+    except OSError:
+        pass  # 搬不动就继续用默认值——用户手动挪也行
 
 
 @dataclass
@@ -36,7 +51,7 @@ class Settings:
     default_model: str = "default"
     models: dict[str, ModelProfile] = field(default_factory=lambda: {"default": ModelProfile()})
     # 全局（与模型无关）
-    max_steps: int = 20
+    max_steps: int = 40
     compact_threshold: int = 70_000
     keep_last: int = 5
     snip_keep_groups: int = 3
@@ -65,6 +80,7 @@ def _profile_from(data: dict) -> ModelProfile:
 
 def load_settings(path: Path = CONFIG_PATH) -> Settings:
     """读配置文件；不存在或字段缺失 → 用默认值。"""
+    _migrate_legacy_config(path)
     s = Settings()
     if not path.exists():
         return s

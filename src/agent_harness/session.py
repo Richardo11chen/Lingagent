@@ -17,8 +17,24 @@ from pathlib import Path
 
 from .messages import Msg
 
-# 存档根在用户目录（Claude Code 形态）——项目目录干净、工具（含 shell 猜路径）够不着
-SESSION_ROOT = Path.home() / ".agent_harness_sessions"
+# 存档根在应用目录下（~/.agent-harness/sessions）——项目目录干净、工具够不着，
+# 也不往家目录撒第二个点文件
+APP_DIR = Path.home() / ".agent-harness"
+SESSION_ROOT = APP_DIR / "sessions"
+LEGACY_SESSION_ROOT = Path.home() / ".agent_harness_sessions"  # 老位置（迁移用）
+
+
+def _migrate_legacy_root() -> None:
+    """老存档根 → 新目录（只搬默认根；测试/自定义根一律不动，免得误搬用户数据）。"""
+    if SESSION_ROOT != APP_DIR / "sessions" or SESSION_ROOT.exists():
+        return
+    if not LEGACY_SESSION_ROOT.is_dir():
+        return
+    try:
+        SESSION_ROOT.parent.mkdir(parents=True, exist_ok=True)
+        LEGACY_SESSION_ROOT.rename(SESSION_ROOT)
+    except OSError:
+        pass
 
 # 项目身份文件：放在工作目录里，一行 uuid。删掉它 = 换一个新身份（旧历史不会丢，但不再列出）
 PROJECT_ID_FILE = ".agent-harness-id"
@@ -99,6 +115,7 @@ def _migrate_legacy(workspace: Path, new_dir: Path) -> None:
 
 
 def _session_dir(workspace: Path) -> Path:
+    _migrate_legacy_root()
     project_id = _project_id(workspace)
     d = SESSION_ROOT / f"{_label(workspace)}-{project_id[:8]}"
     if not d.exists():
@@ -178,6 +195,8 @@ def list_sessions(workspace: Path) -> list[dict]:
     d = _session_dir(workspace)
     out: list[dict] = []
     for p in d.glob("*.jsonl"):
+        if p.name.endswith(".trace.jsonl"):
+            continue  # 轨迹文件不是会话——它没有 role 字段，混进列表只会变成空预览
         first_user = ""
         try:
             with open(p, encoding="utf-8") as f:

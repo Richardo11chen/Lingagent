@@ -10,7 +10,7 @@ from .tools import cap_result
 from .trace import Tracer
 from .hooks import run_post, run_pre
 
-MAX_STEPS = 20
+MAX_STEPS = 40
 Tool = Callable[..., str]
 
 def agent_loop(
@@ -150,6 +150,6 @@ def agent_loop(
                 history.append(Msg("user", fed, tool_name=action.tool, tool_call_id=action.tool_call_id))  # 假模型
 
     if answer is None:
-        answer = "已达到最大步数，停机。"
+        answer = f"已达到最大步数（{max_steps}），本轮停机。想接着做就再发一句话。"
 
     return answer, history
