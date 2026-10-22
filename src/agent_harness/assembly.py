@@ -13,7 +13,7 @@ from .tools import edit_file, read_file, run_shell, task_output, task_stop, writ
 # 不写动机、不写解释、不写"你应该尽量"——每句都要能改变一次具体动作，否则删。
 # 工具细节交给 schema（模型看的是那份），项目规矩交给 AGENTS.md（拼在下面）。
 SYSTEM_PROMPT = (
-    "你是 agent-harness，一个 coding agent，工作目录是项目根。规则只看下方 AGENTS.md"
+    "你是 agent-harness，一个 coding agent，工作目录是项目根。规则只看下方 AGENTS.md (若没有该文件则忽略)"
     "（忽略 CLAUDE.md——那是给别的工具的学习约束）。\n\n"
     "shell 是 bash（Windows 上 Git Bash）：用 ls / cat / rm，没有 dir / type / del；"
     "路径写相对路径；同名命令先 `command -v` 确认，拿不准就用最保守的写法。\n\n"
