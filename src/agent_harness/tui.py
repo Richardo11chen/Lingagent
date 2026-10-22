@@ -81,15 +81,53 @@ def toggle_auto() -> bool:
     return _auto
 
 
-def _toolbar() -> FormattedText:
-    """底部一行：平时一条灰横线；自动批准开着时整行变黄并写明状态。
+_context_probe = None  # 由入口注入：() -> (已用, 上限)；None = toolbar 不显示占比
 
-    状态必须一直看得见——「不需要你点头」是个危险状态，藏起来比不提供更糟。
+
+def set_context_probe(fn) -> None:
+    """让入口告诉 TUI「上下文用了多少」。
+
+    TUI 不自己去数 history——那是主循环的账，界面只负责显示它问来的数字。
+    """
+    global _context_probe
+    _context_probe = fn
+
+
+def _context_ratio() -> tuple[str, str] | None:
+    """(占比文本, 样式)；拿不到就返回 None，toolbar 少显示一段而已，不该影响输入。"""
+    if _context_probe is None:
+        return None
+    try:
+        used, limit = _context_probe()
+    except Exception:  # 界面显示不该因为探针出错而崩
+        return None
+    if not limit or limit <= 0:
+        return None
+    pct = max(0, round(used * 100 / limit))
+    style = "fg:ansibrightblack"
+    if pct >= 95:
+        style = "fg:ansired bold"  # 压缩已经/即将发生
+    elif pct >= 70:
+        style = "fg:ansiyellow"
+    return f"上下文 {pct}%", style
+
+
+def _toolbar() -> FormattedText:
+    """底部一行：横线 + 上下文占比 + 模式提示。
+
+    模式状态必须一直看得见——「不需要你点头」是个危险状态，藏起来比不提供更糟。
     """
     hint = "⚡ 自动批准 · Shift+Tab 关闭" if _auto else "Shift+Tab 自动批准"
-    pad = max(_width() - wcswidth(hint) - 2, 0)
-    style = "fg:ansiyellow bold" if _auto else "fg:ansibrightblack"
-    return FormattedText([(style, "─" * pad + " " + hint + " ")])
+    ratio = _context_ratio()
+    span = wcswidth(hint) + 2 + (wcswidth(ratio[0]) + 3 if ratio else 0)
+    base_style = "fg:ansiyellow bold" if _auto else "fg:ansibrightblack"
+
+    segs: list[tuple[str, str]] = [(base_style, "─" * max(_width() - span, 0) + " ")]
+    if ratio:
+        segs.append((ratio[1], ratio[0]))
+        segs.append((base_style, " · "))
+    segs.append((base_style, hint + " "))
+    return FormattedText(segs)
 
 
 def _main_key_bindings():

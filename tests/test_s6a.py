@@ -172,3 +172,26 @@ def test_unknown_approval_result_denies():  # 白名单：只有明确的放行�
         assert _is_approved(ok) is True
     for bad in ("deny", "timeout", "error", "", "APPROVE"):
         assert _is_approved(bad) is False  # 将来新增结局时，默认落到「不执行」这一侧
+
+
+def test_toolbar_shows_context_share(monkeypatch):  # 底部要看得见上下文用了多少
+    from agent_harness import tui
+
+    def line() -> str:
+        return "".join(t for _, t in tui._toolbar())
+
+    monkeypatch.setattr(tui, "_context_probe", None)
+    assert "上下文" not in line()  # 没接探针时不显示（也不该崩）
+
+    monkeypatch.setattr(tui, "_context_probe", lambda: (35_000, 70_000))
+    assert "上下文 50%" in line()
+
+    monkeypatch.setattr(tui, "_context_probe", lambda: (1, 0))  # 分母为 0 → 跳过
+    assert "上下文" not in line()
+
+    def boom():
+        raise RuntimeError("探针坏了")
+
+    monkeypatch.setattr(tui, "_context_probe", boom)
+    assert "上下文" not in line()  # 显示层出错不该影响输入行
+    assert "Shift+Tab" in line()

@@ -14,6 +14,7 @@ from .assembly import (
     load_settings_and_llm,
 )
 from .guardrail import command_head
+from .compact import estimate_tokens
 from .shell import detect as detect_shell
 from .session import (
     list_sessions,
@@ -149,6 +150,13 @@ def main() -> None:
 
     prune_empty_sessions(WORKSPACE)  # 打扫：清掉「开了没聊」的空占位（不阻塞——顺手的事）
     session_id, history = choose_session(WORKSPACE)
+
+    # 底部显示上下文占比：分母是压缩阈值（同一个数，模型撞上去就会被压），
+    # 分子是「系统提示 + 历史」的字符当量。history 每轮会被替换成新列表，
+    # 闭包读的是那个变量本身，所以下一轮的数字自动是新的。
+    tui.set_context_probe(
+        lambda: (estimate_tokens(history) + len(base_prompt), settings.compact_threshold)
+    )
     # 会话级模型（用户定）：打开哪个会话用它上次用的模型；--model 显式指定优先
     saved = load_session_model(WORKSPACE, session_id)
     if saved and saved not in settings.models:
