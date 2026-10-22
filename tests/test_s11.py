@@ -121,3 +121,20 @@ def test_trace_records_risk(tmp_path):  # 判定进 trace
     recs = [json.loads(line) for line in p.read_text(encoding="utf-8").strip().splitlines()]
     tool = next(r for r in recs if r["kind"] == "tool")
     assert tool["risk"] == "read_only"
+
+
+def test_cmd_syntax_words_are_not_commands():  # 真机那条：for / do / 通配符 / 变量不是命令
+    cmd = 'cd src\\agent_harness && for %f in (*.py) do @echo %f & @find /c /v "" < %f'
+    assert risk(cmd) == "read_only", risk(cmd).reason
+
+
+def test_find_read_only_unless_it_writes():  # find 默认只读；带删除 / 执行才升档
+    assert risk('find . -name "*.py"') == "read_only"
+    assert risk('find . -name "*.py" -delete') != "read_only"
+    assert risk('find . -name "*.py" -exec rm {} ;') != "read_only"
+
+
+def test_syntax_stripping_keeps_the_real_command():  # 剥语法词不能把真命令一起吞掉
+    assert risk("for %f in (*.py) do @del %f") == "mutating"
+    assert risk("for %f in (*.py) do @echo %f > out.txt") == "mutating"
+

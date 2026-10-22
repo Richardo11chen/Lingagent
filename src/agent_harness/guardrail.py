@@ -29,13 +29,26 @@ CATASTROPHIC_PROGRAMS = {
 }
 
 # 只读命令：确认不改工作区（重定向另判——`>` 出现即按改动算）。
-# 注意：find / sed / awk / xargs / tee / sort -o 能写或执行，故意不入白名单。
+# 注意：sed / awk / xargs / tee 能写或执行，故意不入白名单。
+# find 单独处理：它默认只读，但带 -delete / -exec 就是写/执行（见 _classify_tokens）。
 READ_ONLY_PROGRAMS = {
     "dir", "type", "findstr", "where", "ver", "cd", "chdir", "echo", "set",
     "whoami", "hostname", "tasklist", "vol", "date", "title", "cls", "path",
-    "color", "mode", "more", "fc", "comp", "tree",
-    "ls", "cat", "head", "tail", "wc", "grep", "stat", "pwd", "basename",
-    "dirname", "realpath", "md5sum", "sha1sum", "sha256sum", "which", "uname",
+    "color", "mode", "more", "fc", "comp", "tree", "diff", "cmp",
+    "ls", "cat", "head", "tail", "wc", "grep", "rg", "stat", "pwd", "basename",
+    "dirname", "realpath", "md5sum", "sha1sum", "sha256sum", "which", "uname", "du",
+}
+
+# find 的危险开关：命中即从只读升到执行/改动
+FIND_WRITE_FLAGS = (
+    "-delete", "-exec", "-execdir", "-ok", "-okdir",
+    "-fprint", "-fprintf", "-fls",
+)
+
+# cmd / bash 的语法词：它们不是可执行程序，出现在命令行里不代表"未知命令"
+SYNTAX_WORDS = {
+    "for", "if", "do", "else", "then", "elif", "fi", "while", "until", "done",
+    "in", "not", "rem", "setlocal", "endlocal", "goto", "exit",
 }
 
 # 只打印版本号的程序：仅当唯一参数是版本旗标时算只读（其余一律按执行算）
@@ -93,15 +106,34 @@ def classify_command(command: str) -> CommandRisk:
 
     worst = CommandRisk(READ_ONLY, "只读")
     for seg in segments:
-        if _has_file_write(seg):
+        if _has_file_write(seg):  # 重定向先判：语法残片里也可能带 `>`
             worst = _worse(worst, CommandRisk(MUTATING, "含输出重定向（> / >>）"))
-        else:
-            tokens = _tokens(seg)
-            if tokens:
-                worst = _worse(worst, _classify_tokens(tokens))
+            continue
+        tokens = _command_tokens(seg)
+        if not tokens:  # 整段都是语法残片（for %f in / *.py）——不是命令，不该去问人
+            continue
+        worst = _worse(worst, _classify_tokens(tokens))
         if worst.risk == CATASTROPHIC:
             return worst
     return worst
+
+
+def _command_tokens(segment: str) -> list[str]:
+    """剥掉语法词之后剩下的「真命令」token；整段都是残片时返回空列表。
+
+    `for %f in (*.py) do @del %f` 按 ( ) & 拆开后剩下 `do @del %f`——
+    只剥掉开头的 `do`、保留 `del`，否则真命令就被语法词一起吞了。
+    """
+    tokens = _tokens(segment)
+    while tokens and tokens[0].lower() in SYNTAX_WORDS:
+        tokens = tokens[1:]
+    if not tokens:
+        return []
+    head = tokens[0].lower()
+    # 程序位不可能含通配符（`*.py`）、也不可能以变量符开头（`%f` / `%%f` / `%~dp0` / `$x`）
+    if "*" in head or "?" in head or head.startswith(("%", "$")):
+        return []
+    return tokens
 
 
 def _split_segments(command: str) -> tuple[list[str], bool]:
@@ -177,6 +209,11 @@ def _classify_tokens(tokens: list[str]) -> CommandRisk:
         return CommandRisk(CATASTROPHIC, f"极危险命令：{prog}")
     if prog == "git":
         return _classify_git(args)
+    if prog == "find":
+        # 默认只读；带 -delete / -exec 才升档（Windows 的 find 没有这些开关，天然只读）
+        if any(a.lower().startswith(FIND_WRITE_FLAGS) for a in args):
+            return CommandRisk(EXECUTING, "find 带执行/删除参数")
+        return CommandRisk(READ_ONLY, "只读：find")
     if prog in VERSION_PROGRAMS:
         if len(args) == 1 and args[0].lower() in VERSION_FLAGS:
             return CommandRisk(READ_ONLY, f"只读：{prog} {args[0]}")

@@ -307,9 +307,9 @@ def show_trace(recs: list[dict], session_id: str) -> None:
                 detail = f"{r['before']} → {r['after']} 字符"
             else:
                 detail = str(r.get("text", ""))[:36]
-            table.add_row(str(i), ts, "⟳ 压缩", detail, "")
+            table.add_row(str(i), ts, "⟳  压缩", detail, "")
         elif kind == "oversized":
-            table.add_row(str(i), ts, "⚠ 超大", f"{r.get('bytes', '?')} 字节，超出读取上限（全文在文件里）", "")
+            table.add_row(str(i), ts, "⚠  超大", f"{r.get('bytes', '?')} 字节，超出读取上限（全文在文件里）", "")
     console.print(table)
     console.print("[dim]看某条全文：/trace N[/]")
 
@@ -392,7 +392,7 @@ def show_approval(command: str, reason: str = "", timeout: float = 300.0) -> str
         _blocks = []  # 旧块已印在屏幕上——新 Live 不重画，避免同一份内容印两遍
         restart = True
 
-    console.print(Text(f"⚠ {reason or '需要确认'}", style="yellow"))
+    console.print(Text(f"⚠  {reason or '需要确认'}", style="yellow"))
     console.print(Text("  " + command, style="dim"))  # 全文——审批不该藏东西
 
     timed_out = False
@@ -433,7 +433,7 @@ def show_approval(command: str, reason: str = "", timeout: float = 300.0) -> str
     except EOFError:
         pass  # 输入读尽（管道喂完 / Ctrl+Z）——维持默认驳回
     except Exception as e:  # 审批界面自己坏了：按驳回处理，别把这一轮打死
-        console.print(Text(f"⚠ 审批界面出错（{type(e).__name__}: {e}），按驳回处理", style="red"))
+        console.print(Text(f"⚠  审批界面出错（{type(e).__name__}: {e}），按驳回处理", style="red"))
         ans = "n"
     except BaseException:  # Ctrl+C 等：Live 先归位再抛
         if restart:
@@ -444,7 +444,7 @@ def show_approval(command: str, reason: str = "", timeout: float = 300.0) -> str
             t.cancel()
 
     if timed_out:
-        console.print(Text(f"⚠ 审批超时（{timeout:g} 秒没人答复），按驳回处理", style="yellow"))
+        console.print(Text(f"⚠  审批超时（{timeout:g} 秒没人答复），按驳回处理", style="yellow"))
         ans = "n"
 
     # 此时 Live 仍停着——这一行永久落屏（审批的屏幕侧留痕；文件侧在 trace）
