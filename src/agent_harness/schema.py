@@ -56,11 +56,11 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "run_shell",
-            "description": "执行 shell 命令（工作目录内）。查看文件列表、跑构建等。只读命令直接执行；会改动文件、执行程序或无法判定的命令会先询问用户。",
+            "description": "执行 shell 命令（bash，工作目录 = 项目根）。查看文件列表、跑构建等。只读命令直接执行；会改动文件、执行程序或无法判定的命令会先询问用户。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "要执行的完整命令（cmd.exe 语法）"},
+                    "command": {"type": "string", "description": "完整命令，bash 语法（管道、$变量、for ...; do ...; done 都能用；dir/type/del 这类 cmd 命令不存在）"},
                     "timeout": {
                         "type": "number",
                         "description": "超时秒数，默认 120、上限 600。只在装包/跑构建这类慢命令时才调大。",

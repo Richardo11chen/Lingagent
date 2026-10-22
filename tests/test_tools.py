@@ -70,6 +70,16 @@ def test_run_shell_schema_exposes_timeout():  # 模型能在菜单里看到 time
     assert params["required"] == ["command"]  # timeout 可选
 
 
+def test_run_shell_schema_tells_the_truth_about_the_shell():  # 换 shell 后别留 cmd 的说法
+    from agent_harness.schema import TOOL_SCHEMAS
+
+    fn = next(s for s in TOOL_SCHEMAS if s["function"]["name"] == "run_shell")["function"]
+    cmd_desc = fn["parameters"]["properties"]["command"]["description"].lower()
+    assert "bash" in fn["description"].lower()
+    assert "bash" in cmd_desc
+    assert "cmd.exe" not in cmd_desc  # 原来的"（cmd.exe 语法）"就是这么错的
+
+
 def test_shell_timeout_is_clamped():  # 调大可以，但不能无限；乱给退回默认
     from agent_harness.tools import MAX_SHELL_TIMEOUT, SHELL_TIMEOUT, _clamp_timeout
 
