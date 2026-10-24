@@ -3,8 +3,17 @@ name = "lingagent"
 version = "0.1.0"
 description = "A coding-agent harness: LLM decides, the harness dispatches tools, guards and logs"
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "ypchen", email = "3311614415@qq.com" }
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries",
 ]
 requires-python = ">=3.14"
 dependencies = [
