@@ -39,6 +39,16 @@ from .trace import Tracer, TRACE_FIELD_CHARS, ellipsis_note, load_trace, mark_vi
 
 app = FastAPI()
 
+# 前后端消息版本。加/改 WS 消息时 +1，weblaunch 用它判断「8000 上那个进程是不是旧代码」。
+# 别指望端口探测：上一个 TUI 拉起的后端会一直活着，占着端口假装自己是新的。
+PROTOCOL = 2
+
+
+@app.get("/health")
+def health() -> dict:
+    """给 weblaunch 的自检端点：应用名 + 协议版本。"""
+    return {"app": "agent-harness", "protocol": PROTOCOL}
+
 # 工具结果过 WS 的上限：结果与 diff 都是给眼睛看的，不必几十万字符一起推。
 # 超限的部分前端拿不到，但 trace 文件里一直是全文（审计账不截断）。
 TOOL_RESULT_CHARS = 8_000

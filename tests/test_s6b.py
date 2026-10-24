@@ -95,8 +95,9 @@ def test_ensure_web_skips_when_running(monkeypatch, tmp_path):
 
     calls = []
     monkeypatch.setattr(weblaunch, "_port_open", lambda port: True)
+    monkeypatch.setattr(weblaunch, "_backend_is_stale", lambda port: False)  # 对面是当前版本
     monkeypatch.setattr(weblaunch.subprocess, "Popen", lambda *a, **k: calls.append(a))
-    assert weblaunch.ensure_web(8000, tmp_path, tmp_path) == []
+    assert weblaunch.ensure_web(8000, tmp_path, tmp_path) == ([], None)
     assert calls == []
 
 
@@ -112,10 +113,32 @@ def test_ensure_web_spawns_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(weblaunch.shutil, "which", lambda name: "C:/fake/npm.cmd")
     monkeypatch.setattr(weblaunch.subprocess, "Popen", lambda argv, **k: spawned.append(argv))
 
-    started = weblaunch.ensure_web(8000, tmp_path, web)
-    assert started == ["后端", "前端"]
+    started, warning = weblaunch.ensure_web(8000, tmp_path, web)
+    assert started == ["后端", "前端"] and warning is None
     assert spawned[0][1:] == ["-m", "agent_harness.server"]
     assert spawned[1][0].lower().endswith("cmd.exe") and "run" in spawned[1]
+
+
+def test_ensure_web_warns_about_a_stale_backend(monkeypatch, tmp_path):
+    """端口有人听、但对面是旧代码 → 不许静默复用，必须说出来。"""
+    from agent_harness import weblaunch
+
+    spawned = []
+    monkeypatch.setattr(weblaunch, "_port_open", lambda port: True)
+    monkeypatch.setattr(weblaunch, "_backend_is_stale", lambda port: True)
+    monkeypatch.setattr(weblaunch.subprocess, "Popen", lambda *a, **k: spawned.append(a))
+
+    started, warning = weblaunch.ensure_web(8000, tmp_path, tmp_path)
+    assert started == [] and spawned == []  # 不乱拉第二份
+    assert warning and "不是当前版本" in warning
+
+
+def test_health_reports_the_protocol_weblaunch_expects():
+    from agent_harness import server, weblaunch
+
+    assert server.PROTOCOL == weblaunch.EXPECTED_PROTOCOL  # 两处常量不许漂
+    body = TestClient(server.app).get("/health").json()
+    assert body == {"app": "agent-harness", "protocol": server.PROTOCOL}
 
 
 def test_ws_hook_denied_event(monkeypatch, tmp_path):  # 策略拦下 → WS 推 hook 事件（实时流一行）

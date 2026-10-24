@@ -208,10 +208,12 @@ def show_hook(by: str, reason: str) -> None:
     _stream_line(Text(line, style="yellow"))
 
 
-def show_web_hint(started: list[str] | None = None) -> None:
+def show_web_hint(started: list[str] | None = None, warning: str | None = None) -> None:
     """网页端链接提示——由调用方放在历史渲染之后（长历史时不用往上翻找）。"""
     tail = f" · {'、'.join(started)}启动中，几秒后就绪" if started else ""
     console.print(f"[dim]网页端: http://localhost:5173{tail}[/]")
+    if warning:
+        show_note(warning, "warn")
 
 
 def ask() -> str:

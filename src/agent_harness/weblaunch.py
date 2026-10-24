@@ -6,14 +6,19 @@
 - 独立——关掉 TUI（exit / Ctrl+C）网页端还活着。
 """
 
+import json
 import os
 import shutil
 import socket
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 FRONTEND_PORT = 5173  # Vite 默认端口（web/ 未改配置）
+
+# 与 server.PROTOCOL 必须一致（test_s6b 有一行断言守着）。加/改 WS 消息时两边一起 +1。
+EXPECTED_PROTOCOL = 2
 
 
 def _port_open(port: int, host: str = "127.0.0.1") -> bool:
@@ -41,12 +46,35 @@ def _spawn(argv: list[str], cwd: Path) -> None:
     subprocess.Popen(argv, **kwargs)
 
 
-def ensure_web(backend_port: int, workspace: Path, web_dir: Path) -> list[str]:
-    """确保网页端在跑：缺后端起后端、缺前端起前端。返回本次启动的项（幂等）。"""
+def _backend_is_stale(port: int, host: str = "127.0.0.1") -> bool:
+    """端口有东西在听——但它是当前版本的后端吗？
+
+    只看端口会踩坑：TUI 拉起的后端是独立进程，TUI 退了它还活着。之后每次进 TUI 都因为
+    "端口有人在听"而跳过启动，网页就一直连到旧代码（2026-10-24 卡过一轮：新加的按钮点了没反应，
+    后端根本不认那条消息）。
+    """
+    # 本机请求别走系统代理：这台机器上 HTTP_PROXY 会把 127.0.0.1 也拦掉（回 502）
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(f"http://{host}:{port}/health", timeout=0.6) as r:
+            data = json.load(r)
+    except Exception:
+        return True  # 连 /health 都没有：比这个机制还老的版本
+    return data.get("app") != "agent-harness" or data.get("protocol") != EXPECTED_PROTOCOL
+
+
+def ensure_web(backend_port: int, workspace: Path, web_dir: Path) -> tuple[list[str], str | None]:
+    """确保网页端在跑：缺后端起后端、缺前端起前端。返回 (本次启动的项, 警告或 None)。"""
     started: list[str] = []
+    warning: str | None = None
     if not _port_open(backend_port):
         _spawn([sys.executable, "-m", "agent_harness.server"], cwd=workspace)
         started.append("后端")
+    elif _backend_is_stale(backend_port):
+        warning = (
+            f"{backend_port} 端口上跑的后端不是当前版本——网页会连到旧代码。"
+            f"先结束那个进程（或改端口）再开 TUI。"
+        )
     if (web_dir / "package.json").exists() and not _port_open(FRONTEND_PORT):
         npm = shutil.which("npm")
         if npm:
@@ -56,4 +84,4 @@ def ensure_web(backend_port: int, workspace: Path, web_dir: Path) -> list[str]:
                 argv = [npm, "run", "dev"]
             _spawn(argv, cwd=web_dir)
             started.append("前端")
-    return started
+    return started, warning
