@@ -40,3 +40,16 @@ export function traceRow(r: TraceRec): { label: string; detail: string } {
 }
 
 export const fmtVal = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
+
+/**
+ * 会话 id → 人能读的时间：`20261024-145431-588700` → `10-24 14:54`。
+ *
+ * 会话 id 本身是「日期-时间-随机」，界面上直接印 id 等于让人自己拆字符串；
+ * 完整 id 留在 title 里，需要精确定位时还能看到。
+ */
+export function fmtSessionTime(id: string): string {
+  const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/.exec(id)
+  if (!m) return id
+  const [, , mm, dd, hh, mi] = m
+  return `${mm}-${dd} ${hh}:${mi}`
+}

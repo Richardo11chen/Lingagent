@@ -34,7 +34,6 @@ export default function Sidebar({ sessions, current, collapsed, onToggle, onPick
             title={s.preview || '(空会话)'}
           >
             <span className="preview">{s.preview || '(空会话)'}</span>
-            <span className="meta">{s.id}</span>
           </button>
         ))}
         {sessions.length === 0 && (

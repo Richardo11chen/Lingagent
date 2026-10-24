@@ -4,6 +4,7 @@ import ChatArea from './components/ChatArea'
 import Composer from './components/Composer'
 import DetailsPanel from './components/DetailsPanel'
 import Sidebar from './components/Sidebar'
+import { fmtSessionTime } from './lib/format'
 import type { Ev, Msg, Session, TraceRec } from './lib/types'
 import './styles/tokens.css'
 import './styles/global.css'
@@ -208,8 +209,9 @@ export default function App() {
 
       <div className="main">
         <div className="topbar">
-          <span className="pill plain" title="会话 id">
-            {sessionId || '连接中…'}
+          {/* 会话 id 是一串「日期-时间-随机」，界面上换成时间更好读；完整 id 留在 title 里 */}
+          <span className="pill plain" title={sessionId ? `会话 ${sessionId}` : '连接中'}>
+            {sessionId ? fmtSessionTime(sessionId) : '连接中…'}
           </span>
           <span className="grow" />
 
