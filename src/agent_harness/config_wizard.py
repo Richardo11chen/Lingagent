@@ -1,4 +1,4 @@
-"""`ah --init`：首启向导——问三句，生成 `~/.agent-harness/config.toml`。
+"""`linga --init`：首启向导——问三句，生成 `~/.agent-harness/config.toml`。
 
 为什么单独一个模块：`main()` 已经够长；而且它只在人第一次跑的时候用一次，
 不该占着主入口的行数。写文件这件事必须可靠 + 可测（见 tests/test_config_wizard.py）。
@@ -27,7 +27,7 @@ def _ask(prompt: str, default: str) -> str:
 
 def _secret(prompt: str) -> str:
     """读 key。真人在终端里不回显（getpass）；管道/CI 退化成 input——getpass 在无 TTY 下会
-    去开控制台，把整个进程挂住（`printf … | ah --init` 就会卡死）。"""
+    去开控制台，把整个进程挂住（`printf … | linga --init` 就会卡死）。"""
     if sys.stdin.isatty():
         try:
             import getpass
@@ -45,7 +45,7 @@ def _toml_str(s: str) -> str:
 
 def _render_config(name: str, base_url: str, key: str | None, key_env: str | None) -> str:
     lines = [
-        "# Agent Harness 配置（由 `ah --init` 生成）",
+        "# LingAgent 配置（由 `linga --init` 生成）",
         "",
         "[model]",
         "default = \"main\"",
@@ -65,7 +65,7 @@ def run_init() -> int:
     """问三句 → 写配置。返回进程退出码。"""
     if CONFIG_PATH.exists():
         print(f"已有配置：{CONFIG_PATH}")
-        print("`ah --init` 不会覆盖它。想重新来过，先手动删掉（或改名备份）再跑一次。")
+        print("`linga --init` 不会覆盖它。想重新来过，先手动删掉（或改名备份）再跑一次。")
         return 0
 
     print("Agent Harness 首次配置（回车用默认值，Ctrl+C 随时退出、不会写任何东西）")
@@ -92,7 +92,7 @@ def run_init() -> int:
         print("（key 已明文写入，文件权限 0600。别把这个文件提交进版本库。）")
     else:
         print(f"（用环境变量读 key——记得设 {DEFAULT_KEY_ENV}，否则启动会报缺 key。）")
-    print("\n现在在任意目录敲 `ah` 就能开工。")
+    print("\n现在在任意目录敲 `linga` 就能开工。")
     return 0
 
 

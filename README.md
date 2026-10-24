@@ -24,46 +24,46 @@ git clone <repo> && cd AgentHarness
 uv sync
 ```
 
-## 安装（当产品用：装完在任意目录 `ah` 就能启动）
+## 安装（当产品用：装完在任意目录 `linga` 就能启动）
 
 不打成「仓库里跑」的形态，而是装成一条命令——像 `claude`、`gh` 那样。
 
 **最省事：发布到 PyPI 之后一行**（见下「为什么是三行」）：
 
 ```bash
-uv tool install agent-harness     # 或 pipx install agent-harness
+uv tool install lingagent     # 或 pipx install lingagent
 ```
 
 **还没发布时的本地做法（三条命令，只跑一次）：**
 
 ```bash
 uv run python scripts/build_web.py   # 把前端构建产物打进包里（需要 Node）
-uv build                             # 产出 dist/agent_harness-0.1.0-py3-none-any.whl
-uv tool install dist/agent_harness-0.1.0-py3-none-any.whl
+uv build                             # 产出 dist/lingagent-0.1.0-py3-none-any.whl
+uv tool install dist/lingagent-0.1.0-py3-none-any.whl
 ```
 
 装完先做一次配置（交互式，问三句就写好 `~/.agent-harness/config.toml`）：
 
 ```bash
-ah --init
+linga --init
 ```
 
 之后随便 `cd` 到哪个目录：
 
 ```bash
-ah                 # 启动 TUI（会话 / 轨迹按当前目录的项目身份归档）
-agent-harness-web  # 只起后端 + 网页界面
-ah --stop-web      # 关掉后台的后端
+linga             # 启动 TUI（会话 / 轨迹按当前目录的项目身份归档）
+lingagent-web     # 只起后端 + 网页界面
+linga --stop-web  # 关掉后台的后端
 ```
 
 装好的包**不需要 Node、不需要仓库、不需要 web/**：前端构建产物跟着 wheel 走，后端一个端口
 （`http://localhost:8000`）就把界面和 WebSocket 一起发出去。开发时（在仓库里）仍走 vite 5173 热更新。
 
-卸载：`uv tool uninstall agent-harness`。
+卸载：`uv tool uninstall lingagent`。
 
 **为什么上面是三行而不是一行**：`web_dist/` 不提交进 git（构建产物不该进版本库），所以本地要先
 `build_web` 把前端塞进 wheel；也没发布到 PyPI，所以要 `uv build` 现打一个。只要把 wheel 推到 PyPI，
-`uv tool install agent-harness` 就是唯一一行——这是下一步该做的事，跟安装方式无关。
+`uv tool install lingagent` 就是唯一一行——这是下一步该做的事，跟安装方式无关。
 
 ## 配置
 
@@ -96,8 +96,8 @@ api_key_env = "DEEPSEEK_API_KEY"    # 从环境变量读（推荐）
 **终端界面：**
 
 ```bash
-uv run agent-harness                          # 用配置里的 default profile
-uv run agent-harness --model deepseek-v4-pro  # 临时指定 profile
+uv run linga                          # 用配置里的 default profile
+uv run linga --model deepseek-v4-pro  # 临时指定 profile
 ```
 
 首次启动会：列出历史会话让你选（`0` 开新会话、`n`/`p` 翻页）→ 自动拉起网页端（`[web] autostart = false` 可关）。
@@ -109,7 +109,7 @@ uv run agent-harness --model deepseek-v4-pro  # 临时指定 profile
 
 ```bash
 # 终端 1：后端（默认 127.0.0.1:8000）
-uv run agent-harness-web
+uv run lingagent-web
 
 # 终端 2：前端（默认 5173）
 cd web && npm install && npm run dev
@@ -157,7 +157,7 @@ agent 自己的 `run_tests` 工具按项目根的标记文件认测试入口，�
 2. **trace 会一直长**（工具结果全文，审计账不截断）。攒久了清一下：
 
    ```bash
-   uv run agent-harness --clean-trace 30   # 删 30 天前的轨迹（0 = 全删）
+   uv run linga --clean-trace 30   # 删 30 天前的轨迹（0 = 全删）
    ```
 
    删轨迹不影响会话本身。要彻底不写，配置里 `[trace] enabled = false`——session 照常，只是没有"给人看的账"。TUI 启动时如果发现轨迹一个月没人看过，会提醒一句。
@@ -215,7 +215,7 @@ stop_wait = 120        # 收之前等网页那轮跑完的秒数（0 = 不等）
 也可以手动收（不需要 API key）：
 
 ```bash
-uv run agent-harness --stop-web      # 结束占用 8000 / 5173 的进程
+uv run linga --stop-web      # 结束占用 8000 / 5173 的进程
 ```
 
 后端复用前 TUI 会先问一句 `/health`：如果 8000 上的进程不是当前版本（协议号对不上），启动时就印一行黄字提醒，而不是假装一切正常。

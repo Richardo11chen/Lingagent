@@ -1,7 +1,7 @@
 [project]
-name = "agent-harness"
+name = "lingagent"
 version = "0.1.0"
-description = "Add your description here"
+description = "A coding-agent harness: LLM decides, the harness dispatches tools, guards and logs"
 readme = "README.md"
 authors = [
     { name = "ypchen", email = "3311614415@qq.com" }
@@ -18,13 +18,17 @@ dependencies = [
 ]
 
 [project.scripts]
-agent-harness = "agent_harness:main"
-ah = "agent_harness:main"  # 短名字：装完在任意目录 `ah` 就能开工
-agent-harness-web = "agent_harness.server:main"
+lingagent = "agent_harness:main"
+linga = "agent_harness:main"  # 短名字：装完在任意目录 `linga` 就能开工
+lingagent-web = "agent_harness.server:main"
 
 [build-system]
 requires = ["uv_build>=0.12.7,<0.13.0"]
 build-backend = "uv_build"
+
+# 发行名是 lingagent，但导入包名仍是 agent_harness——uv_build 默认按发行名猜模块，这里点明。
+[tool.uv.build-backend]
+module-name = "agent_harness"
 
 [dependency-groups]
 dev = [
