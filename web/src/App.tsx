@@ -36,7 +36,8 @@ export default function App() {
   const gotStatus = useRef(false)
   const [drawer, setDrawer] = useState<DrawerTab | null>(null)
   const [collapsed, setCollapsed] = useState(false) // 侧栏
-  const [detailsOpen, setDetailsOpen] = useState(true)
+  // 窄屏（≤1180px）详情是浮层、会盖住对话，所以默认收起；宽屏默认展开成常驻右栏
+  const [detailsOpen, setDetailsOpen] = useState(() => window.innerWidth > 1180)
   const [selectedTool, setSelectedTool] = useState<number | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
@@ -65,8 +66,8 @@ export default function App() {
           setMsgs(
             ev.messages.map((m) =>
               m.kind === 'tool'
-                ? ({ kind: 'tool', name: m.name || '' } as const)
-                : ({ kind: m.kind, text: m.text } as const),
+                ? { kind: 'tool' as const, name: m.name || '', detail: m.detail, body: m.body }
+                : { kind: m.kind, text: m.text },
             ),
           )
           setSelectedTool(null)
@@ -250,6 +251,25 @@ export default function App() {
     wsRef.current?.send(JSON.stringify({ type: 'approval_response', approved, remember }))
     setApproval(null)
   }
+
+  // 审批弹出来时：Enter = 批准，Esc = 驳回。capture 阶段抢在输入框前面，避免 Enter 又被当成「发送」
+  useEffect(() => {
+    if (!approval) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        e.stopPropagation()
+        wsRef.current?.send(JSON.stringify({ type: 'approval_response', approved: true, remember: false }))
+        setApproval(null)
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        wsRef.current?.send(JSON.stringify({ type: 'approval_response', approved: false, remember: false }))
+        setApproval(null)
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [approval])
 
   const picked = selectedTool === null ? null : (msgs[selectedTool] ?? null)
 

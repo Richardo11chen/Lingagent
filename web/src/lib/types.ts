@@ -39,7 +39,13 @@ export type TraceRec = {
 export type Ev =
   | { type: 'session'; id: string; history_n: number; resumed?: boolean; model?: string }
   | { type: 'sessions'; list: Session[] }
-  | { type: 'history'; messages: { kind: 'user' | 'assistant' | 'tool'; text: string; name?: string }[] }
+  | {
+      type: 'history'
+      messages: Array<
+        | { kind: 'user' | 'assistant'; text: string }
+        | { kind: 'tool'; name?: string; detail?: string; body?: string }
+      >
+    }
   | { type: 'assistant_chunk'; text: string }
   | { type: 'assistant_done'; text: string }
   | { type: 'tool'; name: string; detail?: string }

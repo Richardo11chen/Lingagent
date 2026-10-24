@@ -491,6 +491,44 @@ def test_ws_new_session_switches_id_without_reconnect(monkeypatch):
         assert ws.receive_json()["type"] == "status"
 
 
+def test_resume_renders_tool_detail_and_body(monkeypatch):
+    """刷新后恢复会话：工具行的参数（命令）和输出要拼回来，不能只剩名字。"""
+    from agent_harness.messages import Msg
+
+    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings()))
+    monkeypatch.setattr(server, "load_session_model", lambda w, sid: None)
+    monkeypatch.setattr(
+        server,
+        "load_session",
+        lambda w, sid: [
+            Msg(role="user", content="跑一下测试"),
+            Msg(
+                role="assistant",
+                content="",
+                tool_calls=[{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "run_shell", "arguments": '{"command": "pytest -q"}'},
+                }],
+            ),
+            Msg(role="tool", content="3 passed", tool_call_id="call_1", tool_name="run_shell"),
+        ],
+    )
+
+    c = TestClient(server.app)
+    with c.websocket_connect("/ws") as ws:
+        ws.receive_json()  # session
+        ws.receive_json()  # status
+        ws.send_json({"type": "resume", "id": "whatever"})
+        assert ws.receive_json()["type"] == "session"  # resumed
+        ev = ws.receive_json()  # history
+        assert ev["type"] == "history"
+        tool = next(m for m in ev["messages"] if m["kind"] == "tool")
+        assert tool["name"] == "run_shell"
+        assert tool["detail"] == "pytest -q"  # 参数从 assistant 的 tool_calls 里拼回来
+        assert tool["body"] == "3 passed"  # 输出也回来了
+
+
 def test_server_cli_model_fail_fast(tmp_path):
     # 启动期就拦住打错的 profile 名（别等 WS 连上才在 handler 里炸——前端只看到连接即断）
     import os

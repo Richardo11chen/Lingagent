@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import json
 import os
 import threading
 from functools import partial
@@ -354,7 +355,18 @@ async def ws_endpoint(ws: WebSocket):
                         {"type": "session", "id": session_id, "history_n": len(history),
                          "resumed": True, "model": llm.current}
                     )
-                    # 把历史渲染给前端（user/assistant 正文；tool 结果只给提示行——可能很长）
+                    # 把历史渲染给前端（user/assistant 正文；tool 给名字 + 参数 + 输出）。
+                    # 工具参数不落库——它在 assistant 的 tool_calls 里，按 tool_call_id 拼回来，
+                    # 否则刷新后工具行只剩名字、点开没参数（2026-10-24 用户报的）。
+                    args_by_call: dict = {}
+                    for m in history:
+                        if m.role == "assistant" and m.tool_calls:
+                            for tc in m.tool_calls:
+                                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                                try:
+                                    args_by_call[tc.get("id")] = json.loads(fn.get("arguments") or "{}")
+                                except (ValueError, TypeError):
+                                    args_by_call[tc.get("id")] = {}
                     rendered = []
                     for m in history:
                         if m.role == "user":
@@ -362,7 +374,15 @@ async def ws_endpoint(ws: WebSocket):
                         elif m.role == "assistant" and (m.content or "").strip():
                             rendered.append({"kind": "assistant", "text": m.content})
                         elif m.role == "tool":
-                            rendered.append({"kind": "tool", "name": m.tool_name or "工具结果"})
+                            body = m.content or ""
+                            if len(body) > TOOL_RESULT_CHARS:
+                                body = body[:TOOL_RESULT_CHARS] + ellipsis_note(len(body))
+                            rendered.append({
+                                "kind": "tool",
+                                "name": m.tool_name or "工具结果",
+                                "detail": tool_detail(args_by_call.get(m.tool_call_id)),
+                                "body": body,
+                            })
                     await ws.send_json({"type": "history", "messages": rendered})
                     await ws.send_json(status_payload())  # 换会话后用量跟着变
     except WebSocketDisconnect:

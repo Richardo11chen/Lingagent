@@ -961,11 +961,21 @@
   }
 }
 
-/* ── 窄屏：先收详情，再收侧栏；不隐藏到点不回来 ── */
+/* ── 窄屏：详情从「常驻右栏」变成「可开关的浮层」，开关按钮始终在 —— 不隐藏到点不回来 ── */
 @media (max-width: 1180px) {
-  .details,
-  .details-toggle {
-    display: none;
+  .shell {
+    position: relative; /* 让 .details 绝对定位时以整个壳为基准 */
+  }
+
+  .details {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 320px;
+    max-width: 90vw;
+    z-index: 30;
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
   }
 }
 
