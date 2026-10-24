@@ -208,10 +208,16 @@ def show_hook(by: str, reason: str) -> None:
     _stream_line(Text(line, style="yellow"))
 
 
-def show_web_hint(started: list[str] | None = None, warning: str | None = None) -> None:
+def show_web_hint(
+    started: list[str] | None = None,
+    warning: str | None = None,
+    reaped: list[str] | None = None,
+) -> None:
     """网页端链接提示——由调用方放在历史渲染之后（长历史时不用往上翻找）。"""
     tail = f" · {'、'.join(started)}启动中，几秒后就绪" if started else ""
     console.print(f"[dim]网页端: http://localhost:5173{tail}[/]")
+    if reaped:  # 上个 TUI 被强杀留下的：收了就说一声，别让人以为端口是被自己弄丢的
+        show_note(f"收掉上次遗留的进程：{'、'.join(reaped)}", "info")
     if warning:
         show_note(warning, "warn")
 

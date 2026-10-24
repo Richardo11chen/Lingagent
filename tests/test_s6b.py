@@ -3,6 +3,10 @@
 覆盖：WS 会话/流式事件、线程桥接、审批跨进程（Event 等待/唤醒）、驳回回灌、done。
 """
 
+import json
+import threading
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -132,6 +136,11 @@ def test_ensure_web_spawns_missing(monkeypatch, tmp_path):
     assert spawned[0][1:] == ["-m", "agent_harness.server"]
     assert spawned[1][0].lower().endswith("cmd.exe") and "run" in spawned[1]
     assert [p.pid for _, p in run.procs] == [1001, 1002]  # 句柄留着，退出时按 pid 收
+    # 同时落一份认领凭据：TUI 万一被强杀，下次启动靠它认出这些孤儿
+    st = json.loads(weblaunch._state_path().read_text(encoding="utf-8"))
+    assert [(p["name"], p["pid"], p["port"]) for p in st["procs"]] == [
+        ("后端", 1001, 8000), ("前端", 1002, weblaunch.FRONTEND_PORT)
+    ]
 
 
 def test_ensure_web_warns_about_a_stale_backend(monkeypatch, tmp_path):
@@ -173,12 +182,210 @@ def test_stop_run_reports_a_process_that_already_died(monkeypatch):
     assert killed == []
 
 
+def test_wait_until_idle_waits_for_the_running_turn(monkeypatch):
+    """网页上还有一轮在跑 → 等；只在开始等的时候说一句，别每 0.5 秒唠叨一次。"""
+    from agent_harness import weblaunch
+
+    seq = [1, 1, 0]  # 问三次：还在跑、还在跑、空了
+    monkeypatch.setattr(weblaunch, "backend_busy", lambda port: seq.pop(0) if seq else 0)
+    said, slept = [], []
+    assert weblaunch.wait_until_idle(8000, 10, on_wait=said.append, sleep=slept.append) is True
+    assert said == [1]
+    assert slept == [0.5, 0.5]
+
+
+def test_wait_until_idle_gives_up_after_timeout(monkeypatch):
+    """等不是无限等——超时就走，否则一个卡住的后端能让 TUI 永远退不出去。"""
+    from agent_harness import weblaunch
+
+    monkeypatch.setattr(weblaunch, "backend_busy", lambda port: 1)  # 一直有人在跑
+    clock = [0.0]
+    monkeypatch.setattr(weblaunch.time, "monotonic", lambda: clock[0])
+
+    def fake_sleep(sec):
+        clock[0] += sec
+
+    assert weblaunch.wait_until_idle(8000, 2, sleep=fake_sleep) is False
+    assert clock[0] >= 2  # 真的等满了超时才走
+
+
+def test_wait_until_idle_returns_at_once_when_nothing_to_wait_for(monkeypatch):
+    """闲着 / 后端已经没了 → 立刻返回，不睡。"""
+    from agent_harness import weblaunch
+
+    monkeypatch.setattr(weblaunch, "backend_busy", lambda port: 0)
+    assert weblaunch.wait_until_idle(8000, 10) is True
+    monkeypatch.setattr(weblaunch, "backend_busy", lambda port: None)
+    assert weblaunch.wait_until_idle(8000, 10) is True
+
+
+def _write_state(tui_pid: int, procs: list[dict], age: float = 0.0) -> None:
+    from agent_harness import weblaunch
+
+    weblaunch._state_path().write_text(
+        json.dumps({"tui": tui_pid, "at": time.time() - age, "procs": procs}), encoding="utf-8"
+    )
+
+
+def test_reap_orphans_takes_over_after_a_killed_tui(monkeypatch):
+    """TUI 被强杀（finally 跑不到）→ 下次启动认领它的遗留进程，收掉再起新的。"""
+    from agent_harness import weblaunch
+
+    _write_state(111, [{"name": "后端", "pid": 222, "port": 8000}])
+    monkeypatch.setattr(weblaunch, "_pid_alive", lambda pid: pid == 222)  # 111 没了，222 还在
+    monkeypatch.setattr(weblaunch, "_port_open", lambda port: True)  # 端口还被它占着
+    monkeypatch.setattr(weblaunch, "_health", lambda port, *a, **k: {"app": "agent-harness"})
+    monkeypatch.setattr(weblaunch, "_wait_port_closed", lambda port, *a: True)
+    killed = []
+    monkeypatch.setattr(weblaunch, "_kill_tree", lambda pid: killed.append(pid) or True)
+
+    assert weblaunch.reap_orphans(8000) == ["后端已结束（上次遗留 PID 222）"]
+    assert killed == [222]
+    assert not weblaunch._state_path().exists()  # 认领一次就够，别留着下次再认
+
+
+def test_reap_orphans_leaves_a_live_tui_alone(monkeypatch):
+    """那个 TUI 还开着 → 网页端归它管，不许替它收。"""
+    from agent_harness import weblaunch
+
+    _write_state(111, [{"name": "后端", "pid": 222, "port": 8000}])
+    monkeypatch.setattr(weblaunch, "_pid_alive", lambda pid: True)  # 111 活着
+    killed = []
+    monkeypatch.setattr(weblaunch, "_kill_tree", lambda pid: killed.append(pid) or True)
+
+    assert weblaunch.reap_orphans(8000) == []
+    assert killed == []
+
+
+def test_reap_orphans_refuses_to_guess(monkeypatch):
+    """三个条件缺一不杀：pid 还在、端口还占着、对面还是我们的后端。
+
+    全满足才动手——pid 会被系统复用，杀错一个用户进程比留个孤儿严重得多。
+    """
+    from agent_harness import weblaunch
+
+    killed = []
+    monkeypatch.setattr(weblaunch, "_kill_tree", lambda pid: killed.append(pid) or True)
+
+    # ① 记下的 pid 早就自己退干净了（正常退出，没什么可收）
+    _write_state(111, [{"name": "后端", "pid": 222, "port": 8000}])
+    monkeypatch.setattr(weblaunch, "_pid_alive", lambda pid: False)
+    monkeypatch.setattr(weblaunch, "_port_open", lambda port: True)
+    assert weblaunch.reap_orphans(8000) == []
+
+    # ② 它已经不占端口了
+    _write_state(111, [{"name": "后端", "pid": 222, "port": 8000}])
+    monkeypatch.setattr(weblaunch, "_pid_alive", lambda pid: pid == 222)
+    monkeypatch.setattr(weblaunch, "_port_open", lambda port: False)
+    assert weblaunch.reap_orphans(8000) == []
+
+    # ③ 端口有人听，但对面不是 agent-harness（pid 被别的程序复用了）
+    _write_state(111, [{"name": "后端", "pid": 222, "port": 8000}])
+    monkeypatch.setattr(weblaunch, "_port_open", lambda port: True)
+    monkeypatch.setattr(weblaunch, "_health", lambda port, *a, **k: {"app": "nginx"})
+    assert weblaunch.reap_orphans(8000) == []
+
+    # ④ 记录是八天前的（早过期了，pid 早不知被谁复用）
+    _write_state(111, [{"name": "后端", "pid": 222, "port": 8000}], age=8 * 24 * 3600)
+    monkeypatch.setattr(weblaunch, "_health", lambda port, *a, **k: {"app": "agent-harness"})
+    assert weblaunch.reap_orphans(8000) == []
+
+    assert killed == []
+
+
+def test_ensure_web_reaps_before_deciding(monkeypatch, tmp_path):
+    """顺序：先收遗物，再看端口。
+
+    反过来的话端口还被遗物占着，会被判成"已经在跑"→ 复用旧代码（正是 2026-10-24 那个坑）。
+    """
+    from agent_harness import weblaunch
+
+    _write_state(111, [{"name": "后端", "pid": 222, "port": 8000}])
+    monkeypatch.setattr(weblaunch, "_pid_alive", lambda pid: pid == 222)
+    monkeypatch.setattr(weblaunch, "_health", lambda port, *a, **k: {"app": "agent-harness"})
+    monkeypatch.setattr(weblaunch, "_wait_port_closed", lambda port, *a: True)
+    order = []
+    holds = {"orphan": True}  # 遗物还占着端口；收掉之后才空闲（真实世界里就是这个顺序）
+
+    def fake_kill(pid):
+        order.append(("kill", pid))
+        holds["orphan"] = False
+        return True
+
+    monkeypatch.setattr(weblaunch, "_kill_tree", fake_kill)
+    monkeypatch.setattr(
+        weblaunch, "_port_open", lambda port: order.append(("probe", port)) or holds["orphan"]
+    )
+    monkeypatch.setattr(weblaunch.shutil, "which", lambda name: None)  # 别真去拉 vite
+    monkeypatch.setattr(weblaunch.subprocess, "Popen", lambda *a, **k: _FakeProc(5555))
+
+    run = weblaunch.ensure_web(8000, tmp_path, tmp_path)
+    assert run.reaped == ["后端已结束（上次遗留 PID 222）"]
+    # 先探到「端口还被遗物占着」→ 收掉 → 之后的判断才看到空闲，于是决定起新的
+    assert order.index(("kill", 222)) > 0
+    assert run.started == ["后端"]  # 而不是"端口有人听，复用吧"（那正是 10-24 的坑）
+
+
 def test_health_reports_the_protocol_weblaunch_expects():
     from agent_harness import server, weblaunch
 
     assert server.PROTOCOL == weblaunch.EXPECTED_PROTOCOL  # 两处常量不许漂
     body = TestClient(server.app).get("/health").json()
-    assert body == {"app": "agent-harness", "protocol": server.PROTOCOL}
+    # busy = 还有几轮在跑：TUI 退出前靠它决定「等还是直接关」
+    assert body == {"app": "agent-harness", "protocol": server.PROTOCOL, "busy": 0}
+
+
+def test_busy_counts_a_running_turn():
+    """一轮跑着的时候 busy 要 > 0——TUI 就是看这个数字决定要不要等。"""
+    from agent_harness import server
+
+    server._turn_started()
+    try:
+        assert TestClient(server.app).get("/health").json()["busy"] == 1
+    finally:
+        server._turn_ended()
+    assert TestClient(server.app).get("/health").json()["busy"] == 0
+
+
+def test_busy_never_goes_negative():
+    """多减一次不能变成 -1——那会让 TUI 以为「永远有人在跑」，退出时白等满超时。"""
+    from agent_harness import server
+
+    server._turn_ended()
+    assert server.health()["busy"] == 0
+
+
+def test_busy_is_one_while_a_web_turn_runs(monkeypatch, tmp_path):
+    """真跑一轮（WS → 旁路线程）时 /health 说 busy=1，跑完回 0。
+
+    TUI 退出前就是查这个数字：> 0 就先等，别把网页那半轮砍断。
+    """
+    gate = threading.Event()
+
+    class SlowLLM(FakeLLM):
+        def __call__(self, *a, **kw):
+            gate.wait(5)  # 卡在模型这一步，模拟「还在写」
+            return ("好了", [], "")
+
+    monkeypatch.setattr(
+        server, "load_settings_and_llm", lambda sp, m=None, **kw: (SlowLLM(), Settings())
+    )
+    monkeypatch.setattr(server, "save_messages", _no_save)
+    monkeypatch.setattr(server, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
+    c = TestClient(server.app)
+    with c.websocket_connect("/ws") as ws:
+        ws.receive_json()  # session
+        ws.receive_json()  # status
+        ws.send_json({"type": "user", "text": "慢慢来"})
+        for _ in range(100):  # 等它在旁路线程里真的跑起来
+            if c.get("/health").json()["busy"] == 1:
+                break
+            time.sleep(0.02)
+        assert c.get("/health").json()["busy"] == 1  # 这一轮在跑
+        gate.set()
+        while ws.receive_json()["type"] != "assistant_done":
+            pass
+    assert c.get("/health").json()["busy"] == 0  # 跑完了
 
 
 def test_parse_netstat_picks_only_listening_rows():

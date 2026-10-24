@@ -39,15 +39,32 @@ from .trace import Tracer, TRACE_FIELD_CHARS, ellipsis_note, load_trace, mark_vi
 
 app = FastAPI()
 
-# 前后端消息版本。加/改 WS 消息时 +1，weblaunch 用它判断「8000 上那个进程是不是旧代码」。
-# 别指望端口探测：上一个 TUI 拉起的后端会一直活着，占着端口假装自己是新的。
-PROTOCOL = 2
+# 前后端消息版本。加/改 WS 消息（或 /health 里新增 TUI 依赖的字段）时 +1，weblaunch 用它判断
+# 「8000 上那个进程是不是旧代码」。别指望端口探测：上一个 TUI 拉起的后端会一直活着，占着端口
+# 假装自己是新的。3 = /health 多了 busy（TUI 退出前靠它决定等不等网页那轮）。
+PROTOCOL = 3
+
+# 正在跑几轮（进程级）。TUI 退出前问一句：网页上还有人在等回复就先别关，不然那半轮就断了。
+_BUSY = {"n": 0}
+_BUSY_LOCK = threading.Lock()
+
+
+def _turn_started() -> None:
+    with _BUSY_LOCK:
+        _BUSY["n"] += 1
+
+
+def _turn_ended() -> None:
+    with _BUSY_LOCK:
+        _BUSY["n"] = max(0, _BUSY["n"] - 1)  # 兜住：重复减不出现负数，免得一直「有人在跑」
 
 
 @app.get("/health")
 def health() -> dict:
-    """给 weblaunch 的自检端点：应用名 + 协议版本。"""
-    return {"app": "agent-harness", "protocol": PROTOCOL}
+    """给 weblaunch 的自检端点：应用名 + 协议版本 + 还有几轮在跑。"""
+    with _BUSY_LOCK:
+        busy = _BUSY["n"]
+    return {"app": "agent-harness", "protocol": PROTOCOL, "busy": busy}
 
 # 工具结果过 WS 的上限：结果与 diff 都是给眼睛看的，不必几十万字符一起推。
 # 超限的部分前端拿不到，但 trace 文件里一直是全文（审计账不截断）。
@@ -240,6 +257,17 @@ async def ws_endpoint(ws: WebSocket):
         await ws.send_json({"type": "assistant_done", "text": reply})
         await ws.send_json(status_payload())  # 这一轮的上下文用量
 
+    async def run_user_counted(goal: str) -> None:
+        """给 run_user 套个计数器：/health 的 busy 就是它。
+
+        TUI 退出前会问 busy——网页上还有一轮在跑，就先等它跑完再关（否则那半轮被拦腰砍断）。
+        """
+        _turn_started()
+        try:
+            await run_user(goal)
+        finally:
+            _turn_ended()
+
     try:
         while True:  # 常驻收消息——审批答复也走这里（不能被 agent 执行阻塞）
             msg = await ws.receive_json()
@@ -248,7 +276,7 @@ async def ws_endpoint(ws: WebSocket):
                 if user_task and not user_task.done():
                     continue  # 上一轮还在跑——忽略
                 stop_event.clear()  # 新一轮：把上一轮的「停」清掉
-                user_task = asyncio.create_task(run_user(str(msg.get("text", ""))))
+                user_task = asyncio.create_task(run_user_counted(str(msg.get("text", ""))))
                 user_task.add_done_callback(_report_round_failure)
             elif mtype == "interrupt":
                 # 停止本轮：置位给 loop 的检查点；若正卡在审批上，顺手驳回把它放出来

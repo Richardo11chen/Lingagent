@@ -156,6 +156,54 @@ def test_exit_closes_the_web_it_started(tmp_path):
 
 
 
+def test_let_web_finish_waits_for_the_web_turn(monkeypatch, capsys):
+    """退 TUI 前先等网页那轮跑完——并说一声在等什么，别让人以为卡住了。"""
+    import agent_harness
+    from agent_harness.settings import Settings
+
+    seen = {}
+
+    def fake_wait(port, timeout, on_wait=None):
+        seen["args"] = (port, timeout)
+        on_wait(2)  # 模拟：网页上还有 2 轮
+        return True
+
+    monkeypatch.setattr(agent_harness, "wait_until_idle", fake_wait)
+    s = Settings()
+    s.server_port, s.web_stop_wait = 8123, 30.0
+    agent_harness._let_web_finish(s)
+    assert seen["args"] == (8123, 30.0)
+    assert "还有 2 轮在跑" in capsys.readouterr().out
+
+
+def test_let_web_finish_can_be_switched_off(monkeypatch):
+    """stop_wait = 0 → 不等，直接关（有人就是想让 TUI 立刻退）。"""
+    import agent_harness
+    from agent_harness.settings import Settings
+
+    def boom(*a, **k):
+        raise AssertionError("不该调用等待")
+
+    monkeypatch.setattr(agent_harness, "wait_until_idle", boom)
+    s = Settings()
+    s.web_stop_wait = 0
+    agent_harness._let_web_finish(s)
+
+
+def test_let_web_finish_lets_ctrl_c_through(monkeypatch):
+    """等的时候按 Ctrl+C → 当场不等，而不是把退出卡到超时。"""
+    import agent_harness
+    from agent_harness.settings import Settings
+
+    def interrupt(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(agent_harness, "wait_until_idle", interrupt)
+    s = Settings()
+    s.web_stop_wait = 120.0
+    agent_harness._let_web_finish(s)  # 不抛出去
+
+
 def test_slash_commands_autocomplete():  # 输入 / 就列命令——不用记口令，也不用查文档
     from prompt_toolkit.document import Document
 

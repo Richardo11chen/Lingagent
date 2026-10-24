@@ -30,7 +30,7 @@ from .session import (
 from .loop import agent_loop
 from .llm import Msg, DeepSeekLLM
 from .trace import Tracer, days_since_viewed, load_trace, mark_viewed
-from .weblaunch import WebRun, ensure_web, stop_run
+from .weblaunch import WebRun, clear_state, ensure_web, stop_run, wait_until_idle
 
 def choose_session(workspace: Path, default_profile: str = "") -> tuple[str, list[Msg]]:
     """列历史会话让用户选（分页，每页 10 条）；返回 (session_id, history)。
@@ -109,6 +109,27 @@ def _trace_nudge(settings) -> None:
         )
 
 
+def _let_web_finish(settings) -> None:
+    """关后端之前，等网页上正在跑的那一轮跑完。
+
+    不等的话那一轮会被拦腰砍断：工具可能正改文件、trace 停在半截、人在浏览器里等一个永远不来的
+    回复。等是有上限的（`[web] stop_wait`），Ctrl+C 可以当场不等。
+    """
+    if settings.web_stop_wait <= 0:
+        return
+
+    def on_wait(busy: int) -> None:
+        tui.console.print(
+            f"[dim]网页上还有 {busy} 轮在跑——等它写完再关"
+            f"（最多 {settings.web_stop_wait:g} 秒，Ctrl+C 直接关）[/]"
+        )
+
+    try:
+        wait_until_idle(settings.server_port, settings.web_stop_wait, on_wait=on_wait)
+    except KeyboardInterrupt:
+        tui.console.print("[dim]不等了，直接关[/]")
+
+
 def main() -> None:
     import argparse
 
@@ -126,10 +147,11 @@ def main() -> None:
 
     if args.stop_web:  # 也不该要求 API key
         from .settings import load_settings
-        from .weblaunch import FRONTEND_PORT, stop_web
+        from .weblaunch import FRONTEND_PORT, stop_web  # 局部导入：这两个只在 --stop-web 时才需要
 
         for line in stop_web([load_settings().server_port, FRONTEND_PORT]):
             print(line)
+        clear_state()  # 记录里那些 pid 已经被上面收掉了，别留给下次启动去"认领"
         return
 
     if args.clean_trace is not None:  # 清理不该要求 API key
@@ -200,7 +222,7 @@ def main() -> None:
     tui.show_banner(session_id, len(history), llm.current, detect_shell().name)
     if history:
         tui.show_history(history)  # 恢复的会话：把历史渲染出来
-    tui.show_web_hint(web.started, web.warning)  # 链接放历史之后（长历史时不用往上翻）
+    tui.show_web_hint(web.started, web.warning, web.reaped)  # 链接放历史之后（长历史时不用往上翻）
     _trace_nudge(settings)
     try:
         while True:
@@ -264,4 +286,6 @@ def main() -> None:
         # （2026-10-24 就是这么卡住的：新按钮点了没反应，8000 上还是上个世纪的进程）。
         # 只收自己拉起的——端口上原有的可能是另一个 TUI 或用户自己在用，不动。
         if web.procs and settings.web_stop_on_exit:
+            _let_web_finish(settings)  # 网页上还有一轮就先等它跑完，别拦腰砍断
             tui.console.print(f"[dim]网页端已关闭：{'、'.join(stop_run(web))}[/]")
+            clear_state()

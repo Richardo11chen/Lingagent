@@ -48,7 +48,7 @@ api_key_env = "DEEPSEEK_API_KEY"    # 从环境变量读（推荐）
 
 密钥两种写法二选一，**都没有就在启动时直接报错退出**（TUI 和后端都会前置校验）。
 
-其余可调项（`[loop] max_steps`、`[context] compact_threshold`、`[server] port`、`[web] autostart` / `stop_on_exit`）见 `harness.example.toml` 里的注释。
+其余可调项（`[loop] max_steps`、`[context] compact_threshold`、`[server] port`、`[web] autostart` / `stop_on_exit` / `stop_wait`）见 `harness.example.toml` 里的注释。
 
 ## 运行
 
@@ -146,17 +146,35 @@ Ctrl+C 两次 / Ctrl+D / 关窗口）时，这次启动拉起来的会一起收�
 
 只收**自己拉的**：如果进 TUI 时端口已经有人（另一个 TUI 起的、或你手动起的），复用它，退出时不动它。
 
+**网页上还有一轮在跑时会先等它**（不是干等到底：`[web] stop_wait` 秒，默认 120，Ctrl+C 当场不等）：
+
+```
+网页上还有 1 轮在跑——等它写完再关（最多 120 秒，Ctrl+C 直接关）
+网页端已关闭：后端已结束（PID 2652）
+```
+
+不等的话那一轮会被拦腰砍断：工具可能正改文件、trace 停在半截、浏览器里的人在等一个永远不来的回复。
+
 想把网页端留着自己用（关掉终端后在浏览器里继续聊），在配置里关掉这一条：
 
 ```toml
 [web]
 stop_on_exit = false   # 默认 true
+stop_wait = 120        # 收之前等网页那轮跑完的秒数（0 = 不等）
 ```
 
-兜底：TUI 被强杀（`kill -9` / 任务管理器结束）时 `finally` 跑不到，那些进程会变成孤儿。按端口收：
+**TUI 被强杀**（`kill -9` / 任务管理器结束 / 关掉整个终端窗口）时 `finally` 跑不到，进程会变成孤儿。
+下次启动会自己认领：`~/.agent-harness/web.json` 记着"哪个 TUI 拉起了哪些 pid"，那个 TUI 已经没了、
+端口还占着、`/health` 还答 agent-harness——三条都成立才收，然后印一行
+
+```
+收掉上次遗留的进程：后端已结束（上次遗留 PID 2652）
+```
+
+也可以手动收（不需要 API key）：
 
 ```bash
-uv run agent-harness --stop-web      # 结束占用 8000 / 5173 的进程（不需要 API key）
+uv run agent-harness --stop-web      # 结束占用 8000 / 5173 的进程
 ```
 
 后端复用前 TUI 会先问一句 `/health`：如果 8000 上的进程不是当前版本（协议号对不上），启动时就印一行黄字提醒，而不是假装一切正常。
