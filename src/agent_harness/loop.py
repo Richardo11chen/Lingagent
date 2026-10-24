@@ -6,7 +6,7 @@ from .llm import LLM, Action
 from .messages import Msg
 from .guardrail import classify_command
 from .schema import TOOL_SCHEMAS
-from .tools import cap_result
+from .tools import cap_result, take_diff
 from .trace import Tracer
 from .hooks import run_post, run_pre
 
@@ -23,6 +23,7 @@ def agent_loop(
     max_steps: int = MAX_STEPS,
     on_text: Callable[[str], None] | None = None,  # 流式文本增量回调（透传给模型适配器）
     on_tool: Callable[[str, dict], None] | None = None,  # 工具执行提示回调（名字 + 参数，界面用）
+    on_tool_result: Callable[[dict], None] | None = None,  # 工具结束回调（状态 / 耗时 / 结果 / diff）
     on_reasoning: Callable[[str], None] | None = None,  # 思考增量回调（界面用）
     tracer: Tracer | None = None,  # 轨迹记录器（S8）——None = 关闭态，什么都不记
     pre_hooks: list | None = None,  # 预钩子名单（S9）——None = 空名单
@@ -140,6 +141,18 @@ def agent_loop(
                         result = f"工具不存在：未知工具 {action.tool}。"
                         ev.fields["status"] = "error"
                 ev.fields["result"] = result  # 全文（S8 决策 3）——trace 是审计账，不截断
+
+            # 工具结束：状态 / 耗时 / 结果 / 改动一起递出去（界面靠它把「它改了什么」显示出来）。
+            # take_diff() 无条件清一次——不清的话，下一次调用的 diff 会串到这一条上。
+            diff = take_diff()
+            if on_tool_result:
+                on_tool_result({
+                    "name": action.tool,
+                    "status": str(ev.fields.get("status", "")),
+                    "ms": ev.fields.get("duration_ms", 0),
+                    "result": result,
+                    "diff": diff,
+                })
 
             # 回灌历史的那一份要截断：history 会进下一次请求、也会落进 session 存档，
             # 一次 `find /c` 就能灌进 90MB（2026-10-19 真机撞过）——trace 那份保持完整。

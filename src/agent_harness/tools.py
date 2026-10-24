@@ -1,6 +1,8 @@
 from pathlib import Path
+from contextvars import ContextVar
 from dataclasses import dataclass
 import atexit
+import difflib
 import os
 import subprocess
 import time
@@ -302,9 +304,46 @@ def read_file(path: str) -> str:
     """读取文件内容"""
     return _read_text(Path(path))
 
+# ── 改动留痕 ──────────────────────────────────────────────────────
+# 写文件的工具顺手算出 diff，loop 在调用后取走一次。
+#
+# 为什么不让工具把 diff 拼进返回值：返回值要原样回灌给模型（进 history 就按 32k 截断、
+# 还要算 token）。diff 是给人看的，混进模型那一份纯属浪费。
+# 为什么不用模块全局变量：网页端每个连接各跑一轮，全局会串到别的会话。
+MAX_DIFF_CHARS = 20_000  # 超大文件的整篇替换能产出几十万行 diff，先在源头封顶
+
+_LAST_DIFF: ContextVar[str] = ContextVar("last_diff", default="")
+
+
+def take_diff() -> str:
+    """取走并清空本次调用产生的 diff（loop 每次调用后取一次）。"""
+    diff = _LAST_DIFF.get()
+    _LAST_DIFF.set("")
+    return diff
+
+
+def _record_diff(old: str, new: str, path: str) -> None:
+    """「改前 / 改后」→ unified diff；没有变化就记空。"""
+    if old == new:
+        _LAST_DIFF.set("")
+        return
+    text = "\n".join(
+        difflib.unified_diff(
+            old.splitlines(), new.splitlines(),
+            fromfile=f"a/{path}", tofile=f"b/{path}", n=3, lineterm="",
+        )
+    )
+    if len(text) > MAX_DIFF_CHARS:
+        text = text[:MAX_DIFF_CHARS] + f"\n…（diff 共 {len(text)} 字符，已截断）"
+    _LAST_DIFF.set(text)
+
+
 def write_file(path: str, content: str):
     """写入文件内容"""
-    Path(path).write_text(content, encoding="utf-8")
+    p = Path(path)
+    old = _read_text(p) if p.exists() else ""  # 覆盖前先留一份，界面才能显示"改了什么"
+    p.write_text(content, encoding="utf-8")
+    _record_diff(old, content, path)
     return f'写入文件 {path} {len(content)} 字符。'
 
 def edit_file(path: str, old: str, new: str) -> str:
@@ -320,5 +359,6 @@ def edit_file(path: str, old: str, new: str) -> str:
     if count > 1:
         return f"编辑失败：要替换的文本出现 {count} 次（不唯一），请给出更多上下文使其唯一。"
     p.write_text(content.replace(old, new), encoding="utf-8")
+    _record_diff(content, content.replace(old, new), path)
     return f"已编辑 {path}（替换 {len(old)} 字符 → {len(new)} 字符）。"
 

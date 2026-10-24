@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import DiffBlock from './DiffBlock'
+import { toolStatusZh } from '../lib/format'
 import type { Msg } from '../lib/types'
 
 type Props = {
@@ -39,14 +41,32 @@ export default function ChatArea({ msgs, pending, selected, onSelect }: Props) {
         {msgs.map((m, i) => {
           if (m.kind === 'tool') {
             const open = expanded.has(i)
+            const changed = (m.added ?? 0) + (m.removed ?? 0) > 0
             return (
               <div key={i} className={selected === i ? 'tool-row selected' : 'tool-row'}>
                 <button className="tool-head" onClick={() => toggle(i)}>
                   <span className="tool-caret">{open ? '▾' : '▸'}</span>
                   <span className="tool-name">{m.name}</span>
                   {m.detail && <span className="tool-detail">{m.detail}</span>}
+                  <span className="tool-tail">
+                    {/* 折叠态就带上「改了多少」——不点开也知道这一下动了什么 */}
+                    {changed && (
+                      <>
+                        <span className="delta-add">+{m.added}</span>
+                        <span className="delta-del">−{m.removed}</span>
+                      </>
+                    )}
+                    {m.status && m.status !== 'ok' && (
+                      <span className="tool-badge">{toolStatusZh(m.status)}</span>
+                    )}
+                  </span>
                 </button>
-                {open && m.body && <div className="tool-body">{m.body}</div>}
+                {open &&
+                  (m.diff ? (
+                    <DiffBlock diff={m.diff} />
+                  ) : m.body ? (
+                    <pre className="tool-body">{m.body}</pre>
+                  ) : null)}
               </div>
             )
           }

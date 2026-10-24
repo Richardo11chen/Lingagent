@@ -85,6 +85,17 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
     - 顺手删掉 `loop.py` 里没人用的 `run_sensors` 导入
   - 体验一致性批次（审美审查后）：`show_note` 分 info/warn/error 三档（失败终于不是洋红色）；TUI 与网页共用 `TRACE_FIELD_CHARS` + `ellipsis_note`（同一句截断说明），工具详情两端都截 50；网页错误改独立 `.err-line`（左线 + 红字）；等第一个字时两端都有「⋯」；网页底部加 `/model` `/trace` 一行提示；断线清残留审批卡；网页加「停止」（`loop.should_stop` 每步检查 + `interrupt` 消息，正在跑的那一步会跑完）；`/model` 输入非法时不再静默吞
 
+  - 网页前端重做（2026-10-24，参照 dsh-transition-webui 的实测尺寸与 token，不搬它的脚手架）：
+    - 四块骨架：side(260/56) · main(topbar + timeline + composer + 底部抽屉) · details(320)；`styles/tokens.css` 收敛掉约 40 处硬编码色值，深色跟 `prefers-color-scheme`
+    - assistant 去掉气泡（只有 user 是 pill）；工具调用是可折叠行；会话列表进左栏、trace 进底部抽屉
+    - 修两个只有真机/真浏览器才看得出的：①会话列表只在「没有 sid」时请求，错过一次就永久空——改成每次连接都问 + 每轮结束刷一次；②`.session-list` 是列向 flex，41 条时条目被 `flex-shrink` 压到 15px、标题塌成 0 高——加 `flex: none`
+    - 会话行只留标题（原来第二行印完整 id，41 条纯噪音）；顶栏时间来自会话 id 的日期前缀，写「10-24 15:08 开始」，不带「开始」会被当成当前时钟
+  - 工具结果接回前端（网页第一次能看见"它改了什么"）：
+    - `loop.agent_loop(..., on_tool_result=fn)`：工具结束后回一次 `{name, status, ms, result, diff}`
+    - diff 由写文件的工具自己算（`tools._record_diff` → `difflib.unified_diff`），用 `ContextVar` 传给 loop——不放返回值（那会进 history 和 token），也不放模块全局（网页多连接会串）
+    - `server` 转成 `tool_result` 事件（结果截 8k、diff 截 12k，全文仍在 trace），前端按最后一个同名未回填的行就地更新：折叠态显示 `+2 −1` 与状态徽章，展开看 diff，右侧详情看全文
+    - 验证方式：假 WS 服务重放「工具开始 → 结束（带 diff）」，无头 Edge + CDP 截图确认（不烧模型额度）
+
 未完成：
 
 - 已知边界（未收口）：OS 级沙箱 / shell 绕过；子 agent 中间过程不进实时流（只进 trace；用户拍板不做）；子 agent 只读靠提示词（用户拍板）；**网页审批真机已验证**（用户，2026-10-19）；**审批默认 300 秒超时驳回**（`[loop] approval_timeout`，0 = 一直等；原「不设超时」已于 2026-10-22 翻案）；流式 chunk 未节流；微压缩占位文案可加恢复指引；`/model` 列表未显示「profile → 实际模型名」
@@ -128,7 +139,9 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
 
 新会话必须先读哪些文件（按序）：
 
-1. `D:\workspace\self-study\AgentHarness\CLAUDE.md`（协作规矩）
-2. 本文件 `D:\workspace\self-study\AgentHarness\HANDOFF.md`
-3. `D:\workspace\self-study\AgentHarness\PLAN.md`（工程真源）
+1. `docs/PLAN.md`（工程真源：决策记录 + 翻案）
+2. 本文件 `docs/HANDOFF.md`
+3. `README.md`（怎么装、怎么跑、边界在哪）
+
+（`CLAUDE.md` 与 `AGENTS.md` 已于 2026-10-22 删除，不再有项目规则文件；系统提示词在 `assembly.SYSTEM_PROMPT`。）
 

@@ -31,6 +31,16 @@ export type Ev =
   | { type: 'assistant_chunk'; text: string }
   | { type: 'assistant_done'; text: string }
   | { type: 'tool'; name: string; detail?: string }
+  | {
+      type: 'tool_result'
+      name: string
+      status: string
+      ms: number
+      result: string
+      diff: string
+      added: number
+      removed: number
+    }
   | { type: 'reasoning'; text: string }
   | { type: 'models'; list: string[]; current: string }
   | { type: 'model_switched'; model: string; error?: string }
@@ -44,7 +54,17 @@ export type Ev =
 export type Msg =
   | { kind: 'user'; text: string }
   | { kind: 'assistant'; text: string; streaming?: boolean }
-  | { kind: 'tool'; name: string; detail?: string; body?: string }
+  | {
+      kind: 'tool'
+      name: string
+      detail?: string
+      body?: string // 工具输出（截断版，全文在 trace）
+      status?: string // ok / error / denied / blocked
+      ms?: number
+      diff?: string
+      added?: number
+      removed?: number
+    }
   | { kind: 'reasoning'; text: string }
   | { kind: 'hook'; text: string }
   | { kind: 'notice'; text: string }

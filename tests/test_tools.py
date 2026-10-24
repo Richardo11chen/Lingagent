@@ -168,3 +168,31 @@ def test_tool_detail_covers_every_interesting_arg():  # 派活也要看得见，
     assert tool_detail({"path": "a.py"}) == "a.py"
     assert tool_detail({"task_id": "t1"}) == "t1"
     assert tool_detail(None) == ""
+
+
+def test_write_file_records_a_diff(tmp_path):  # 覆盖前先留旧内容，界面才有"改了什么"可显示
+    from agent_harness.tools import take_diff, write_file
+
+    p = tmp_path / "a.txt"
+    write_file(str(p), "one\n")
+    assert "+one" in take_diff()  # 新文件 = 全是新增
+
+    write_file(str(p), "one\ntwo\n")
+    diff = take_diff()
+    assert "a.txt" in diff and "+two" in diff
+    assert take_diff() == ""  # 取走即清空——否则会串到下一个工具上
+
+
+def test_edit_file_records_only_the_change(tmp_path):  # 替换型改动的 diff 不该带上整份文件
+    from agent_harness.tools import edit_file, take_diff, write_file
+
+    p = tmp_path / "a.txt"
+    write_file(str(p), "alpha\nbeta\ngamma\n")
+    take_diff()
+
+    edit_file(str(p), "beta", "BETA")
+    diff = take_diff()
+    assert "+BETA" in diff and "-beta" in diff
+    # 只有被改的那一行带 +/-；alpha / gamma 最多作为上下文行出现（n=3 会带进去）
+    changed = [l for l in diff.splitlines() if l[:1] in "+-" and l[:3] not in ("+++", "---")]
+    assert changed == ["-beta", "+BETA"]

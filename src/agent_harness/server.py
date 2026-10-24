@@ -38,6 +38,11 @@ from .trace import Tracer, TRACE_FIELD_CHARS, ellipsis_note, load_trace, mark_vi
 
 app = FastAPI()
 
+# 工具结果过 WS 的上限：结果与 diff 都是给眼睛看的，不必几十万字符一起推。
+# 超限的部分前端拿不到，但 trace 文件里一直是全文（审计账不截断）。
+TOOL_RESULT_CHARS = 8_000
+TOOL_DIFF_CHARS = 12_000
+
 
 def _slim(rec: dict) -> dict:
     """把一条轨迹记录压到适合过 WS 的大小——和 TUI 用同一个上限、同一句说明。"""
@@ -99,6 +104,35 @@ async def ws_endpoint(ws: WebSocket):
         def on_hook(by: str, reason: str) -> None:
             send({"type": "hook", "by": by, "reason": reason})
 
+        def on_tool_result(payload: dict) -> None:
+            """工具结束：把状态、耗时、输出和改动推给前端。
+
+            这一条是本轮之前缺的——只有「工具开始」的话，前端看到"它开始改 src/tools.py"
+            之后就断了，输出和 diff 都无处显示。
+            """
+            text = str(payload.get("result") or "")
+            if len(text) > TOOL_RESULT_CHARS:
+                text = text[:TOOL_RESULT_CHARS] + ellipsis_note(len(text))
+            diff = str(payload.get("diff") or "")
+            if len(diff) > TOOL_DIFF_CHARS:
+                diff = diff[:TOOL_DIFF_CHARS] + f"\n…（diff 共 {len(diff)} 字符，已截断）"
+            added = removed = 0
+            for line in diff.splitlines():
+                if line.startswith("+") and not line.startswith("+++"):
+                    added += 1
+                elif line.startswith("-") and not line.startswith("---"):
+                    removed += 1
+            send({
+                "type": "tool_result",
+                "name": payload.get("name", ""),
+                "status": payload.get("status", ""),
+                "ms": payload.get("ms", 0),
+                "result": text,
+                "diff": diff,
+                "added": added,
+                "removed": removed,
+            })
+
         def approver(command: str, reason: str) -> bool:
             """线程内阻塞等前端答复——收消息 task 唤醒 Event。
 
@@ -149,6 +183,7 @@ async def ws_endpoint(ws: WebSocket):
             history=history,
             on_text=on_text,
             on_tool=on_tool,
+            on_tool_result=on_tool_result,
             on_reasoning=on_reasoning,
             tracer=tracer,
             pre_hooks=PRE_HOOKS, post_hooks=POST_HOOKS,

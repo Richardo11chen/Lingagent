@@ -110,6 +110,29 @@ export default function App() {
           setPending(false)
           setMsgs((ms) => [...ms, { kind: 'tool', name: ev.name, detail: ev.detail }])
           break
+        case 'tool_result':
+          // 回填到刚刚那一行（同名的最后一条还没结果的）——事件顺序是「开始 → 结束」，
+          // 并行调用也是一条一条跑，所以按名字找最后一条即可。
+          setMsgs((ms) => {
+            for (let i = ms.length - 1; i >= 0; i--) {
+              const m = ms[i]
+              if (m.kind === 'tool' && m.name === ev.name && m.body === undefined) {
+                const next = ms.slice()
+                next[i] = {
+                  ...m,
+                  body: ev.result,
+                  status: ev.status,
+                  ms: ev.ms,
+                  diff: ev.diff,
+                  added: ev.added,
+                  removed: ev.removed,
+                }
+                return next
+              }
+            }
+            return ms
+          })
+          break
         case 'hook':
           setPending(false)
           setMsgs((ms) => [...ms, { kind: 'hook', text: `⚡ 策略拦截：${ev.by} · ${ev.reason}` }])

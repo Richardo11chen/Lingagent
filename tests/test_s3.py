@@ -78,3 +78,61 @@ def test_agent_loop_fence_blocks_traversal(tmp_path):  # 接线：剧本写 ../ 
     _, history = agent_loop("干活", llm, tools, "sys")
     assert any("越界拦截" in m.content for m in history if m.role == "user")
     assert not (tmp_path.parent / "evil.txt").exists()
+
+
+def test_loop_reports_tool_result(tmp_path):  # 工具结束后回调一次：状态 / 耗时 / 结果 / diff
+    seen: list[dict] = []
+    target = tmp_path / "a.txt"
+    llm = ScriptLLM([Action("write_file", {"path": str(target), "content": "hello\n"})])
+    agent_loop("干活", llm, {"write_file": write_file}, "sys", on_tool_result=seen.append)
+
+    assert len(seen) == 1
+    r = seen[0]
+    assert r["name"] == "write_file" and r["status"] == "ok"
+    assert "写入文件" in r["result"]
+    assert "+hello" in r["diff"]  # 前端靠这条显示"它到底改了什么"
+    assert r["ms"] >= 0
+
+
+def test_tool_result_diff_does_not_leak_to_next_call(tmp_path):  # 第 2、3 次调用没写文件，diff 必须为空
+    seen: list[dict] = []
+
+    def probe() -> str:
+        return "ok"
+
+    llm = ScriptLLM([
+        Action("write_file", {"path": str(tmp_path / "a.txt"), "content": "x\n"}),
+        Action("probe", {}),
+    ])
+    agent_loop("干活", llm, {"write_file": write_file, "probe": probe}, "sys", on_tool_result=seen.append)
+
+    assert seen[0]["diff"] and seen[1]["diff"] == ""
+
+
+def test_loop_reports_tool_result(tmp_path):  # 工具结束后回调一次：状态 / 耗时 / 结果 / diff
+    seen: list[dict] = []
+    target = tmp_path / "a.txt"
+    llm = ScriptLLM([Action("write_file", {"path": str(target), "content": "hello\n"})])
+    agent_loop("干活", llm, {"write_file": write_file}, "sys", on_tool_result=seen.append)
+
+    assert len(seen) == 1
+    r = seen[0]
+    assert r["name"] == "write_file" and r["status"] == "ok"
+    assert "写入文件" in r["result"]
+    assert "+hello" in r["diff"]  # 前端靠这条显示"它到底改了什么"
+    assert r["ms"] >= 0
+
+
+def test_tool_result_diff_does_not_leak_to_next_call(tmp_path):  # 第 2、3 次调用没写文件，diff 必须为空
+    seen: list[dict] = []
+
+    def probe() -> str:
+        return "ok"
+
+    llm = ScriptLLM([
+        Action("write_file", {"path": str(tmp_path / "a.txt"), "content": "x\n"}),
+        Action("probe", {}),
+    ])
+    agent_loop("干活", llm, {"write_file": write_file, "probe": probe}, "sys", on_tool_result=seen.append)
+
+    assert seen[0]["diff"] and seen[1]["diff"] == ""

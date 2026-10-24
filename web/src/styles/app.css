@@ -557,6 +557,9 @@
 }
 
 .details-label {
+  display: flex;
+  align-items: center;
+  gap: 6px; /* 标签后面可能跟状态徽章 / +N −M / 耗时，别让它们黏成一串 */
   font-size: 11px;
   color: var(--text-4);
   margin-bottom: 4px;
@@ -710,4 +713,82 @@
 
 .popover button.active {
   color: var(--accent);
+}
+
+/* ── 工具行尾部：改了多少 / 状态 ── */
+.tool-tail {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.delta-add {
+  color: var(--diff-add);
+}
+
+.delta-del {
+  color: var(--diff-del);
+}
+
+.tool-badge {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 10.5px;
+}
+
+/* ── diff 块（对话里折叠展开、右侧详情共用） ── */
+.diff {
+  border-top: 1px solid var(--border-1);
+  background: var(--bg-1);
+  padding: 6px 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre;
+}
+
+.diff > div {
+  padding: 0 10px;
+}
+
+.diff-file {
+  color: var(--text-4);
+}
+
+.diff-hunk {
+  color: var(--accent);
+}
+
+.diff-add {
+  color: var(--diff-add);
+  background: var(--diff-add-bg);
+}
+
+.diff-del {
+  color: var(--diff-del);
+  background: var(--diff-del-bg);
+}
+
+.diff-ctx {
+  color: var(--text-2);
+}
+
+/* 详情面板是专门看 diff 的地方，不必再压高度 */
+.details .diff {
+  max-height: none;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+}
+
+.details-ms {
+  color: var(--text-4);
+  font-family: var(--font-mono);
 }

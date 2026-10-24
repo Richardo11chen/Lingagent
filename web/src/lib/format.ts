@@ -53,3 +53,15 @@ export function fmtSessionTime(id: string): string {
   const [, , mm, dd, hh, mi] = m
   return `${mm}-${dd} ${hh}:${mi}`
 }
+
+/** 工具状态 → 一个词。ok 不显示（没消息就是好消息），其余才占版面。 */
+const TOOL_STATUS_ZH: Record<string, string> = {
+  error: '失败',
+  denied: '驳回',
+  blocked: '拦截',
+  running: '执行中',
+}
+
+export function toolStatusZh(status: string): string {
+  return TOOL_STATUS_ZH[status] ?? status
+}

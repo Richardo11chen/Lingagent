@@ -38,6 +38,12 @@
   --warn: rgb(186, 117, 23);
   --warn-bg: #fdf6e7;
 
+  /* diff 专用：正/负两套，浅色下用深色字+淡底，深色下反过来 */
+  --diff-add: rgb(21, 128, 61);
+  --diff-add-bg: rgba(34, 197, 94, 0.08);
+  --diff-del: rgb(185, 28, 28);
+  --diff-del-bg: rgba(239, 68, 68, 0.08);
+
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06);
   --radius-sm: 6px;
   --radius-md: 8px;
@@ -75,6 +81,11 @@
   --accent-ring: rgba(103, 158, 254, 0.2);
   --warn-bg: rgb(48, 40, 24);
 
+  --diff-add: rgb(134, 239, 172);
+  --diff-add-bg: rgba(34, 197, 94, 0.14);
+  --diff-del: rgb(252, 165, 165);
+  --diff-del-bg: rgba(239, 68, 68, 0.14);
+
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
@@ -106,6 +117,11 @@
     --accent: rgb(103, 158, 254);
     --accent-ring: rgba(103, 158, 254, 0.2);
     --warn-bg: rgb(48, 40, 24);
+
+    --diff-add: rgb(134, 239, 172);
+    --diff-add-bg: rgba(34, 197, 94, 0.14);
+    --diff-del: rgb(252, 165, 165);
+    --diff-del-bg: rgba(239, 68, 68, 0.14);
 
     --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   }

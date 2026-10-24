@@ -1,3 +1,5 @@
+import DiffBlock from './DiffBlock'
+import { fmtMs, toolStatusZh } from '../lib/format'
 import type { Msg } from '../lib/types'
 
 type Props = {
@@ -7,6 +9,7 @@ type Props = {
 
 export default function DetailsPanel({ msg, onClose }: Props) {
   const tool = msg && msg.kind === 'tool' ? msg : null
+  const changed = tool ? (tool.added ?? 0) + (tool.removed ?? 0) > 0 : false
 
   return (
     <aside className="details">
@@ -25,26 +28,42 @@ export default function DetailsPanel({ msg, onClose }: Props) {
         ) : (
           <>
             <div className="details-section">
-              <div className="details-label">工具</div>
+              <div className="details-label">
+                工具
+                {tool.status && tool.status !== 'ok' && (
+                  <span className="tool-badge">{toolStatusZh(tool.status)}</span>
+                )}
+                {tool.ms != null && <span className="details-ms">{fmtMs(tool.ms)}</span>}
+              </div>
               <div className="details-pre">{tool.name}</div>
             </div>
+
             {tool.detail && (
               <div className="details-section">
                 <div className="details-label">参数</div>
                 <div className="details-pre">{tool.detail}</div>
               </div>
             )}
-            {tool.body && (
+
+            {changed && (
               <div className="details-section">
-                <div className="details-label">输出</div>
+                <div className="details-label">
+                  改动
+                  <span className="delta-add">+{tool.added}</span>
+                  <span className="delta-del">−{tool.removed}</span>
+                </div>
+                <DiffBlock diff={tool.diff ?? ''} />
+              </div>
+            )}
+
+            <div className="details-section">
+              <div className="details-label">输出</div>
+              {tool.body ? (
                 <div className="details-pre">{tool.body}</div>
-              </div>
-            )}
-            {!tool.body && (
-              <div className="details-empty">
-                输出与 diff 还没接到前端——后端目前只推「工具开始」，没有「工具结果」。
-              </div>
-            )}
+              ) : (
+                <div className="details-empty">还没有结果——这一条可能是历史记录，或正在执行。</div>
+              )}
+            </div>
           </>
         )}
       </div>
