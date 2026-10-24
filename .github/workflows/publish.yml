@@ -1,0 +1,60 @@
+name: Publish to PyPI
+
+# 打 tag（v*）就自动构建 + 发布。配合 PyPI 的 Trusted Publishing（OIDC）：
+# 本地不用存令牌，GitHub 用短期令牌直连 PyPI。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC 必需——没有它拿不到短期令牌，trusted publishing 会失败
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # 挡「忘了 bump 版本号就打 tag」——tag 和 pyproject 对不上直接失败。
+      # PyPI 不许重传同名文件，这一步比发上去再被拒要早、也清楚。
+      - name: 版本号必须跟 tag 一致
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VER="$(python -c 'from scripts.release import current_version; print(current_version())')"
+          if [ "$TAG" != "$VER" ]; then
+            echo "tag v${TAG} 但 pyproject 里是 ${VER}——先 bump 版本号再打 tag"
+            exit 1
+          fi
+
+      - name: 装前端依赖
+        run: npm ci
+        working-directory: web
+
+      # 把构建产物打进包里（web_dist 是 gitignore 的，必须现构建）
+      - name: 构建前端并打进包
+        run: python scripts/build_web.py
+
+      - name: 打包
+        run: uv build
+
+      - name: 发布到 PyPI
+        run: uv publish --trusted-publishing always
