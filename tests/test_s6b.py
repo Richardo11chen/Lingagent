@@ -141,6 +141,22 @@ def test_health_reports_the_protocol_weblaunch_expects():
     assert body == {"app": "agent-harness", "protocol": server.PROTOCOL}
 
 
+def test_parse_netstat_picks_only_listening_rows():
+    from agent_harness.weblaunch import _parse_netstat
+
+    sample = """活动连接
+
+  协议  本地地址          外部地址        状态           PID
+  TCP    0.0.0.0:5173       0.0.0.0:0       LISTENING       25104
+  TCP    127.0.0.1:8000     0.0.0.0:0       LISTENING       34724
+  TCP    127.0.0.1:8000     127.0.0.1:58913 ESTABLISHED     34724
+  TCP    [::]:8000          [::]:0          LISTENING       34724
+"""
+    assert _parse_netstat(sample, 8000) == [34724]  # 两条监听 + 一条连接，PID 只出现一次
+    assert _parse_netstat(sample, 5173) == [25104]
+    assert _parse_netstat(sample, 9999) == []
+
+
 def test_ws_hook_denied_event(monkeypatch, tmp_path):  # 策略拦下 → WS 推 hook 事件（实时流一行）
     class EnvLLM:
         current = "fake-model"

@@ -85,3 +85,65 @@ def ensure_web(backend_port: int, workspace: Path, web_dir: Path) -> tuple[list[
             _spawn(argv, cwd=web_dir)
             started.append("前端")
     return started, warning
+
+
+def _parse_netstat(out: str, port: int) -> list[int]:
+    """从 `netstat -ano` 的输出里挑出「LISTENING 在这个端口上」的 PID。
+
+    单独拆出来是为了能测：真实输出里 IPv4/IPv6 各一行、还有大量非监听行。
+    """
+    pids: list[int] = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[0].upper() not in ("TCP", "TCPV6"):
+            continue
+        local, state, pid = parts[1], parts[3], parts[4]
+        if not local.endswith(f":{port}") or state.upper() != "LISTENING":
+            continue
+        if pid.isdigit() and int(pid) not in pids:
+            pids.append(int(pid))
+    return pids
+
+
+def _listening_pids(port: int) -> list[int]:
+    """谁在听这个端口（Windows 用 netstat，其他平台用 lsof）。查不到就当没有。"""
+    try:
+        if os.name == "nt":
+            out = subprocess.run(
+                ["netstat", "-ano"], capture_output=True, text=True, timeout=10
+            ).stdout
+            return _parse_netstat(out, port)
+        out = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [int(x) for x in out.split() if x.isdigit()]
+
+
+def stop_web(ports: list[int]) -> list[str]:
+    """按端口结束占用的进程（连子进程）。返回给人看的结果行。
+
+    为什么需要：后端和前端是脱离终端的后台进程，关 TUI 不会连坐；改了后端代码就得先让它退出，
+    否则下次进 TUI 会复用旧进程（网页连到旧代码，新功能静默失效）。
+    """
+    lines: list[str] = []
+    for port in ports:
+        pids = _listening_pids(port)
+        if not pids:
+            lines.append(f"{port}: 没有进程在听")
+            continue
+        for pid in pids:
+            try:
+                if os.name == "nt":
+                    ok = subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(pid)],
+                        capture_output=True, text=True,
+                    ).returncode == 0
+                else:
+                    ok = subprocess.run(["kill", "-TERM", str(pid)]).returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                ok = False
+            lines.append(f"{port}: {'已结束' if ok else '结束失败'} PID {pid}")
+    return lines

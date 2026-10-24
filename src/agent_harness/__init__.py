@@ -118,7 +118,19 @@ def main() -> None:
         "--clean-trace", type=int, metavar="DAYS",
         help="删掉 DAYS 天前的轨迹文件（0 = 全部），腾空间；不启动会话",
     )
+    ap.add_argument(
+        "--stop-web", action="store_true",
+        help="结束占用网页端端口（后端 + 前端 dev server）的进程；不启动会话",
+    )
     args = ap.parse_args()
+
+    if args.stop_web:  # 也不该要求 API key
+        from .settings import load_settings
+        from .weblaunch import FRONTEND_PORT, stop_web
+
+        for line in stop_web([load_settings().server_port, FRONTEND_PORT]):
+            print(line)
+        return
 
     if args.clean_trace is not None:  # 清理不该要求 API key
         from .session import SESSION_ROOT
