@@ -59,6 +59,8 @@ class Settings:
     server_host: str = "127.0.0.1"
     server_port: int = 8000
     web_autostart: bool = True  # 进 TUI 时自动把网页端（后端 + 前端 dev server）拉起来
+    # 退 TUI 时收掉这次自己拉起的进程（端口上原有的不动）。False = 网页端活得比 TUI 久
+    web_stop_on_exit: bool = True
     trace_enabled: bool = True  # 写轨迹文件（关掉 = 只留 session，省磁盘）
     # 人写的允许规则：`["git *", "uv *"]` = 这些命令不再问（前缀语义，灾难命令不受影响）
     guardrail_allow: list[str] = field(default_factory=list)
@@ -117,6 +119,7 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
 
     wb = data.get("web", {})
     s.web_autostart = bool(wb.get("autostart", s.web_autostart))
+    s.web_stop_on_exit = bool(wb.get("stop_on_exit", s.web_stop_on_exit))
 
     tr = data.get("trace", {})
     s.trace_enabled = bool(tr.get("enabled", s.trace_enabled))

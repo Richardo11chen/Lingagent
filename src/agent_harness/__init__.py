@@ -30,7 +30,7 @@ from .session import (
 from .loop import agent_loop
 from .llm import Msg, DeepSeekLLM
 from .trace import Tracer, days_since_viewed, load_trace, mark_viewed
-from .weblaunch import ensure_web
+from .weblaunch import WebRun, ensure_web, stop_run
 
 def choose_session(workspace: Path, default_profile: str = "") -> tuple[str, list[Msg]]:
     """列历史会话让用户选（分页，每页 10 条）；返回 (session_id, history)。
@@ -161,10 +161,9 @@ def main() -> None:
             tui.show_note(f"本会话不再询问 {head}", "info")
         return _is_approved(decision)
 
-    web_started: list[str] = []
-    web_warning: str | None = None
+    web = WebRun()
     if settings.web_autostart and tui.interactive():  # 管道/脚本模式不拉网页端
-        web_started, web_warning = ensure_web(settings.server_port, WORKSPACE, WORKSPACE / "web")
+        web = ensure_web(settings.server_port, WORKSPACE, WORKSPACE / "web")
 
     prune_empty_sessions(WORKSPACE)  # 打扫：清掉「开了没聊」的空占位（不阻塞——顺手的事）
     session_id, history = choose_session(WORKSPACE, settings.default_model)
@@ -201,63 +200,68 @@ def main() -> None:
     tui.show_banner(session_id, len(history), llm.current, detect_shell().name)
     if history:
         tui.show_history(history)  # 恢复的会话：把历史渲染出来
-    tui.show_web_hint(web_started, web_warning)  # 链接放历史之后（长历史时不用往上翻）
+    tui.show_web_hint(web.started, web.warning)  # 链接放历史之后（长历史时不用往上翻）
     _trace_nudge(settings)
-    while True:
-        try:
-            goal = tui.ask().strip()
-        except EOFError:
-            break  # 输入读尽（管道喂完 / Ctrl+Z 回车）——收工退出，不是错误
-        if goal in ("exit", "quit"):
-            break
-        if goal == "/trace" or goal.startswith("/trace "):  # S8：轨迹时间线（只读投影）
-            recs = load_trace(trace_path(WORKSPACE, session_id))
-            mark_viewed()  # 体温计：这个功能还有人在用吗
-            arg = goal[len("/trace"):].strip()
-            if not arg:
-                tui.show_trace(recs, session_id)      # 总览
-            elif arg.isdigit() and 1 <= int(arg) <= len(recs):
-                tui.show_trace_event(recs[int(arg) - 1], int(arg))  # 钻取单条全文
-            else:
-                tui.show_note(f"没有 #{arg} 这条事件（当前共 {len(recs)} 条）", "warn")
-            continue
-        if goal == "/model":  # 运行时切换模型（会话级——落盘，退出不丢）
-            tui.show_models(llm.profiles, llm.current_profile)
-            pick = tui.ask().strip()
-            if pick.isdigit() and 1 <= int(pick) <= len(llm.profiles):
-                name = llm.profiles[int(pick) - 1]
-                tui.show_note(f"已切换到 {llm.switch(name)}")
-                save_session_model(WORKSPACE, session_id, name)  # 记在会话上，下次打开还认
-            elif pick:  # 空输入 = 取消（面板上写了）；打了别的东西 = 说清楚，别静默吞
-                tui.show_note("没这个序号——按提示来", "warn")
-            continue
-        if not goal:
-            continue
-        tui.show_user(goal)
-        tui.begin_stream()
-        old_len = len(history)
-        try:
-            reply, history = agent_loop(
-                goal, llm, session_tools, base_prompt,
-                approver=approver, history=history,
-                on_text=tui.stream_chunk, on_tool=tui.show_tool,
-                on_reasoning=tui.reasoning_chunk,
-                tracer=tracer,
-                pre_hooks=PRE_HOOKS, post_hooks=POST_HOOKS,
-                on_hook=tui.show_hook,
-                max_steps=settings.max_steps,
-                allow_commands=settings.guardrail_allow,
-            )
-        except KeyboardInterrupt:  # Ctrl+C：结束本轮，回到输入行（不是退出程序）
+    try:
+        while True:
+            try:
+                goal = tui.ask().strip()
+            except EOFError:
+                break  # 输入读尽（管道喂完 / Ctrl+Z 回车）——收工退出，不是错误
+            if goal in ("exit", "quit"):
+                break
+            if goal == "/trace" or goal.startswith("/trace "):  # S8：轨迹时间线（只读投影）
+                recs = load_trace(trace_path(WORKSPACE, session_id))
+                mark_viewed()  # 体温计：这个功能还有人在用吗
+                arg = goal[len("/trace"):].strip()
+                if not arg:
+                    tui.show_trace(recs, session_id)      # 总览
+                elif arg.isdigit() and 1 <= int(arg) <= len(recs):
+                    tui.show_trace_event(recs[int(arg) - 1], int(arg))  # 钻取单条全文
+                else:
+                    tui.show_note(f"没有 #{arg} 这条事件（当前共 {len(recs)} 条）", "warn")
+                continue
+            if goal == "/model":  # 运行时切换模型（会话级——落盘，退出不丢）
+                tui.show_models(llm.profiles, llm.current_profile)
+                pick = tui.ask().strip()
+                if pick.isdigit() and 1 <= int(pick) <= len(llm.profiles):
+                    name = llm.profiles[int(pick) - 1]
+                    tui.show_note(f"已切换到 {llm.switch(name)}")
+                    save_session_model(WORKSPACE, session_id, name)  # 记在会话上，下次打开还认
+                elif pick:  # 空输入 = 取消（面板上写了）；打了别的东西 = 说清楚，别静默吞
+                    tui.show_note("没这个序号——按提示来", "warn")
+                continue
+            if not goal:
+                continue
+            tui.show_user(goal)
+            tui.begin_stream()
+            old_len = len(history)
+            try:
+                reply, history = agent_loop(
+                    goal, llm, session_tools, base_prompt,
+                    approver=approver, history=history,
+                    on_text=tui.stream_chunk, on_tool=tui.show_tool,
+                    on_reasoning=tui.reasoning_chunk,
+                    tracer=tracer,
+                    pre_hooks=PRE_HOOKS, post_hooks=POST_HOOKS,
+                    on_hook=tui.show_hook,
+                    max_steps=settings.max_steps,
+                    allow_commands=settings.guardrail_allow,
+                )
+            except KeyboardInterrupt:  # Ctrl+C：结束本轮，回到输入行（不是退出程序）
+                tui.end_stream()
+                tui.show_note("已中断本轮（这一轮的历史未落盘）", "warn")
+                continue
+            except Exception as e:  # 网络断了 / 模型报错 / 参数解析炸了——报一句，保住会话
+                # history 是被 agent_loop 换成新列表的（history + [...]），失败时原列表没被改写
+                tui.end_stream()
+                tui.show_note(f"本轮失败：{type(e).__name__}: {e}", "error")
+                continue
             tui.end_stream()
-            tui.show_note("已中断本轮（这一轮的历史未落盘）", "warn")
-            continue
-        except Exception as e:  # 网络断了 / 模型报错 / 参数解析炸了——报一句，保住会话
-            # history 是被 agent_loop 换成新列表的（history + [...]），失败时原列表没被改写
-            tui.end_stream()
-            tui.show_note(f"本轮失败：{type(e).__name__}: {e}", "error")
-            continue
-        tui.end_stream()
-        save_messages(WORKSPACE, session_id, history[old_len:])
-
-
+            save_messages(WORKSPACE, session_id, history[old_len:])
+    finally:
+        # 关 TUI 就连带收掉网页端：留着它们会变成孤儿，下次启动按端口判断会复用旧代码
+        # （2026-10-24 就是这么卡住的：新按钮点了没反应，8000 上还是上个世纪的进程）。
+        # 只收自己拉起的——端口上原有的可能是另一个 TUI 或用户自己在用，不动。
+        if web.procs and settings.web_stop_on_exit:
+            tui.console.print(f"[dim]网页端已关闭：{'、'.join(stop_run(web))}[/]")

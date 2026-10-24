@@ -102,6 +102,59 @@ def test_pipe_exhausted_exits_cleanly(tmp_path):
     assert "EOFError" not in r.stderr and "Traceback" not in r.stderr
 
 
+def test_exit_closes_the_web_it_started(tmp_path):
+    """端到端：进 TUI 拉起后端 → 退出时连它一起收掉。
+
+    为什么要测：这两个进程是后台的，以前退出后还活着，下次启动按端口判断就会复用旧代码
+    （2026-10-24 卡的那轮）。这里跑真的 main()、真起后端、真 taskkill——不是打桩。
+
+    管道里 interactive() 是 False（也就不会拉网页端），所以只把「判断在不在终端」换成 True、
+    把底下的输入换成立刻 EOF，其余全走真代码。
+    """
+    import socket
+
+    with socket.socket() as s:  # 借一个此刻空闲的端口，让后端绑上去
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    cfg = tmp_path / "c.toml"
+    cfg.write_text(
+        '[models.m]\nname = "fake"\napi_key_env = "FAKE_KEY"\n\n'
+        f"[server]\nport = {port}\n\n[web]\nautostart = true\nstop_on_exit = true\n",
+        encoding="utf-8",
+    )
+    env = {
+        **os.environ,
+        "AGENT_HARNESS_CONFIG": str(cfg),
+        "FAKE_KEY": "x",
+        "PYTHONIOENCODING": "utf-8",
+        "USERPROFILE": str(tmp_path),
+        "HOME": str(tmp_path),
+    }
+    script = (
+        "import pathlib\n"
+        "import agent_harness as ah\n"
+        f"ah.WORKSPACE = pathlib.Path(r'{tmp_path}')\n"  # 会话/轨迹落临时目录，不污染真工作区
+        "import agent_harness.tui as t\n"
+        "t.interactive = lambda: True\n"
+        "def _eof():\n"
+        "    raise EOFError\n"
+        "t.ask = _eof\n"
+        "ah.main()\n"
+    )
+    r = subprocess.run(
+        [sys.executable, "-c", script],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=env, cwd=tmp_path, timeout=120,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "网页端: http://localhost:5173" in r.stdout  # 确实走到了拉起那步
+    # 「已结束」只有 taskkill 真返回成功才会印——这句就代表收尸成功
+    assert "网页端已关闭：后端已结束（PID " in r.stdout, r.stdout
+    with socket.socket() as s:
+        s.settimeout(0.3)
+        assert s.connect_ex(("127.0.0.1", port)) != 0  # 端口真空出来了
+
+
 
 def test_slash_commands_autocomplete():  # 输入 / 就列命令——不用记口令，也不用查文档
     from prompt_toolkit.document import Document

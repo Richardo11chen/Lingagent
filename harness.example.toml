@@ -48,6 +48,7 @@ port = 8000
 
 [web]
 autostart = true            # 进 TUI 时自动拉起网页端（后端 + 前端 dev server）——已在跑的不重复拉
+stop_on_exit = true         # 退 TUI 时收掉这次自己拉起的进程；false = 网页端活得比 TUI 久
 
 [trace]
 enabled = true              # false = 不写轨迹文件（session 仍在，只是没有"给人看的账"）

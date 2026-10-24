@@ -71,7 +71,7 @@ def test_global_sections(tmp_path):  # 全局节（loop/context/server）照旧
     p = tmp_path / "c.toml"
     p.write_text(
         "[loop]\nmax_steps = 5\n\n[context]\ncompact_threshold = 1234\n\n"
-        "[server]\nport = 9999\n\n[web]\nautostart = false\n",
+        "[server]\nport = 9999\n\n[web]\nautostart = false\nstop_on_exit = false\n",
         encoding="utf-8",
     )
     s = load_settings(p)
@@ -79,6 +79,14 @@ def test_global_sections(tmp_path):  # 全局节（loop/context/server）照旧
     assert s.compact_threshold == 1234
     assert s.server_port == 9999
     assert s.web_autostart is False
+    assert s.web_stop_on_exit is False  # 没写就是 True（关 TUI 连后端一起收）
+
+
+def test_stop_on_exit_defaults_to_true(tmp_path):
+    """默认同生共死：不写 [web] 段也得收——否则孤儿进程会让下次启动复用旧代码。"""
+    p = tmp_path / "c.toml"
+    p.write_text("[loop]\nmax_steps = 3\n", encoding="utf-8")
+    assert load_settings(p).web_stop_on_exit is True
 
 
 def test_private_params_fallback(tmp_path):  # 私有参数非法值一律回退 off（= 不传）——别瞎猜厂商语义

@@ -89,6 +89,14 @@ def test_ws_approval_approved(monkeypatch, tmp_path):  # 批准路径：命令�
     assert ran.get("cmd") == "rm -rf test_dir"  # 批准后真执行
 
 
+class _FakeProc:
+    """假 Popen：退出收尸只需要 pid 和 poll()。"""
+
+    def __init__(self, pid):
+        self.pid = pid
+        self.poll = lambda: None  # None = 还活着
+
+
 def test_ensure_web_skips_when_running(monkeypatch, tmp_path):
     # 幂等：端口都有人在听 → 一个进程都不许拉
     from agent_harness import weblaunch
@@ -97,7 +105,8 @@ def test_ensure_web_skips_when_running(monkeypatch, tmp_path):
     monkeypatch.setattr(weblaunch, "_port_open", lambda port: True)
     monkeypatch.setattr(weblaunch, "_backend_is_stale", lambda port: False)  # 对面是当前版本
     monkeypatch.setattr(weblaunch.subprocess, "Popen", lambda *a, **k: calls.append(a))
-    assert weblaunch.ensure_web(8000, tmp_path, tmp_path) == ([], None)
+    run = weblaunch.ensure_web(8000, tmp_path, tmp_path)
+    assert run.started == [] and run.warning is None
     assert calls == []
 
 
@@ -111,12 +120,18 @@ def test_ensure_web_spawns_missing(monkeypatch, tmp_path):
     spawned = []
     monkeypatch.setattr(weblaunch, "_port_open", lambda port: False)
     monkeypatch.setattr(weblaunch.shutil, "which", lambda name: "C:/fake/npm.cmd")
-    monkeypatch.setattr(weblaunch.subprocess, "Popen", lambda argv, **k: spawned.append(argv))
 
-    started, warning = weblaunch.ensure_web(8000, tmp_path, web)
-    assert started == ["后端", "前端"] and warning is None
+    def fake_popen(argv, **k):
+        spawned.append(argv)
+        return _FakeProc(1000 + len(spawned))
+
+    monkeypatch.setattr(weblaunch.subprocess, "Popen", fake_popen)
+
+    run = weblaunch.ensure_web(8000, tmp_path, web)
+    assert run.started == ["后端", "前端"] and run.warning is None
     assert spawned[0][1:] == ["-m", "agent_harness.server"]
     assert spawned[1][0].lower().endswith("cmd.exe") and "run" in spawned[1]
+    assert [p.pid for _, p in run.procs] == [1001, 1002]  # 句柄留着，退出时按 pid 收
 
 
 def test_ensure_web_warns_about_a_stale_backend(monkeypatch, tmp_path):
@@ -128,9 +143,34 @@ def test_ensure_web_warns_about_a_stale_backend(monkeypatch, tmp_path):
     monkeypatch.setattr(weblaunch, "_backend_is_stale", lambda port: True)
     monkeypatch.setattr(weblaunch.subprocess, "Popen", lambda *a, **k: spawned.append(a))
 
-    started, warning = weblaunch.ensure_web(8000, tmp_path, tmp_path)
-    assert started == [] and spawned == []  # 不乱拉第二份
-    assert warning and "不是当前版本" in warning
+    run = weblaunch.ensure_web(8000, tmp_path, tmp_path)
+    assert run.started == [] and spawned == []  # 不乱拉第二份
+    assert run.warning and "不是当前版本" in run.warning
+
+
+def test_stop_run_kills_only_what_this_run_spawned(monkeypatch):
+    """复用别人的后端（端口已占）→ 退出时不许去杀它；自己拉的才收。"""
+    from agent_harness import weblaunch
+
+    assert weblaunch.stop_run(weblaunch.WebRun()) == []  # 什么都没拉 → 什么也不做
+
+    killed = []
+    monkeypatch.setattr(weblaunch, "_kill_tree", lambda pid: killed.append(pid) or True)
+    run = weblaunch.WebRun(procs=[("后端", _FakeProc(4242))])
+    assert weblaunch.stop_run(run) == ["后端已结束（PID 4242）"]
+    assert killed == [4242]
+
+
+def test_stop_run_reports_a_process_that_already_died(monkeypatch):
+    """后端自己崩了（PID 早没了）→ 别报「结束失败」吓人，照实说已自行退出。"""
+    from agent_harness import weblaunch
+
+    proc = _FakeProc(7)
+    proc.poll = lambda: 1  # 已退出
+    killed = []
+    monkeypatch.setattr(weblaunch, "_kill_tree", lambda pid: killed.append(pid) or True)
+    assert weblaunch.stop_run(weblaunch.WebRun(procs=[("前端", proc)])) == ["前端已自行退出"]
+    assert killed == []
 
 
 def test_health_reports_the_protocol_weblaunch_expects():

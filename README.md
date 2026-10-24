@@ -48,7 +48,7 @@ api_key_env = "DEEPSEEK_API_KEY"    # 从环境变量读（推荐）
 
 密钥两种写法二选一，**都没有就在启动时直接报错退出**（TUI 和后端都会前置校验）。
 
-其余可调项（`[loop] max_steps`、`[context] compact_threshold`、`[server] port`、`[web] autostart`）见 `harness.example.toml` 里的注释。
+其余可调项（`[loop] max_steps`、`[context] compact_threshold`、`[server] port`、`[web] autostart` / `stop_on_exit`）见 `harness.example.toml` 里的注释。
 
 ## 运行
 
@@ -137,14 +137,29 @@ agent 自己的 `run_tests` 工具按项目根的标记文件认测试入口，�
 
 窄屏（≤1180px 收右栏、≤900px 收左栏宽度）都能用，不做手机版——它不是给手机用的。
 
-后端和前端 dev server 都是**脱离终端的后台进程**：退出 TUI 它们还活着，下次进 TUI 会直接复用。
-改了后端代码要让它重新跑，先收掉：
+后端和前端 dev server 都是后台进程（不弹窗、日志吞掉）。它们跟 TUI **同生共死**：退出 TUI（`exit` /
+Ctrl+C 两次 / Ctrl+D / 关窗口）时，这次启动拉起来的会一起收掉，端口当场释放：
+
+```
+网页端已关闭：后端已结束（PID 2652）
+```
+
+只收**自己拉的**：如果进 TUI 时端口已经有人（另一个 TUI 起的、或你手动起的），复用它，退出时不动它。
+
+想把网页端留着自己用（关掉终端后在浏览器里继续聊），在配置里关掉这一条：
+
+```toml
+[web]
+stop_on_exit = false   # 默认 true
+```
+
+兜底：TUI 被强杀（`kill -9` / 任务管理器结束）时 `finally` 跑不到，那些进程会变成孤儿。按端口收：
 
 ```bash
 uv run agent-harness --stop-web      # 结束占用 8000 / 5173 的进程（不需要 API key）
 ```
 
-不复用时 TUI 会自己说：如果 8000 上的进程不是当前版本（`/health` 里的协议号对不上），启动时会印一行黄字提醒，而不是假装一切正常。
+后端复用前 TUI 会先问一句 `/health`：如果 8000 上的进程不是当前版本（协议号对不上），启动时就印一行黄字提醒，而不是假装一切正常。
 
 ## 已知边界（有意不做的）
 
