@@ -89,7 +89,41 @@ api_key_env = "DEEPSEEK_API_KEY"    # 从环境变量读（推荐）
 
 密钥两种写法二选一，**都没有就在启动时直接报错退出**（TUI 和后端都会前置校验）。
 
-其余可调项（`[loop] max_steps`、`[context] compact_threshold`、`[server] port`、`[web] autostart` / `stop_on_exit` / `stop_wait`）见 `harness.example.toml` 里的注释。
+### 全部可调项
+
+完整带注释的示例在 `harness.example.toml`，这里是一张速查表。
+
+**模型 profile（`[models.名字]`，`[model] default` 指定默认用哪个）：**
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `name` | `deepseek-flash` | 发给 API 的 `model` 字段（中转站代理谁就写谁） |
+| `base_url` | `https://api.deepseek.com` | OpenAI 兼容端点；换厂商/中转站改这里 |
+| `api_key_env` | `DEEPSEEK_API_KEY` | 从哪个环境变量读 key（推荐） |
+| `api_key` | 无 | 直写明文，优先于 `api_key_env`；别提交进仓库 |
+| `temperature` | `1.0` | 采样温度（思考模式下不生效） |
+| `thinking` | `off` | DeepSeek 私有开关：`enabled` / `disabled` / `off`（off = 不传） |
+| `reasoning_effort` | `off` | 思考强度：`low` / `high` / `max` / `off`（off = 不传） |
+| `strip_think_tags` | 关 | 正文里包 `<mm:think>` 的厂商（如 MiniMax）才开 |
+
+**全局（跟模型无关）：**
+
+| 段 | 字段 | 默认 | 说明 |
+|---|---|---|---|
+| `[loop]` | `max_steps` | `40` | 一轮最多多少个「模型回合」 |
+| | `approval_timeout` | `300` | 审批没人答复的秒数（`0` = 一直等） |
+| `[context]` | `compact_threshold` | `300000` | 软阈值（字符当量，非精确 token），超了触发微压缩 |
+| | `keep_last` | `5` | 微压缩保留最近 N 条工具结果 |
+| | `snip_keep_groups` | `3` | 激进档（413 兜底）保留最近 K 组 |
+| `[server]` | `host` | `127.0.0.1` | 后端监听地址 |
+| | `port` | `8000` | 后端端口（改了网页端 `VITE_WS_PORT` 要跟上） |
+| `[web]` | `autostart` | `true` | 进 TUI 自动拉起网页端 |
+| | `stop_on_exit` | `true` | 退 TUI 收掉这次自己拉起的进程 |
+| | `stop_wait` | `120` | 收之前先等网页那轮跑完的秒数（`0` = 不等） |
+| `[trace]` | `enabled` | `true` | 写轨迹文件（关掉只留 session，省磁盘） |
+| `[guardrail]` | `allow` | `[]` | 不再问人的命令（前缀语义，如 `git *`；灾难命令不受影响） |
+
+关于 `compact_threshold` 补一句：它按**字符数当量**粗估（中文≈1:1、英文保守高估），不是精确 token。调太低会过早压缩——丢细节、还打断 DeepSeek 的前缀缓存；调太高可能撞上模型真实的上下文窗口上限。默认 `300000` 是个折中。
 
 ## 运行
 

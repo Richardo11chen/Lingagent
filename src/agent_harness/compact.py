@@ -13,8 +13,8 @@ COMPACTABLE = {"read_file", "run_shell", "run_tests"}
 
 KEEP_LAST = 5
 
-# 软阈值（字符数当量，约等于 token 数）——量级占位，真撞墙时按实测调
-DEFAULT_THRESHOLD = 70_000
+# 软阈值（字符数当量，约等于 token 数）——与 settings.Settings.compact_threshold 保持一致
+DEFAULT_THRESHOLD = 300_000
 
 
 def estimate_tokens(messages: list[Msg]) -> int:

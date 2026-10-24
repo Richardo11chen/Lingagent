@@ -38,7 +38,7 @@ max_steps = 40            # 一轮最多走多少个「模型回合」（不是�
 approval_timeout = 300    # 秒：审批没人答复就按驳回（0 = 一直等）
 
 [context]
-compact_threshold = 70000   # 软阈值（字符当量）——超了触发微压缩
+compact_threshold = 300000   # 软阈值（字符当量）——超了触发微压缩；太低会过早压缩、打断缓存
 keep_last = 5               # 微压缩保留最近 N 条工具结果
 snip_keep_groups = 3        # reactive 丢中间时保留最近 K 组
 

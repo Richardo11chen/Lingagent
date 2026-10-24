@@ -53,7 +53,9 @@ class Settings:
     # 全局（与模型无关）
     max_steps: int = 40
     approval_timeout: float = 300.0  # 秒：没人答复就按驳回处理（0 = 一直等）
-    compact_threshold: int = 70_000
+    # 软阈值（字符当量，不是精确 token）：超了触发微压缩。调太低会过早压缩、打断模型缓存；
+    # 调太高会撞上模型真实的上下文窗口上限。
+    compact_threshold: int = 300_000
     keep_last: int = 5
     snip_keep_groups: int = 3
     server_host: str = "127.0.0.1"

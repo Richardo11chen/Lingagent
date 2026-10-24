@@ -165,7 +165,7 @@ class DeepSeekLLM:
         api_key_env: str = "DEEPSEEK_API_KEY",
         api_key: str = "",
         temperature: float = 1.0,
-        compact_threshold: int = 70_000,
+        compact_threshold: int = 300_000,
         keep_last: int = 5,
         snip_keep_groups: int = 3,
         thinking: str = "off",
