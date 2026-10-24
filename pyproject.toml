@@ -1,6 +1,6 @@
 [project]
 name = "lingagent"
-version = "0.1.0"
+version = "0.1.1"
 description = "A coding-agent harness: LLM decides, the harness dispatches tools, guards and logs"
 readme = "README.md"
 license = "MIT"
