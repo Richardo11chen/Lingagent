@@ -209,9 +209,11 @@ export default function App() {
 
       <div className="main">
         <div className="topbar">
-          {/* 会话 id 是一串「日期-时间-随机」，界面上换成时间更好读；完整 id 留在 title 里 */}
+          {/* 会话 id 是一串「日期-时间-随机」，界面上换成时间更好读。
+              这是「开始于」的时间，不是现在几点——所以后面必须跟「开始」二字，
+              否则会像一只停住的钟。完整 id 留在 title 里。 */}
           <span className="pill plain" title={sessionId ? `会话 ${sessionId}` : '连接中'}>
-            {sessionId ? fmtSessionTime(sessionId) : '连接中…'}
+            {sessionId ? `${fmtSessionTime(sessionId)} 开始` : '连接中…'}
           </span>
           <span className="grow" />
 
