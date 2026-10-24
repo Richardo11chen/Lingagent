@@ -253,6 +253,18 @@ async def ws_endpoint(ws: WebSocket):
                     approval["result"] = bool(msg.get("approved"))
                     approval["remember"] = bool(msg.get("remember"))
                     ev.set()
+            elif mtype == "new_session":  # 开一个新会话（前端「＋ 新会话」）
+                if user_task and not user_task.done():
+                    await ws.send_json({"type": "notice", "text": "这一轮还在跑——等它结束再开新会话。"})
+                else:
+                    # 只换 id 和 history：连接、模型、审批记忆都留着（它们是"你"的东西，不是会话的）
+                    session_id = new_session_id(WORKSPACE)
+                    history.clear()
+                    await ws.send_json(
+                        {"type": "session", "id": session_id, "history_n": 0, "model": llm.current}
+                    )
+                    await ws.send_json({"type": "history", "messages": []})
+                    await ws.send_json(status_payload())
             elif mtype == "set_auto":  # 网页版「自动批准」开关（= TUI 的 Shift+Tab）
                 auto_approve["on"] = bool(msg.get("on"))
                 await ws.send_json(status_payload())

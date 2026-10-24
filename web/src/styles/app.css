@@ -169,7 +169,7 @@
 
 .pill.plain {
   border-color: transparent;
-  color: var(--text-4);
+  color: var(--text-3);
   cursor: default;
 }
 
@@ -269,7 +269,7 @@
   padding-left: 10px;
   font-size: 12.5px;
   line-height: 1.55;
-  color: var(--text-4);
+  color: var(--text-3);
   white-space: pre-wrap;
 }
 
@@ -444,7 +444,7 @@
 .composer-hint {
   flex: 1;
   font-size: 11.5px;
-  color: var(--text-4);
+  color: var(--text-3);
 }
 
 /* ── 按钮 ── */
@@ -546,7 +546,7 @@
 }
 
 .details-empty {
-  color: var(--text-4);
+  color: var(--text-3);
   font-size: 12.5px;
   line-height: 1.6;
   padding: 4px 0;
@@ -561,7 +561,7 @@
   align-items: center;
   gap: 6px; /* 标签后面可能跟状态徽章 / +N −M / 耗时，别让它们黏成一串 */
   font-size: 11px;
-  color: var(--text-4);
+  color: var(--text-3);
   margin-bottom: 4px;
 }
 
@@ -675,7 +675,7 @@
 }
 
 .trace-time {
-  color: var(--text-4);
+  color: var(--text-3);
   font-family: var(--font-mono);
   flex: none;
 }
@@ -687,7 +687,7 @@
 
 .trace-field .k {
   font-size: 11px;
-  color: var(--text-4);
+  color: var(--text-3);
   font-family: var(--font-mono);
 }
 
@@ -813,7 +813,7 @@
 }
 
 .details-ms {
-  color: var(--text-4);
+  color: var(--text-3);
   font-family: var(--font-mono);
 }
 
@@ -898,4 +898,89 @@
   border-color: var(--warn);
   color: var(--warn);
   font-weight: 600;
+}
+
+/* ── 会话搜索与按天分组 ── */
+.search-wrap {
+  flex: none;
+  padding: 0 8px 6px;
+}
+
+.search {
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-2);
+  background: var(--bg-1);
+  color: var(--text);
+  font-size: 12.5px;
+  outline: none;
+}
+
+.search::placeholder {
+  color: var(--text-4);
+}
+
+.search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.group {
+  flex: none; /* 和 .session 一样：列向 flex 里不许收缩 */
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.group-label {
+  padding: 8px 6px 2px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* ── 新消息淡入 ── */
+@keyframes msgIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.enter {
+  animation: msgIn 0.18s var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .enter {
+    animation: none;
+  }
+}
+
+/* ── 窄屏：先收详情，再收侧栏；不隐藏到点不回来 ── */
+@media (max-width: 1180px) {
+  .details,
+  .details-toggle {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .sidebar {
+    width: 200px;
+  }
+
+  .thread {
+    padding: 0 12px;
+  }
+}
+
+@media (max-width: 720px) {
+  .pill.meter {
+    display: none; /* 顶栏挤不下时先牺牲它：上下文满不满可以从压缩提示看出来 */
+  }
 }

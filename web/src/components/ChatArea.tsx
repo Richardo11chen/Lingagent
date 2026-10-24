@@ -39,11 +39,17 @@ export default function ChatArea({ msgs, pending, selected, onSelect }: Props) {
     <div className="timeline" ref={boxRef}>
       <div className="thread">
         {msgs.map((m, i) => {
+          // 最后一条淡入：新消息落到底部时给一点"接上了"的感觉。
+          // 用显式类而不是 `:last-child`，因为 .thread 末尾还有个滚动锚点 div。
+          const enter = i === msgs.length - 1 ? ' enter' : ''
           if (m.kind === 'tool') {
             const open = expanded.has(i)
             const changed = (m.added ?? 0) + (m.removed ?? 0) > 0
             return (
-              <div key={i} className={selected === i ? 'tool-row selected' : 'tool-row'}>
+              <div
+                key={i}
+                className={(selected === i ? 'tool-row selected' : 'tool-row') + enter}
+              >
                 <button className="tool-head" onClick={() => toggle(i)}>
                   <span className="tool-caret">{open ? '▾' : '▸'}</span>
                   <span className="tool-name">{m.name}</span>
@@ -72,41 +78,41 @@ export default function ChatArea({ msgs, pending, selected, onSelect }: Props) {
           }
           if (m.kind === 'reasoning') {
             return (
-              <div key={i} className="msg-reasoning">
+              <div key={i} className={"msg-reasoning" + enter}>
                 {m.text}
               </div>
             )
           }
           if (m.kind === 'hook') {
             return (
-              <div key={i} className="line-warn">
+              <div key={i} className={"line-warn" + enter}>
                 {m.text}
               </div>
             )
           }
           if (m.kind === 'notice') {
             return (
-              <div key={i} className="line-note">
+              <div key={i} className={"line-note" + enter}>
                 {m.text}
               </div>
             )
           }
           if (m.kind === 'error') {
             return (
-              <div key={i} className="line-error">
+              <div key={i} className={"line-error" + enter}>
                 {m.text}
               </div>
             )
           }
           if (m.kind === 'user') {
             return (
-              <div key={i} className="msg-user">
+              <div key={i} className={"msg-user" + enter}>
                 {m.text}
               </div>
             )
           }
           return (
-            <div key={i} className="msg-assistant">
+            <div key={i} className={"msg-assistant" + enter}>
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
             </div>
           )

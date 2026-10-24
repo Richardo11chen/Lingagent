@@ -72,3 +72,42 @@ export function fmtK(n: number): string {
   const k = n / 1000
   return `${k >= 10 ? Math.round(k) : k.toFixed(1).replace(/\.0$/, '')}k`
 }
+
+const pad = (n: number) => String(n).padStart(2, '0')
+
+/** 会话 id 的 `YYYYMMDD` 前缀 → 今天 / 昨天 / `MM-DD`。 */
+function dayLabel(id: string, today: Date): string {
+  const m = /^(\d{4})(\d{2})(\d{2})/.exec(id)
+  if (!m) return '更早'
+  const key = `${m[1]}${m[2]}${m[3]}`
+  const of = (d: Date) => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`
+  if (key === of(today)) return '今天'
+  const y = new Date(today)
+  y.setDate(y.getDate() - 1)
+  if (key === of(y)) return '昨天'
+  return `${m[2]}-${m[3]}`
+}
+
+export type SessionGroup = { label: string; items: { id: string; preview: string }[] }
+
+/**
+ * 会话列表分组 + 过滤。
+ *
+ * 列表按时间倒序来自后端，所以分组只需顺序扫一遍；搜索只匹配标题（id 里的数字没人会去搜）。
+ */
+export function groupSessions<T extends { id: string; preview: string }>(
+  list: T[],
+  query: string,
+): SessionGroup[] {
+  const q = query.trim().toLowerCase()
+  const today = new Date()
+  const groups: SessionGroup[] = []
+  for (const s of list) {
+    if (q && !(s.preview || '').toLowerCase().includes(q)) continue
+    const label = dayLabel(s.id, today)
+    const last = groups[groups.length - 1]
+    if (last && last.label === label) last.items.push({ id: s.id, preview: s.preview })
+    else groups.push({ label, items: [{ id: s.id, preview: s.preview }] })
+  }
+  return groups
+}

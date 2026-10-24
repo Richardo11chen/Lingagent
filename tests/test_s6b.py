@@ -184,6 +184,20 @@ def test_ws_auto_approve_toggle(monkeypatch):  # 网页版自动批准：开关�
         assert ws.receive_json()["auto"] is False
 
 
+def test_ws_new_session_switches_id_without_reconnect(monkeypatch):
+    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings()))
+    c = TestClient(server.app)
+    with c.websocket_connect("/ws") as ws:
+        first = ws.receive_json()["id"]
+        ws.receive_json()  # status
+
+        ws.send_json({"type": "new_session"})
+        ev = ws.receive_json()
+        assert ev["type"] == "session" and ev["id"] != first  # 换了会话
+        assert ws.receive_json() == {"type": "history", "messages": []}
+        assert ws.receive_json()["type"] == "status"
+
+
 def test_server_cli_model_fail_fast(tmp_path):
     # 启动期就拦住打错的 profile 名（别等 WS 连上才在 handler 里炸——前端只看到连接即断）
     import os

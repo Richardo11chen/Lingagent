@@ -20,7 +20,7 @@
   --text: #000000;
   --text-2: rgb(60, 60, 61);
   --text-3: rgb(84, 85, 87);
-  --text-4: rgb(162, 164, 166);
+  --text-4: rgb(140, 142, 144); /* 只给占位符/装饰用：约 3.4:1；要读的信息用 --text-3 */
 
   --sidebar: #f9fafb;
   --sidebar-hover: #e5e7eb;

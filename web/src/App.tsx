@@ -248,8 +248,8 @@ export default function App() {
         onToggle={() => setCollapsed((v) => !v)}
         onPick={(id) => wsRef.current?.send(JSON.stringify({ type: 'resume', id }))}
         onReload={() => wsRef.current?.send(JSON.stringify({ type: 'sessions_request' }))}
-        // 新会话要后端支持一条 new_session 消息；在那之前重连一次最省事
-        onNew={() => location.reload()}
+        // 后端有了 new_session：换 id、清历史，连接和审批记忆都不动
+        onNew={() => wsRef.current?.send(JSON.stringify({ type: 'new_session' }))}
       />
 
       <div className="main">
@@ -319,7 +319,7 @@ export default function App() {
             {status.auto ? '⚡ 自动批准' : '自动批准'}
           </button>
 
-          <button className="btn sm" onClick={() => setDetailsOpen((v) => !v)}>
+          <button className="btn sm details-toggle" onClick={() => setDetailsOpen((v) => !v)}>
             {detailsOpen ? '收起详情' : '详情'}
           </button>
         </div>
