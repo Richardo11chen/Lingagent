@@ -10,9 +10,13 @@ import './styles/tokens.css'
 import './styles/global.css'
 import './styles/app.css'
 
-// 端口跟后端配置走：web/.env 里写 VITE_WS_PORT=xxxx 即可（缺省 8000）
-const WS_PORT = import.meta.env.VITE_WS_PORT ?? '8000'
-const WS_URL = `ws://${location.hostname || '127.0.0.1'}:${WS_PORT}/ws`
+// 连接地址：
+// - 打包后（单端口）前端由后端托管，同源 → 直接按 location 拼，端口换了也不用重编
+// - 开发时（vite 5173 / 后端 8000 分居）用 web/.env 的 VITE_WS_PORT 指过去
+const DEV_PORT = import.meta.env.VITE_WS_PORT
+const WS_URL = DEV_PORT
+  ? `ws://${location.hostname || '127.0.0.1'}:${DEV_PORT}/ws`
+  : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
 
 export default function App() {
   const [msgs, setMsgs] = useState<Msg[]>([])

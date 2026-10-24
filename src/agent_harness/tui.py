@@ -212,10 +212,15 @@ def show_web_hint(
     started: list[str] | None = None,
     warning: str | None = None,
     reaped: list[str] | None = None,
+    port: int | None = None,
 ) -> None:
-    """网页端链接提示——由调用方放在历史渲染之后（长历史时不用往上翻找）。"""
-    tail = f" · {'、'.join(started)}启动中，几秒后就绪" if started else ""
-    console.print(f"[dim]网页端: http://localhost:5173{tail}[/]")
+    """网页端链接提示——由调用方放在历史渲染之后（长历史时不用往上翻找）。
+
+    port=None 表示这次没有网页界面（没打包、也没开发树）：那就不印链接，别给个打不开的地址。
+    """
+    if port:
+        tail = f" · {'、'.join(started)}启动中，几秒后就绪" if started else ""
+        console.print(f"[dim]网页端: http://localhost:{port}{tail}[/]")
     if reaped:  # 上个 TUI 被强杀留下的：收了就说一声，别让人以为端口是被自己弄丢的
         show_note(f"收掉上次遗留的进程：{'、'.join(reaped)}", "info")
     if warning:

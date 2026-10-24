@@ -185,7 +185,7 @@ def main() -> None:
 
     web = WebRun()
     if settings.web_autostart and tui.interactive():  # 管道/脚本模式不拉网页端
-        web = ensure_web(settings.server_port, WORKSPACE, WORKSPACE / "web")
+        web = ensure_web(settings.server_port, WORKSPACE)
 
     prune_empty_sessions(WORKSPACE)  # 打扫：清掉「开了没聊」的空占位（不阻塞——顺手的事）
     session_id, history = choose_session(WORKSPACE, settings.default_model)
@@ -222,7 +222,7 @@ def main() -> None:
     tui.show_banner(session_id, len(history), llm.current, detect_shell().name)
     if history:
         tui.show_history(history)  # 恢复的会话：把历史渲染出来
-    tui.show_web_hint(web.started, web.warning, web.reaped)  # 链接放历史之后（长历史时不用往上翻）
+    tui.show_web_hint(web.started, web.warning, web.reaped, web.ui_port)  # 放历史之后，不用往上翻
     _trace_nudge(settings)
     try:
         while True:

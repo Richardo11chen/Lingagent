@@ -19,6 +19,7 @@ dependencies = [
 
 [project.scripts]
 agent-harness = "agent_harness:main"
+ah = "agent_harness:main"  # 短名字：装完在任意目录 `ah` 就能开工
 agent-harness-web = "agent_harness.server:main"
 
 [build-system]

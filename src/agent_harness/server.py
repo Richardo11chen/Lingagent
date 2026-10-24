@@ -8,9 +8,12 @@ import asyncio
 import os
 import threading
 from functools import partial
+from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .assembly import (
     POST_HOOKS,
@@ -372,6 +375,44 @@ async def ws_endpoint(ws: WebSocket):
             ev.set()
 
 
+# 打包形态：前端构建产物跟着包走（src/agent_harness/web_dist），后端一个端口全包
+# ——装完不用 Node、不用 vite，直接开 http://127.0.0.1:8000。
+WEB_DIST = Path(__file__).parent / "web_dist"
+
+
+def _mount_web_ui() -> None:
+    """挂前端路由。构建产物在就托管，不在就是纯 API（开发时前端在 5173，由 vite 顶着）。
+
+    路由无条件注册、响应时才看文件在不在：否则测试和线上会因为"dist 有没有构建过"走出
+    两套不同的 URL 表，藏 bug。
+    """
+    if (WEB_DIST / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    def _ui_index():
+        return _web_dist_response(WEB_DIST / "index.html")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def _ui_file(path: str):
+        """dist 里的真文件发文件，其余一律回 index.html（前端自己按路径渲染）。"""
+        target = (WEB_DIST / path).resolve()
+        try:
+            target.relative_to(WEB_DIST.resolve())  # 挡住 ../ 穿越
+        except ValueError:
+            target = WEB_DIST / "index.html"
+        return _web_dist_response(target if target.is_file() else WEB_DIST / "index.html")
+
+
+def _web_dist_response(path: Path):
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="网页界面没打包（只跑 API）")
+    return FileResponse(path)
+
+
+_mount_web_ui()
+
+
 def main() -> None:
     import argparse
 
@@ -394,7 +435,12 @@ def main() -> None:
         raise SystemExit(
             f"缺少 API key：profile {name} 没写 api_key，环境变量 {p.api_key_env} 也没设置"
         )
-    print("前端（网页界面）: http://localhost:5173（在 web/ 下 npm run dev）")
+    where = (
+        f"http://{s.server_host}:{s.server_port}"
+        if (WEB_DIST / "index.html").exists()
+        else "http://localhost:5173（开发模式：在 web/ 下 npm run dev）"
+    )
+    print(f"网页界面: {where}")
     uvicorn.run(app, host=s.server_host, port=s.server_port)
 
 

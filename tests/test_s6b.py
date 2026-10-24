@@ -108,8 +108,10 @@ def test_ensure_web_skips_when_running(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(weblaunch, "_port_open", lambda port: True)
     monkeypatch.setattr(weblaunch, "_backend_is_stale", lambda port: False)  # 对面是当前版本
+    monkeypatch.setattr(weblaunch, "dev_web_dir", lambda: None)
+    monkeypatch.setattr(weblaunch, "bundled_web_dir", lambda: None)
     monkeypatch.setattr(weblaunch.subprocess, "Popen", lambda *a, **k: calls.append(a))
-    run = weblaunch.ensure_web(8000, tmp_path, tmp_path)
+    run = weblaunch.ensure_web(8000, tmp_path)
     assert run.started == [] and run.warning is None
     assert calls == []
 
@@ -123,6 +125,8 @@ def test_ensure_web_spawns_missing(monkeypatch, tmp_path):
     (web / "package.json").write_text("{}", encoding="utf-8")
     spawned = []
     monkeypatch.setattr(weblaunch, "_port_open", lambda port: False)
+    monkeypatch.setattr(weblaunch, "dev_web_dir", lambda: web)  # 假装这是源码树
+    monkeypatch.setattr(weblaunch, "bundled_web_dir", lambda: None)
     monkeypatch.setattr(weblaunch.shutil, "which", lambda name: "C:/fake/npm.cmd")
 
     def fake_popen(argv, **k):
@@ -131,7 +135,7 @@ def test_ensure_web_spawns_missing(monkeypatch, tmp_path):
 
     monkeypatch.setattr(weblaunch.subprocess, "Popen", fake_popen)
 
-    run = weblaunch.ensure_web(8000, tmp_path, web)
+    run = weblaunch.ensure_web(8000, tmp_path)
     assert run.started == ["后端", "前端"] and run.warning is None
     assert spawned[0][1:] == ["-m", "agent_harness.server"]
     assert spawned[1][0].lower().endswith("cmd.exe") and "run" in spawned[1]
@@ -150,9 +154,11 @@ def test_ensure_web_warns_about_a_stale_backend(monkeypatch, tmp_path):
     spawned = []
     monkeypatch.setattr(weblaunch, "_port_open", lambda port: True)
     monkeypatch.setattr(weblaunch, "_backend_is_stale", lambda port: True)
+    monkeypatch.setattr(weblaunch, "dev_web_dir", lambda: None)
+    monkeypatch.setattr(weblaunch, "bundled_web_dir", lambda: None)
     monkeypatch.setattr(weblaunch.subprocess, "Popen", lambda *a, **k: spawned.append(a))
 
-    run = weblaunch.ensure_web(8000, tmp_path, tmp_path)
+    run = weblaunch.ensure_web(8000, tmp_path)
     assert run.started == [] and spawned == []  # 不乱拉第二份
     assert run.warning and "不是当前版本" in run.warning
 
@@ -316,10 +322,11 @@ def test_ensure_web_reaps_before_deciding(monkeypatch, tmp_path):
     monkeypatch.setattr(
         weblaunch, "_port_open", lambda port: order.append(("probe", port)) or holds["orphan"]
     )
-    monkeypatch.setattr(weblaunch.shutil, "which", lambda name: None)  # 别真去拉 vite
+    monkeypatch.setattr(weblaunch, "dev_web_dir", lambda: None)
+    monkeypatch.setattr(weblaunch, "bundled_web_dir", lambda: None)
     monkeypatch.setattr(weblaunch.subprocess, "Popen", lambda *a, **k: _FakeProc(5555))
 
-    run = weblaunch.ensure_web(8000, tmp_path, tmp_path)
+    run = weblaunch.ensure_web(8000, tmp_path)
     assert run.reaped == ["后端已结束（上次遗留 PID 222）"]
     # 先探到「端口还被遗物占着」→ 收掉 → 之后的判断才看到空闲，于是决定起新的
     assert order.index(("kill", 222)) > 0
@@ -502,3 +509,79 @@ def test_server_cli_model_fail_fast(tmp_path):
     )
     assert r.returncode == 1
     assert "未知模型 profile" in r.stderr
+
+
+# ---- 打包形态：装好的包没有开发树，界面由后端同一个端口托管（不用 Node / vite）----
+
+
+def test_ensure_web_single_port_when_no_dev_tree(monkeypatch, tmp_path):
+    """装好的包：没有 `web/` → 不起 vite，前端静态文件跟后端同端口。"""
+    from agent_harness import weblaunch
+
+    dist = tmp_path / "web_dist"
+    dist.mkdir()
+    (dist / "index.html").write_text('<div id="root"></div>', encoding="utf-8")
+    monkeypatch.setattr(weblaunch, "dev_web_dir", lambda: None)
+    monkeypatch.setattr(weblaunch, "bundled_web_dir", lambda: dist)
+    monkeypatch.setattr(weblaunch, "_port_open", lambda port: False)
+    monkeypatch.setattr(weblaunch.shutil, "which", lambda name: "C:/fake/npm.cmd")  # 有 npm 也不许用
+    spawned = []
+
+    def fake_popen(argv, **k):
+        spawned.append(argv)
+        return _FakeProc(7000 + len(spawned))
+
+    monkeypatch.setattr(weblaunch.subprocess, "Popen", fake_popen)
+
+    run = weblaunch.ensure_web(8000, tmp_path)
+    assert run.started == ["后端"]  # 没有"前端"
+    assert run.ui_port == 8000  # 界面就走后端这个端口
+    assert len(spawned) == 1 and "npm" not in " ".join(spawned[0])
+
+
+def test_ensure_web_dev_tree_still_uses_vite(monkeypatch, tmp_path):
+    """源码树照旧：vite 5173 热更新，别因为加单端口就把开发体验弄没了。"""
+    from agent_harness import weblaunch
+
+    dev = tmp_path / "web"
+    dev.mkdir()
+    (dev / "package.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(weblaunch, "dev_web_dir", lambda: dev)
+    monkeypatch.setattr(weblaunch, "bundled_web_dir", lambda: None)
+    monkeypatch.setattr(weblaunch, "_port_open", lambda port: False)
+    monkeypatch.setattr(weblaunch.shutil, "which", lambda name: "C:/fake/npm.cmd")
+    spawned = []
+
+    def fake_popen(argv, **k):
+        spawned.append(argv)
+        return _FakeProc(7100 + len(spawned))
+
+    monkeypatch.setattr(weblaunch.subprocess, "Popen", fake_popen)
+
+    run = weblaunch.ensure_web(8000, tmp_path)
+    assert run.started == ["后端", "前端"]
+    assert run.ui_port == weblaunch.FRONTEND_PORT
+    assert "run" in spawned[1]
+
+
+def test_serves_the_built_ui_on_the_same_port(monkeypatch, tmp_path):
+    """有构建产物 → 后端把界面发出去：/ 是 index，深链回 index，/health 还是 JSON。"""
+    from agent_harness import server
+
+    dist = tmp_path / "web_dist"
+    dist.mkdir()
+    (dist / "index.html").write_text('<div id="root"></div>', encoding="utf-8")
+    monkeypatch.setattr(server, "WEB_DIST", dist)
+    c = TestClient(server.app)
+    assert b'id="root"' in c.get("/").content
+    assert b'id="root"' in c.get("/deep/link").content  # 前端自己按路径渲染
+    assert c.get("/health").json()["app"] == "agent-harness"  # 没被兜底吞掉
+    assert c.get("/../pyproject.toml").status_code == 200  # 穿越不出去：回 index
+
+
+def test_no_built_ui_is_a_clean_404(monkeypatch, tmp_path):
+    """没打包（纯 API / 开发模式）→ 404，而不是 500 或者半个 index。"""
+    from agent_harness import server
+
+    monkeypatch.setattr(server, "WEB_DIST", tmp_path / "nope")
+    assert TestClient(server.app).get("/").status_code == 404

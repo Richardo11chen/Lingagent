@@ -21,3 +21,6 @@ wheels/
 
 # 本地协作笔记（.workbuddy/memory 等）——跟工作目录走，不该进版本库
 .workbuddy/
+
+# 前端构建产物（发布前用 scripts/build_web.py 生成，跟着 wheel 走，不进版本库）
+src/agent_harness/web_dist/

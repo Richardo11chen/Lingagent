@@ -36,10 +36,27 @@ class WebRun:
     procs: list[tuple[str, subprocess.Popen]] = field(default_factory=list)
     warning: str | None = None
     reaped: list[str] = field(default_factory=list)  # 上次 TUI 被强杀时留下的，这次开工前收了
+    ui_port: int | None = None  # 网页界面的端口（开发 = vite 5173，装好的包 = 后端端口）
 
     @property
     def started(self) -> list[str]:
         return [name for name, _ in self.procs]
+
+
+def dev_web_dir() -> Path | None:
+    """仓库里的 `web/`（只有源码树里有；装成 wheel 之后没有）。
+
+    为什么按包的位置找、不按 cwd：`cd` 到别人的前端项目里启动 TUI 时，`cwd/web/package.json`
+    可能存在——那会把 `npm run dev` 拉进用户自己的项目里，纯属莫名其妙。
+    """
+    cand = Path(__file__).resolve().parents[2] / "web"
+    return cand if (cand / "package.json").exists() else None
+
+
+def bundled_web_dir() -> Path | None:
+    """包内的前端构建产物（`agent_harness/web_dist`）——有它就不用 vite、单端口。"""
+    cand = Path(__file__).resolve().parent / "web_dist"
+    return cand if (cand / "index.html").exists() else None
 
 
 
@@ -258,8 +275,13 @@ def reap_orphans(backend_port: int) -> list[str]:
     return lines
 
 
-def ensure_web(backend_port: int, workspace: Path, web_dir: Path) -> WebRun:
-    """确保网页端在跑：缺后端起后端、缺前端起前端。返回这次拉起的东西 + 警告。"""
+def ensure_web(backend_port: int, workspace: Path) -> WebRun:
+    """确保网页端在跑：缺后端起后端；开发树的 web/ 缺前端就起 vite。返回这次拉起的东西。
+
+    两种形态：
+    - 源码树（`dev_web_dir()` 有）：vite 5173 + 后端 8000，热更新改前端
+    - 装好的包（`bundled_web_dir()` 有）：只有后端，静态文件由它托管 → 一个端口 8000
+    """
     run = WebRun()
     run.reaped = reap_orphans(backend_port)  # 先清遗物，否则端口还被它占着、会被当成"已在跑"
     if not _port_open(backend_port):
@@ -271,7 +293,8 @@ def ensure_web(backend_port: int, workspace: Path, web_dir: Path) -> WebRun:
             f"{backend_port} 端口上跑的后端不是当前版本——网页会连到旧代码。"
             f"先结束那个进程（或改端口）再开 TUI。"
         )
-    if (web_dir / "package.json").exists() and not _port_open(FRONTEND_PORT):
+    web_dir = dev_web_dir()
+    if web_dir and not _port_open(FRONTEND_PORT):
         npm = shutil.which("npm")
         if npm:
             if npm.lower().endswith((".cmd", ".bat")):  # Windows：.cmd 要走 cmd /c
@@ -279,6 +302,10 @@ def ensure_web(backend_port: int, workspace: Path, web_dir: Path) -> WebRun:
             else:
                 argv = [npm, "run", "dev"]
             run.procs.append(("前端", _spawn(argv, cwd=web_dir)))
+    if web_dir:
+        run.ui_port = FRONTEND_PORT
+    elif bundled_web_dir():
+        run.ui_port = backend_port  # 静态文件由后端托管：同一个端口
     if run.procs:
         _write_state(run, backend_port)  # 给"下次启动"留一份认领凭据
     return run

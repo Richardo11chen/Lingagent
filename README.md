@@ -7,7 +7,7 @@
 - 终端界面（TUI）+ 网页界面（React，实时流 + 网页审批）
 - 危险动作走风险分级：只读放行 / 改动静默问人 / 极危险直拒
 - 每步动作留轨迹（trace），会话可恢复（session）
-- 硬标准：**移除真 LLM 后核心机制仍能用确定性单测验证**（117 条测试）
+- 硬标准：**移除真 LLM 后核心机制仍能用确定性单测验证**（202 条测试）
 
 ## 环境要求
 
@@ -23,6 +23,29 @@
 git clone <repo> && cd AgentHarness
 uv sync
 ```
+
+## 安装（当产品用：装完在任意目录 `ah` 就能启动）
+
+不打成「仓库里跑」的形态，而是装成一条命令——像 `claude`、`gh` 那样：
+
+```bash
+uv run python scripts/build_web.py   # 把前端构建产物打进包里（需要 Node，只做一次）
+uv build                             # 产出 dist/agent_harness-0.1.0-py3-none-any.whl
+uv tool install dist/agent_harness-0.1.0-py3-none-any.whl
+```
+
+之后随便 `cd` 到哪个目录：
+
+```bash
+ah                 # 启动 TUI（会话 / 轨迹按当前目录的项目身份归档）
+agent-harness-web  # 只起后端 + 网页界面
+ah --stop-web      # 关掉后台的后端
+```
+
+装好的包**不需要 Node、不需要仓库、不需要 web/**：前端构建产物跟着 wheel 走，后端一个端口
+（`http://localhost:8000`）就把界面和 WebSocket 一起发出去。开发时（在仓库里）仍走 vite 5173 热更新。
+
+卸载：`uv tool uninstall agent-harness`。
 
 ## 配置
 
