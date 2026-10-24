@@ -143,7 +143,16 @@ def main() -> None:
         "--stop-web", action="store_true",
         help="结束占用网页端端口（后端 + 前端 dev server）的进程；不启动会话",
     )
+    ap.add_argument(
+        "--init", action="store_true",
+        help="首启向导：交互式生成 ~/.agent-harness/config.toml；不启动会话",
+    )
     args = ap.parse_args()
+
+    if args.init:  # 也不该要求 API key——它就是来写 key 的
+        from .config_wizard import run_init
+
+        raise SystemExit(run_init())
 
     if args.stop_web:  # 也不该要求 API key
         from .settings import load_settings

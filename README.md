@@ -26,12 +26,26 @@ uv sync
 
 ## 安装（当产品用：装完在任意目录 `ah` 就能启动）
 
-不打成「仓库里跑」的形态，而是装成一条命令——像 `claude`、`gh` 那样：
+不打成「仓库里跑」的形态，而是装成一条命令——像 `claude`、`gh` 那样。
+
+**最省事：发布到 PyPI 之后一行**（见下「为什么是三行」）：
 
 ```bash
-uv run python scripts/build_web.py   # 把前端构建产物打进包里（需要 Node，只做一次）
+uv tool install agent-harness     # 或 pipx install agent-harness
+```
+
+**还没发布时的本地做法（三条命令，只跑一次）：**
+
+```bash
+uv run python scripts/build_web.py   # 把前端构建产物打进包里（需要 Node）
 uv build                             # 产出 dist/agent_harness-0.1.0-py3-none-any.whl
 uv tool install dist/agent_harness-0.1.0-py3-none-any.whl
+```
+
+装完先做一次配置（交互式，问三句就写好 `~/.agent-harness/config.toml`）：
+
+```bash
+ah --init
 ```
 
 之后随便 `cd` 到哪个目录：
@@ -46,6 +60,10 @@ ah --stop-web      # 关掉后台的后端
 （`http://localhost:8000`）就把界面和 WebSocket 一起发出去。开发时（在仓库里）仍走 vite 5173 热更新。
 
 卸载：`uv tool uninstall agent-harness`。
+
+**为什么上面是三行而不是一行**：`web_dist/` 不提交进 git（构建产物不该进版本库），所以本地要先
+`build_web` 把前端塞进 wheel；也没发布到 PyPI，所以要 `uv build` 现打一个。只要把 wheel 推到 PyPI，
+`uv tool install agent-harness` 就是唯一一行——这是下一步该做的事，跟安装方式无关。
 
 ## 配置
 
