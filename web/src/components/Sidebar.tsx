@@ -7,9 +7,10 @@ type Props = {
   onToggle: () => void
   onPick: (id: string) => void
   onNew: () => void
+  onReload: () => void
 }
 
-export default function Sidebar({ sessions, current, collapsed, onToggle, onPick, onNew }: Props) {
+export default function Sidebar({ sessions, current, collapsed, onToggle, onPick, onNew, onReload }: Props) {
   return (
     <aside className={collapsed ? 'sidebar collapsed' : 'sidebar'}>
       <div className="sidebar-head">
@@ -36,7 +37,14 @@ export default function Sidebar({ sessions, current, collapsed, onToggle, onPick
             <span className="meta">{s.id}</span>
           </button>
         ))}
-        {sessions.length === 0 && <div className="details-empty">还没有历史会话</div>}
+        {sessions.length === 0 && (
+          <div className="details-empty">
+            还没有历史会话
+            <button className="btn sm" onClick={onReload}>
+              刷新列表
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="sidebar-foot">

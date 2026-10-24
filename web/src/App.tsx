@@ -92,6 +92,8 @@ export default function App() {
             }
             return [...ms, { kind: 'assistant', text: ev.text }]
           })
+          // 一轮结束后刷新列表：新会话这时才有第一句可作预览
+          sock?.send(JSON.stringify({ type: 'sessions_request' }))
           break
         case 'reasoning':
           setPending(false)
@@ -128,25 +130,28 @@ export default function App() {
     }
 
     const connect = () => {
-      sock = new WebSocket(WS_URL)
-      wsRef.current = sock
-      sock.onopen = () => {
+      const ws = new WebSocket(WS_URL)
+      sock = ws
+      wsRef.current = ws
+      ws.onopen = () => {
         setConnected(true)
+        // 会话列表每次都问——只在「没有 sid」时问是个坑：那次请求一旦错过
+        // （先离线后连上、或重连走 resume），侧栏就永远是空的，只能刷新页面
+        ws.send(JSON.stringify({ type: 'sessions_request' }))
         const sid = sidRef.current
-        if (sid) sock?.send(JSON.stringify({ type: 'resume', id: sid }))
-        else sock?.send(JSON.stringify({ type: 'sessions_request' }))
+        if (sid) ws.send(JSON.stringify({ type: 'resume', id: sid }))
       }
       // 后端还没起来（TUI 是异步拉起的）时连不上——1.5 秒后重试，直到连上
-      sock.onclose = () => {
+      ws.onclose = () => {
         setConnected(false)
-        wsRef.current = null
+        if (wsRef.current === ws) wsRef.current = null // 别把新 socket 清掉
         // 断线 = 这一轮没了：清掉残留的审批卡（点它已经没人接）和「在跑」状态
         setApproval(null)
         setRunning(false)
         setPending(false)
         if (!unmounted) retry = window.setTimeout(connect, 1500)
       }
-      sock.onmessage = onMessage
+      ws.onmessage = onMessage
     }
 
     connect()
@@ -196,6 +201,7 @@ export default function App() {
         collapsed={collapsed}
         onToggle={() => setCollapsed((v) => !v)}
         onPick={(id) => wsRef.current?.send(JSON.stringify({ type: 'resume', id }))}
+        onReload={() => wsRef.current?.send(JSON.stringify({ type: 'sessions_request' }))}
         // 新会话要后端支持一条 new_session 消息；在那之前重连一次最省事
         onNew={() => location.reload()}
       />
