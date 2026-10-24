@@ -984,3 +984,14 @@
     display: none; /* 顶栏挤不下时先牺牲它：上下文满不满可以从压缩提示看出来 */
   }
 }
+
+/* 旧后端提示：贴在输入框上方，别让它淹没在对话里 */
+.stale-tip {
+  flex: none;
+  margin: 0 16px 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-bg);
+  font-size: 12px;
+  line-height: 1.5;
+}

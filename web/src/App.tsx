@@ -28,6 +28,8 @@ export default function App() {
   const [trace, setTrace] = useState<{ list: TraceRec[]; total: number } | null>(null)
   const [tasks, setTasks] = useState<TaskSnap[]>([])
   const [status, setStatus] = useState({ auto: false, used: 0, limit: 0 })
+  const [stale, setStale] = useState(false) // 后端太旧（没有 status 事件）
+  const gotStatus = useRef(false)
   const [drawer, setDrawer] = useState<DrawerTab | null>(null)
   const [collapsed, setCollapsed] = useState(false) // 侧栏
   const [detailsOpen, setDetailsOpen] = useState(true)
@@ -48,6 +50,12 @@ export default function App() {
           setSessionId(ev.id)
           sidRef.current = ev.id
           if (ev.model) setModelName(ev.model)
+          // 新后端连上就推 status。3 秒还没见到，说明对面是旧代码——
+          // 旧后端不认 set_auto，自动批准会"点了没反应"，必须让人知道为什么
+          gotStatus.current = false
+          window.setTimeout(() => {
+            if (!gotStatus.current) setStale(true)
+          }, 3000)
           break
         case 'history':
           setMsgs(
@@ -69,6 +77,8 @@ export default function App() {
           setTasks(ev.list)
           break
         case 'status':
+          gotStatus.current = true
+          setStale(false)
           setStatus({ auto: ev.auto, used: ev.used, limit: ev.limit })
           break
         case 'models':
@@ -342,6 +352,13 @@ export default function App() {
                 本会话不再问
               </button>
             </div>
+          </div>
+        )}
+
+        {stale && (
+          <div className="line-warn stale-tip">
+            后端是旧版本（连上了，但它不推 status，所以「自动批准」和新事件都不会生效）。
+            关掉 TUI 重开；如果它还占着 8000，先结束那个 python 进程。
           </div>
         )}
 
