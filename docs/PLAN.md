@@ -44,7 +44,7 @@
 | Python 版本 | Anaconda 3.13 / uv 托管 3.14 | uv 托管 3.14 | 项目环境与 Anaconda 隔离，避免污染 |
 | LLM 接入 | 各家原生 SDK / **openai 兼容** | openai SDK + DeepSeek base_url | OpenAI 兼容生态最大、DeepSeek 便宜；换供应商只改 base_url |
 | 供应商 | OpenAI / Anthropic / **DeepSeek** | DeepSeek | 成本低、OpenAI 兼容、用户环境已有 key |
-| 模型 | v4-pro / **v4-flash** | deepseek-v4-flash | 便宜快，学习项目够用 |
+| 模型 | v4-pro / **flash** | deepseek-flash | 便宜快，学习项目够用 |
 | 前端（立项定） | — | TypeScript | 用户立项指定（先终端后画面） |
 
 ### S6 前端选型（需求 → 候选 → 待对比验证）

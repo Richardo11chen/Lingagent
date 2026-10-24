@@ -36,7 +36,7 @@ class ModelProfile:
     （跨厂商安全：别的 OpenAI 兼容厂商不会被塞私有参数）。
     """
 
-    name: str = "deepseek-v4-flash"
+    name: str = "deepseek-flash"
     base_url: str = "https://api.deepseek.com"
     api_key_env: str = "DEEPSEEK_API_KEY"
     api_key: str = ""  # 直写密钥（优先于 api_key_env；明文落盘——示例文件别提交进仓库）

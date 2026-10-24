@@ -8,7 +8,7 @@ from agent_harness.settings import Settings, load_settings
 def test_defaults_when_no_file(tmp_path):  # 无配置文件 → 全默认（单个 default profile）
     s = load_settings(tmp_path / "nope.toml")
     assert s.default_model == "default"
-    assert s.model().name == "deepseek-v4-flash"
+    assert s.model().name == "deepseek-flash"
 
 
 def test_multi_profiles_and_default(tmp_path):  # 多 profile：default 选取 + 按名取
@@ -19,7 +19,7 @@ def test_multi_profiles_and_default(tmp_path):  # 多 profile：default 选取 +
 default = "proxy"
 
 [models.deepseek]
-name = "deepseek-v4-flash"
+name = "deepseek-flash"
 temperature = 0.3
 thinking = "enabled"
 
