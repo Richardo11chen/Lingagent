@@ -198,3 +198,25 @@ def test_toolbar_shows_context_share(monkeypatch):  # 底部要看得见上下�
     monkeypatch.setattr(tui, "_context_probe", boom)
     assert "上下文" not in line()  # 显示层出错不该影响输入行
     assert "Shift+Tab" in line()
+
+
+def test_session_picker_shows_the_model_that_will_be_used(monkeypatch, tmp_path):
+    """没记过模型的会话（新建就用默认）要显示「默认」，不能是一根横杠。"""
+    import agent_harness
+    from agent_harness import session as session_mod
+
+    monkeypatch.setattr(session_mod, "SESSION_ROOT", tmp_path / "_archives")
+    fake = [{"id": "s1", "mtime": 0.0, "first_user_msg": "旧会话"}]
+    monkeypatch.setattr(agent_harness, "list_visible_sessions", lambda: fake)
+    monkeypatch.setattr(agent_harness, "load_session", lambda w, sid: [])
+    monkeypatch.setattr(tui, "interactive", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "0")  # 直接开新会话
+    shown: list[str] = []
+    monkeypatch.setattr(tui, "show_sessions", lambda rows, *a: shown.append(rows[0]["model"]))
+
+    agent_harness.choose_session(tmp_path, "deepseek-flash")
+    assert shown == ["deepseek-flash（默认）"]
+
+    monkeypatch.setattr(agent_harness, "load_session_model", lambda w, sid: "MiniMax-M3")
+    agent_harness.choose_session(tmp_path, "deepseek-flash")
+    assert shown[-1] == "MiniMax-M3"  # 记过的会话用记录值，不加"默认"

@@ -32,8 +32,12 @@ from .llm import Msg, DeepSeekLLM
 from .trace import Tracer, days_since_viewed, load_trace, mark_viewed
 from .weblaunch import ensure_web
 
-def choose_session(workspace: Path) -> tuple[str, list[Msg]]:
-    """列历史会话让用户选（分页，每页 10 条）；返回 (session_id, history)。"""
+def choose_session(workspace: Path, default_profile: str = "") -> tuple[str, list[Msg]]:
+    """列历史会话让用户选（分页，每页 10 条）；返回 (session_id, history)。
+
+    default_profile：没记过模型的会话会显示成「xxx（默认）」——它打开时确实会用这个，
+    写一根横杠等于让人以为「不知道用什么」，而其实答案明确。
+    """
     if not tui.interactive():
         return new_session_id(workspace), []          # 非终端（管道喂任务）：选择没意义，直接新会话
     sessions = list_visible_sessions()
@@ -49,7 +53,8 @@ def choose_session(workspace: Path) -> tuple[str, list[Msg]]:
         rows = [
             {
                 "time": time.strftime("%m-%d %H:%M", time.localtime(s["mtime"])),
-                "model": load_session_model(workspace, s["id"]) or "-",
+                "model": load_session_model(workspace, s["id"])
+                or (f"{default_profile}（默认）" if default_profile else "-"),
                 "preview": (s["first_user_msg"] or "(空会话)").replace("\n", " ")[:40],
             }
             for s in chunk
@@ -149,7 +154,7 @@ def main() -> None:
         web_started = ensure_web(settings.server_port, WORKSPACE, WORKSPACE / "web")
 
     prune_empty_sessions(WORKSPACE)  # 打扫：清掉「开了没聊」的空占位（不阻塞——顺手的事）
-    session_id, history = choose_session(WORKSPACE)
+    session_id, history = choose_session(WORKSPACE, settings.default_model)
 
     # 底部显示上下文占比：分母是压缩阈值（同一个数，模型撞上去就会被压），
     # 分子是「系统提示 + 历史」的字符当量。history 每轮会被替换成新列表，
