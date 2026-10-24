@@ -1,12 +1,11 @@
-"""scripts/release.py 的纯函数单测：只测版本号校验，不真去 build / publish。
+"""scripts/release.py 的纯函数单测：只测版本号校验与「已发布」判定，不真去 build / publish。
 
 关键不变式：
-- 版本号必须 +1（PyPI 不能重传同名文件）
-- dist/ 里已有该版本产物 → 拦下
+- 版本号要形如 x.y.z
+- 「能不能发」看目标 index 上有没有这个版本（404 = 没有，能发；200 = 有，拦下）
 - bump_version 只改 version 这一行，不碰别的
 
-只测 `_validate` / `current_version` / `bump_version` 三个纯函数，路径全部显式传入——
-不 monkeypatch 模块全局，避免踩「默认参数在 import 时就绑死了真路径」的坑。
+只测纯函数、路径显式传入，不 monkeypatch 模块全局。
 """
 
 import sys
@@ -37,26 +36,50 @@ def test_current_and_bump(proj):
     assert 'description = "x"' in text
 
 
-def test_validate_requires_a_bump(proj, tmp_path):
+def test_validate_shape_rejects_bad_version():
     with pytest.raises(SystemExit) as e:
-        release._validate("0.1.0", proj, tmp_path / "dist")
-    assert "必须 +1" in str(e.value)
-
-
-def test_validate_refuses_an_already_built_version(proj, tmp_path):
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    (dist / "lingagent-0.2.0-py3-none-any.whl").write_text("", encoding="utf-8")
-    with pytest.raises(SystemExit) as e:
-        release._validate("0.2.0", proj, dist)
-    assert "换一个版本号" in str(e.value)
-
-
-def test_validate_rejects_a_bad_version_shape(proj, tmp_path):
-    with pytest.raises(SystemExit) as e:
-        release._validate("0.2", proj, tmp_path / "dist")
+        release._validate_shape("0.2")
     assert "形如 0.2.0" in str(e.value)
 
 
-def test_validate_passes_a_clean_bump(proj, tmp_path):
-    release._validate("0.2.0", proj, tmp_path / "dist")  # 不抛 = 通过
+def test_validate_shape_accepts_clean_version():
+    release._validate_shape("0.1.0")  # 不抛 = 通过
+
+
+def test_already_published_blocks_on_200(monkeypatch):
+    class _Resp:  # opener.open() 返回一个上下文管理器
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class _Opener:  # build_opener 返回一个带 .open() 的对象
+        def open(self, url, timeout=5):
+            return _Resp()
+
+    monkeypatch.setattr(release.urllib.request, "build_opener", lambda *a, **k: _Opener())
+    assert release._already_published("lingagent", "0.1.0", "https://pypi.org") is True
+
+
+def test_already_published_allows_404(monkeypatch):
+    import urllib.error
+
+    class _Opener:
+        def open(self, url, timeout=5):
+            raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+
+    monkeypatch.setattr(release.urllib.request, "build_opener", lambda *a, **k: _Opener())
+    assert release._already_published("lingagent", "0.1.0", "https://pypi.org") is False
+
+
+def test_already_published_does_not_block_on_network_error(monkeypatch):
+    class _Opener:
+        def open(self, url, timeout=5):
+            raise OSError("断网了")
+
+    monkeypatch.setattr(release.urllib.request, "build_opener", lambda *a, **k: _Opener())
+    # 网络不通 = 不拦（让 uv publish 自己报）
+    assert release._already_published("lingagent", "0.1.0", "https://pypi.org") is False
