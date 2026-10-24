@@ -1,0 +1,112 @@
+/* 设计 token：取自 dsh-transition-webui（DeepSeek Harness 网页版）的实测值。
+   两套主题靠 prefers-color-scheme 自动切；要强制某一套就给它加 data-theme="light|dark"。
+   命名刻意短（--bg / --text-2），因为这套变量要在每个组件里出现几十次。 */
+
+:root {
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Liberation Mono', Menlo,
+    'Microsoft YaHei', monospace;
+
+  --bg: #ffffff;
+  --bg-1: #ffffff;
+  --bg-2: #f5f5f5;
+  --bg-3: #e5e5e5;
+
+  --border-1: rgba(0, 0, 0, 0.04);
+  --border-2: rgba(0, 0, 0, 0.1);
+  --border-3: rgba(0, 0, 0, 0.12);
+
+  --text: #000000;
+  --text-2: rgb(60, 60, 61);
+  --text-3: rgb(84, 85, 87);
+  --text-4: rgb(162, 164, 166);
+
+  --sidebar: #f9fafb;
+  --sidebar-hover: #e5e7eb;
+  --sidebar-active: #f3f4f6;
+
+  --bubble: #f3f4f6;
+  --bubble-user: #e8f0fe;
+
+  --brand: #000000;
+  --brand-text: #ffffff;
+  --accent: rgb(65, 118, 230);
+  --accent-ring: rgba(65, 118, 230, 0.15);
+  --danger: rgb(239, 68, 68);
+  --success: rgb(34, 197, 94);
+  --warn: rgb(186, 117, 23);
+  --warn-bg: #fdf6e7;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 22px;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 深色：手动指定优先，其次跟随系统 */
+[data-theme='dark'] {
+  --bg: rgb(21, 21, 23);
+  --bg-1: rgb(35, 35, 36);
+  --bg-2: rgb(44, 44, 46);
+  --bg-3: rgb(53, 54, 56);
+
+  --border-1: rgba(255, 255, 255, 0.06);
+  --border-2: rgba(255, 255, 255, 0.12);
+  --border-3: rgba(255, 255, 255, 0.16);
+
+  --text: #ffffff;
+  --text-2: rgb(207, 211, 214);
+  --text-3: rgb(173, 178, 184);
+  --text-4: rgb(151, 157, 166);
+
+  --sidebar: rgb(27, 27, 28);
+  --sidebar-hover: rgb(53, 54, 56);
+  --sidebar-active: rgb(44, 44, 46);
+
+  --bubble: rgb(44, 44, 46);
+  --bubble-user: rgb(52, 65, 91);
+
+  --brand: #ffffff;
+  --brand-text: rgb(21, 21, 23);
+  --accent: rgb(103, 158, 254);
+  --accent-ring: rgba(103, 158, 254, 0.2);
+  --warn-bg: rgb(48, 40, 24);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: rgb(21, 21, 23);
+    --bg-1: rgb(35, 35, 36);
+    --bg-2: rgb(44, 44, 46);
+    --bg-3: rgb(53, 54, 56);
+
+    --border-1: rgba(255, 255, 255, 0.06);
+    --border-2: rgba(255, 255, 255, 0.12);
+    --border-3: rgba(255, 255, 255, 0.16);
+
+    --text: #ffffff;
+    --text-2: rgb(207, 211, 214);
+    --text-3: rgb(173, 178, 184);
+    --text-4: rgb(151, 157, 166);
+
+    --sidebar: rgb(27, 27, 28);
+    --sidebar-hover: rgb(53, 54, 56);
+    --sidebar-active: rgb(44, 44, 46);
+
+    --bubble: rgb(44, 44, 46);
+    --bubble-user: rgb(52, 65, 91);
+
+    --brand: #ffffff;
+    --brand-text: rgb(21, 21, 23);
+    --accent: rgb(103, 158, 254);
+    --accent-ring: rgba(103, 158, 254, 0.2);
+    --warn-bg: rgb(48, 40, 24);
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+}
