@@ -93,7 +93,9 @@ export type SessionGroup = { label: string; items: { id: string; preview: string
 /**
  * 会话列表分组 + 过滤。
  *
- * 列表按时间倒序来自后端，所以分组只需顺序扫一遍；搜索只匹配标题（id 里的数字没人会去搜）。
+ * 后端按**修改时间**倒序发，不是按 id 里的日期——所以同一天的会话可能在列表里被别天隔开
+ * （改过一句旧会话，它就跳到最前面）。因此分组用 Map 合并同名标签，而不是"只看上一组的标签"，
+ * 否则同一天会出现好几个重复的日期标题。
  */
 export function groupSessions<T extends { id: string; preview: string }>(
   list: T[],
@@ -102,12 +104,17 @@ export function groupSessions<T extends { id: string; preview: string }>(
   const q = query.trim().toLowerCase()
   const today = new Date()
   const groups: SessionGroup[] = []
+  const byLabel = new Map<string, SessionGroup>()
   for (const s of list) {
     if (q && !(s.preview || '').toLowerCase().includes(q)) continue
     const label = dayLabel(s.id, today)
-    const last = groups[groups.length - 1]
-    if (last && last.label === label) last.items.push({ id: s.id, preview: s.preview })
-    else groups.push({ label, items: [{ id: s.id, preview: s.preview }] })
+    let group = byLabel.get(label)
+    if (!group) {
+      group = { label, items: [] }
+      byLabel.set(label, group)
+      groups.push(group)
+    }
+    group.items.push({ id: s.id, preview: s.preview })
   }
   return groups
 }
