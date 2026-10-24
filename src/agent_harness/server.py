@@ -22,6 +22,7 @@ from .assembly import (
     load_settings_and_llm,
 )
 from .guardrail import command_head
+from .compact import estimate_tokens
 from .llm import Msg
 from .loop import agent_loop
 from .session import (
@@ -80,10 +81,25 @@ async def ws_endpoint(ws: WebSocket):
     )
     approval: dict = {}  # 审批等待槽：{"event": Event, "result": bool, "remember": bool}
     approved_programs: set[str] = set()  # 本连接内"不再问"的程序名（重启即忘）
+    auto_approve = {"on": False}  # 网页版「自动批准」（对应 TUI 的 Shift+Tab），内存态
     stop_event = threading.Event()  # 本轮「别继续了」——网页停止按钮置位，loop 每步看一眼
     user_task: asyncio.Task | None = None
 
+    def status_payload() -> dict:
+        """顶栏要的那点状态：审批模式 + 上下文用量。
+
+        分子算法与 TUI 完全一致（系统提示 + 历史字符当量），分母是压缩阈值——
+        两边各算一套的话，迟早出现"显示 60% 但已经开始压缩"。
+        """
+        return {
+            "type": "status",
+            "auto": auto_approve["on"],
+            "used": estimate_tokens(history) + len(build_system_prompt()),
+            "limit": settings.compact_threshold,
+        }
+
     await ws.send_json({"type": "session", "id": session_id, "history_n": len(history), "model": llm.current})
+    await ws.send_json(status_payload())
 
     def _report_round_failure(task: asyncio.Task) -> None:
         """兜底：run_user 里任何没被接住的异常，都要变成前端看得见的一句话。
@@ -147,6 +163,10 @@ async def ws_endpoint(ws: WebSocket):
             reason 一起推给前端：只给命令的话，批的人不知道自己批的是什么风险。
             本会话"不再问"的记忆存在这里（按程序名），重启即忘。
             """
+            if auto_approve["on"]:  # 网页版自动批准：不弹卡片，但必须留一条痕迹
+                send({"type": "notice", "text": f"自动批准 · {reason}"})
+                tracer.emit("auto", command=command, reason=reason)
+                return True
             head = command_head(command)
             if head and head in approved_programs:
                 send({"type": "notice", "text": f"本会话已允许 {head}，直接执行"})
@@ -208,6 +228,7 @@ async def ws_endpoint(ws: WebSocket):
         history[:] = new_history  # 原地更新（闭包外的引用同步）
         save_messages(WORKSPACE, session_id, new_history[old_len:])
         await ws.send_json({"type": "assistant_done", "text": reply})
+        await ws.send_json(status_payload())  # 这一轮的上下文用量
 
     try:
         while True:  # 常驻收消息——审批答复也走这里（不能被 agent 执行阻塞）
@@ -232,6 +253,9 @@ async def ws_endpoint(ws: WebSocket):
                     approval["result"] = bool(msg.get("approved"))
                     approval["remember"] = bool(msg.get("remember"))
                     ev.set()
+            elif mtype == "set_auto":  # 网页版「自动批准」开关（= TUI 的 Shift+Tab）
+                auto_approve["on"] = bool(msg.get("on"))
+                await ws.send_json(status_payload())
             elif mtype == "models_request":  # 列可选模型（/model）
                 await ws.send_json(
                     {"type": "models", "list": llm.profiles, "current": llm.current_profile}
@@ -287,6 +311,7 @@ async def ws_endpoint(ws: WebSocket):
                         elif m.role == "tool":
                             rendered.append({"kind": "tool", "name": m.tool_name or "工具结果"})
                     await ws.send_json({"type": "history", "messages": rendered})
+                    await ws.send_json(status_payload())  # 换会话后用量跟着变
     except WebSocketDisconnect:
         pass
     finally:

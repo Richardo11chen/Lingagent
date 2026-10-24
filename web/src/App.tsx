@@ -4,7 +4,7 @@ import ChatArea from './components/ChatArea'
 import Composer from './components/Composer'
 import DetailsPanel from './components/DetailsPanel'
 import Sidebar from './components/Sidebar'
-import { fmtSessionTime } from './lib/format'
+import { fmtK, fmtSessionTime } from './lib/format'
 import type { Ev, Msg, Session, TaskSnap, TraceRec } from './lib/types'
 import './styles/tokens.css'
 import './styles/global.css'
@@ -27,6 +27,7 @@ export default function App() {
   const [modelPicker, setModelPicker] = useState<{ list: string[]; current: string } | null>(null)
   const [trace, setTrace] = useState<{ list: TraceRec[]; total: number } | null>(null)
   const [tasks, setTasks] = useState<TaskSnap[]>([])
+  const [status, setStatus] = useState({ auto: false, used: 0, limit: 0 })
   const [drawer, setDrawer] = useState<DrawerTab | null>(null)
   const [collapsed, setCollapsed] = useState(false) // 侧栏
   const [detailsOpen, setDetailsOpen] = useState(true)
@@ -66,6 +67,9 @@ export default function App() {
           break
         case 'tasks':
           setTasks(ev.list)
+          break
+        case 'status':
+          setStatus({ auto: ev.auto, used: ev.used, limit: ev.limit })
           break
         case 'models':
           setModelPicker({ list: ev.list, current: ev.current })
@@ -286,6 +290,34 @@ export default function App() {
             <span className={connected ? 'dot ok' : 'dot'} />
             {connected ? '在线' : '离线'}
           </span>
+
+          {/* 上下文用量：分母是压缩阈值（不是模型物理窗口），到 100% 就是下一次请求会被压缩 */}
+          {status.limit > 0 &&
+            (() => {
+              const pct = Math.max(0, Math.round((status.used * 100) / status.limit))
+              const tone = pct >= 95 ? ' meter danger' : pct >= 70 ? ' meter warn' : ' meter'
+              return (
+                <span
+                  className={'pill plain' + tone}
+                  title={`上下文 ${status.used} / ${status.limit} 字符（压缩阈值）`}
+                >
+                  {fmtK(status.used)}/{fmtK(status.limit)} ({pct}%)
+                </span>
+              )
+            })()}
+
+          {/* 自动批准：开着的时候必须一眼可见——它意味着「不再问你」 */}
+          <button
+            className={status.auto ? 'pill auto on' : 'pill auto'}
+            onClick={() => wsRef.current?.send(JSON.stringify({ type: 'set_auto', on: !status.auto }))}
+            title={
+              status.auto
+                ? '自动批准已开启：所有需要确认的命令都直接执行（catastrophic 仍然直接拒）'
+                : '开启后不再弹审批（对应 TUI 的 Shift+Tab）'
+            }
+          >
+            {status.auto ? '⚡ 自动批准' : '自动批准'}
+          </button>
 
           <button className="btn sm" onClick={() => setDetailsOpen((v) => !v)}>
             {detailsOpen ? '收起详情' : '详情'}

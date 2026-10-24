@@ -65,3 +65,10 @@ const TOOL_STATUS_ZH: Record<string, string> = {
 export function toolStatusZh(status: string): string {
   return TOOL_STATUS_ZH[status] ?? status
 }
+
+/** 上下文用量：不足 1000 给原数，超过用 8.4k / 70k——顶栏只有一行的预算。 */
+export function fmtK(n: number): string {
+  if (n < 1000) return String(Math.round(n))
+  const k = n / 1000
+  return `${k >= 10 ? Math.round(k) : k.toFixed(1).replace(/\.0$/, '')}k`
+}

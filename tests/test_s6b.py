@@ -159,11 +159,29 @@ def test_ws_trace_request(monkeypatch, tmp_path):  # 轨迹时间线：trace_req
     monkeypatch.setattr(server, "trace_path", lambda w, s: tf)
     c = TestClient(server.app)
     with c.websocket_connect("/ws") as ws:
-        ws.receive_json()  # session
+        assert ws.receive_json()["type"] == "session"
+        assert ws.receive_json()["type"] == "status"  # 连上就报一次：审批模式 + 上下文用量
         ws.send_json({"type": "trace_request"})
         ev = ws.receive_json()
     assert ev["type"] == "trace"
     assert ev["total"] == 1 and ev["list"][0]["kind"] == "model"
+
+
+def test_ws_auto_approve_toggle(monkeypatch):  # 网页版自动批准：开关状态由服务端回执，别只在前端记
+    monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings()))
+    c = TestClient(server.app)
+    with c.websocket_connect("/ws") as ws:
+        ws.receive_json()  # session
+        assert ws.receive_json()["auto"] is False
+
+        ws.send_json({"type": "set_auto", "on": True})
+        ev = ws.receive_json()
+        assert ev["type"] == "status" and ev["auto"] is True
+        assert ev["limit"] > 0  # 分母是压缩阈值
+        assert ev["used"] >= 0
+
+        ws.send_json({"type": "set_auto", "on": False})
+        assert ws.receive_json()["auto"] is False
 
 
 def test_server_cli_model_fail_fast(tmp_path):

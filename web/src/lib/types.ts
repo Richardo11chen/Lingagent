@@ -58,6 +58,7 @@ export type Ev =
   | { type: 'model_switched'; model: string; error?: string }
   | { type: 'trace'; list: TraceRec[]; total: number }
   | { type: 'tasks'; list: TaskSnap[] }
+  | { type: 'status'; auto: boolean; used: number; limit: number }
   | { type: 'hook'; by: string; reason: string }
   | { type: 'notice'; text: string }
   | { type: 'approval_request'; command: string; reason?: string }

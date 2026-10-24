@@ -100,6 +100,11 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
     - 轨迹：行点击钻取字段；后台任务：状态 / 耗时 / 末尾输出，运行中的带「停止」按钮
     - 新增 WS 消息 `tasks_request` / `task_stop_request`；`tools.task_snapshot()` 给前端结构化字段（`task_output` 那份是给模型读的整段文字，两者分开）
     - 只在「后台任务」tab 打开时 2 秒轮询一次；每轮结束再拉一次同步角标
+  - 顶栏状态 + 网页版自动批准：
+    - 新 WS 事件 `status`（`auto` / `used` / `limit`）：连接时、每轮结束、resume、切换开关各推一次
+    - 用量算法与 TUI 完全共用（`estimate_tokens(history) + len(system_prompt)`，分母是 `compact_threshold`）
+    - 自动批准按钮 = TUI 的 `Shift+Tab`：不弹审批卡、`tracer.emit("auto")` 留痕、对话里一行 `自动批准 · 原因`；内存态，重连即回手动
+    - 开着时按钮整颗变黄（`--warn-bg` + 边框）——「不再问你」不能和普通按钮长得一样
 
 未完成：
 

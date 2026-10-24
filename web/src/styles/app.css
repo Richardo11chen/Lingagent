@@ -873,3 +873,29 @@
 .back {
   margin: 2px 8px 8px;
 }
+
+/* ── 顶栏：上下文用量 / 自动批准 ── */
+.pill.meter {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+.pill.meter.warn {
+  color: var(--warn);
+}
+
+.pill.meter.danger {
+  color: var(--danger);
+}
+
+.pill.auto {
+  border: 1px solid transparent;
+}
+
+/* 开着时整颗变黄——「不再问你」是个危险状态，不能和普通按钮长得一样 */
+.pill.auto.on {
+  background: var(--warn-bg);
+  border-color: var(--warn);
+  color: var(--warn);
+  font-weight: 600;
+}
