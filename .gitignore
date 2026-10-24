@@ -18,3 +18,6 @@ wheels/
 
 # 超长工具输出的全文（临时，7 天自动清）
 .agent-harness-out/
+
+# 本地协作笔记（.workbuddy/memory 等）——跟工作目录走，不该进版本库
+.workbuddy/
