@@ -295,6 +295,11 @@ def main() -> None:
         # （2026-10-24 就是这么卡住的：新按钮点了没反应，8000 上还是上个世纪的进程）。
         # 只收自己拉起的——端口上原有的可能是另一个 TUI 或用户自己在用，不动。
         if web.procs and settings.web_stop_on_exit:
-            _let_web_finish(settings)  # 网页上还有一轮就先等它跑完，别拦腰砍断
-            tui.console.print(f"[dim]网页端已关闭：{'、'.join(stop_run(web))}[/]")
-            clear_state()
+            try:
+                _let_web_finish(settings)  # 网页上还有一轮就先等它跑完，别拦腰砍断
+                tui.console.print(f"[dim]网页端已关闭：{'、'.join(stop_run(web))}[/]")
+                clear_state()
+            except KeyboardInterrupt:
+                # 第三次 Ctrl+C 会落在这里（第二次已经触发 EOFError、进入收尾）——
+                # 再打断清理只会打一条 traceback，没有任何好处。
+                pass
