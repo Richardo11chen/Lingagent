@@ -2,6 +2,18 @@
 
 export type Session = { id: string; preview: string }
 
+/** 后台任务的一条快照（server.list_tasks 的形状） */
+export type TaskSnap = {
+  id: string
+  command: string
+  alive: boolean
+  exit_code: number | null
+  elapsed: number
+  started: number
+  tail: string
+  size: number
+}
+
 export type TraceRec = {
   ts: string
   kind: string
@@ -45,6 +57,7 @@ export type Ev =
   | { type: 'models'; list: string[]; current: string }
   | { type: 'model_switched'; model: string; error?: string }
   | { type: 'trace'; list: TraceRec[]; total: number }
+  | { type: 'tasks'; list: TaskSnap[] }
   | { type: 'hook'; by: string; reason: string }
   | { type: 'notice'; text: string }
   | { type: 'approval_request'; command: string; reason?: string }

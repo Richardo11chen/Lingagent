@@ -241,6 +241,30 @@ def task_stop(task_id: str) -> str:
     return f"已停止 {task_id}（{t.command}）。"
 
 
+def task_snapshot(task_id: str, tail_chars: int = 4000) -> dict | None:
+    """后台任务的一条快照（给界面用；没有这个任务返回 None）。
+
+    与 task_output 的区别：那个是给模型读的整段文字，这个是给前端渲染的结构化字段。
+    两处都只读末尾——日志可以无限长。
+    """
+    from . import tasks
+
+    t = tasks.get(task_id)
+    if t is None:
+        return None
+    text, size = _read_tail(t.path)
+    return {
+        "id": t.id,
+        "command": t.command,
+        "alive": t.alive,
+        "exit_code": t.exit_code,
+        "elapsed": round(t.elapsed, 1),
+        "started": t.started,
+        "tail": text[-tail_chars:],
+        "size": size,
+    }
+
+
 def _size(path: Path) -> int:
     try:
         return path.stat().st_size

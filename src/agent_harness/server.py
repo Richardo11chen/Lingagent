@@ -33,7 +33,7 @@ from .session import (
     save_session_model,
     trace_path,
 )
-from .tools import tool_detail
+from .tools import task_snapshot, task_stop, tool_detail
 from .trace import Tracer, TRACE_FIELD_CHARS, ellipsis_note, load_trace, mark_viewed
 
 app = FastAPI()
@@ -53,6 +53,14 @@ def _slim(rec: dict) -> dict:
         else:
             out[k] = v
     return out
+
+
+def list_tasks() -> list[dict]:
+    """后台任务快照（底部抽屉用）。任务是进程级全局的，所以不按会话过滤。"""
+    from . import tasks as task_reg
+
+    snaps = (task_snapshot(t.id) for t in task_reg.all_tasks())
+    return sorted((s for s in snaps if s), key=lambda s: s["started"])
 
 
 @app.websocket("/ws")
@@ -251,6 +259,12 @@ async def ws_endpoint(ws: WebSocket):
                     for s in list_visible_sessions()  # 全量下发——前端弹层可滚动
                 ]
                 await ws.send_json({"type": "sessions", "list": items})
+            elif mtype == "tasks_request":  # 后台任务列表（底部抽屉用）——只读快照
+                await ws.send_json({"type": "tasks", "list": list_tasks()})
+            elif mtype == "task_stop_request":  # 人在界面上按「停止」
+                tid = str(msg.get("id", ""))
+                await asyncio.to_thread(task_stop, tid)
+                await ws.send_json({"type": "tasks", "list": list_tasks()})
             elif mtype == "resume":  # 恢复某个会话
                 sid = str(msg.get("id", ""))
                 if sid and (user_task is None or user_task.done()):

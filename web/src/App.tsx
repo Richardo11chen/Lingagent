@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import BottomPanel from './components/BottomPanel'
+import BottomPanel, { type DrawerTab } from './components/BottomPanel'
 import ChatArea from './components/ChatArea'
 import Composer from './components/Composer'
 import DetailsPanel from './components/DetailsPanel'
 import Sidebar from './components/Sidebar'
 import { fmtSessionTime } from './lib/format'
-import type { Ev, Msg, Session, TraceRec } from './lib/types'
+import type { Ev, Msg, Session, TaskSnap, TraceRec } from './lib/types'
 import './styles/tokens.css'
 import './styles/global.css'
 import './styles/app.css'
@@ -26,6 +26,8 @@ export default function App() {
   const [modelName, setModelName] = useState('')
   const [modelPicker, setModelPicker] = useState<{ list: string[]; current: string } | null>(null)
   const [trace, setTrace] = useState<{ list: TraceRec[]; total: number } | null>(null)
+  const [tasks, setTasks] = useState<TaskSnap[]>([])
+  const [drawer, setDrawer] = useState<DrawerTab | null>(null)
   const [collapsed, setCollapsed] = useState(false) // 侧栏
   const [detailsOpen, setDetailsOpen] = useState(true)
   const [selectedTool, setSelectedTool] = useState<number | null>(null)
@@ -62,6 +64,9 @@ export default function App() {
         case 'trace':
           setTrace({ list: ev.list, total: ev.total })
           break
+        case 'tasks':
+          setTasks(ev.list)
+          break
         case 'models':
           setModelPicker({ list: ev.list, current: ev.current })
           break
@@ -95,6 +100,8 @@ export default function App() {
           })
           // 一轮结束后刷新列表：新会话这时才有第一句可作预览
           sock?.send(JSON.stringify({ type: 'sessions_request' }))
+          // 这一轮可能起了后台任务——顺便把数量同步给 tab 上的角标
+          sock?.send(JSON.stringify({ type: 'tasks_request' }))
           break
         case 'reasoning':
           setPending(false)
@@ -186,6 +193,16 @@ export default function App() {
     }
   }, [])
 
+  // 后台任务 tab 开着时才轮询（2 秒）——日志在长，没人看的时候不该空转
+  useEffect(() => {
+    if (drawer !== 'tasks') return
+    const id = window.setInterval(
+      () => wsRef.current?.send(JSON.stringify({ type: 'tasks_request' })),
+      2000,
+    )
+    return () => window.clearInterval(id)
+  }, [drawer])
+
   const send = () => {
     const text = input.trim()
     if (!text || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
@@ -197,6 +214,7 @@ export default function App() {
     }
     if (text === '/trace') {
       wsRef.current.send(JSON.stringify({ type: 'trace_request' }))
+      setDrawer('trace')
       setInput('')
       return
     }
@@ -304,13 +322,28 @@ export default function App() {
           connected={connected}
         />
 
-        {trace && (
-          <BottomPanel
-            trace={trace}
-            onRefresh={() => wsRef.current?.send(JSON.stringify({ type: 'trace_request' }))}
-            onClose={() => setTrace(null)}
-          />
-        )}
+        <BottomPanel
+          tab={drawer}
+          trace={trace}
+          tasks={tasks}
+          onTab={(t) => {
+            setDrawer((cur) => (cur === t ? null : t))
+            // 打开哪个 tab 就拉哪一份数据——不做常驻轮询，省得空转
+            if (drawer !== t) {
+              wsRef.current?.send(
+                JSON.stringify({ type: t === 'trace' ? 'trace_request' : 'tasks_request' }),
+              )
+            }
+          }}
+          onRefresh={() => {
+            wsRef.current?.send(
+              JSON.stringify({ type: drawer === 'tasks' ? 'tasks_request' : 'trace_request' }),
+            )
+          }}
+          onStopTask={(id) =>
+            wsRef.current?.send(JSON.stringify({ type: 'task_stop_request', id }))
+          }
+        />
       </div>
 
       {detailsOpen && <DetailsPanel msg={picked} onClose={() => setDetailsOpen(false)} />}

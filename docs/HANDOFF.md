@@ -95,6 +95,11 @@ master。本轮已分笔提交（S10 子 agent / run_shell 超时 / S11 风险�
     - diff 由写文件的工具自己算（`tools._record_diff` → `difflib.unified_diff`），用 `ContextVar` 传给 loop——不放返回值（那会进 history 和 token），也不放模块全局（网页多连接会串）
     - `server` 转成 `tool_result` 事件（结果截 8k、diff 截 12k，全文仍在 trace），前端按最后一个同名未回填的行就地更新：折叠态显示 `+2 −1` 与状态徽章，展开看 diff，右侧详情看全文
     - 验证方式：假 WS 服务重放「工具开始 → 结束（带 diff）」，无头 Edge + CDP 截图确认（不烧模型额度）
+  - 底部抽屉（轨迹 / 后台任务）：
+    - 收起时只留 30px 的 tab 条，`后台任务` 上常驻运行中数量角标——抽屉关着也知道有东西在跑
+    - 轨迹：行点击钻取字段；后台任务：状态 / 耗时 / 末尾输出，运行中的带「停止」按钮
+    - 新增 WS 消息 `tasks_request` / `task_stop_request`；`tools.task_snapshot()` 给前端结构化字段（`task_output` 那份是给模型读的整段文字，两者分开）
+    - 只在「后台任务」tab 打开时 2 秒轮询一次；每轮结束再拉一次同步角标
 
 未完成：
 

@@ -588,13 +588,37 @@
   background: var(--bg-1);
 }
 
-.bottom-head {
+/* 收起时只剩一条 tab 条——抽屉关着也要能看见「有后台任务在跑」 */
+.bottom.closed {
+  height: auto;
+}
+
+.bottom-tabs {
   flex: none;
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border-1);
+  padding: 4px 10px;
+  min-height: 30px;
+  border-top: 1px solid var(--border-1);
+}
+
+.bottom-tabs .grow {
+  flex: 1;
+}
+
+.bottom-tabs .trace-time {
+  margin-right: 6px;
+}
+
+.tab-badge {
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 .tab {
@@ -791,4 +815,61 @@
 .details-ms {
   color: var(--text-4);
   font-family: var(--font-mono);
+}
+
+/* ── 后台任务 ── */
+.task {
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-md);
+  margin-bottom: 6px;
+  overflow: hidden;
+}
+
+.task-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+}
+
+.task-id {
+  font-family: var(--font-mono);
+  color: var(--text-3);
+  flex: none;
+}
+
+.task-cmd {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-status {
+  flex: none;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-tail {
+  margin: 0;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-1);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 110px;
+  overflow: auto;
+}
+
+.back {
+  margin: 2px 8px 8px;
 }

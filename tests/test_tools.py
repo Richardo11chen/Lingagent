@@ -196,3 +196,26 @@ def test_edit_file_records_only_the_change(tmp_path):  # 替换型改动的 diff
     # 只有被改的那一行带 +/-；alpha / gamma 最多作为上下文行出现（n=3 会带进去）
     changed = [l for l in diff.splitlines() if l[:1] in "+-" and l[:3] not in ("+++", "---")]
     assert changed == ["-beta", "+BETA"]
+
+
+def test_task_snapshot_shape(tmp_path, monkeypatch):  # 给界面用的结构化快照（不是给模型读的那段文字）
+    from agent_harness import tasks
+    from agent_harness.tools import task_snapshot
+
+    monkeypatch.setattr(tasks, "TASKS_DIR", tmp_path)
+    # 假 Proc 没有 pid，别让它活到 atexit 清理那一步
+    monkeypatch.setattr(tasks, "_registry", {})
+    log = tmp_path / "1-tSNAP.log"
+    log.write_text("listening on 5173\n", encoding="utf-8")
+
+    class Proc:
+        def poll(self):
+            return None  # 还在跑
+
+    tasks.register("tSNAP", "npm run dev", Proc(), log)
+    snap = task_snapshot("tSNAP")
+    assert snap["id"] == "tSNAP" and snap["alive"] is True
+    assert snap["command"] == "npm run dev"
+    assert "5173" in snap["tail"]
+    assert snap["started"] > 0  # 排序用
+    assert task_snapshot("没有这个") is None
