@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write # OIDC 必需——没有它拿不到短期令牌，trusted publishing 会失败
+      contents: read # checkout 需要；job 级 permissions 会顶掉 workflow 级的，所以这里也得写
 
     steps:
       - uses: actions/checkout@v4
