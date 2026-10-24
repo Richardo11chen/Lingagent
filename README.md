@@ -346,6 +346,4 @@ src/agent_harness/
   weblaunch.py  TUI 启动时拉起网页端
 tests/          test_s1 ~ test_s11 + test_tools（155 条）
 web/            React + TS + Vite 前端
-docs/PLAN.md    工程真源（决策记录）
-docs/HANDOFF.md 会话交接单
 ```
