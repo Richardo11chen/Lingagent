@@ -24,7 +24,7 @@ git clone <repo> && cd AgentHarness
 uv sync
 ```
 
-## 安装（当产品用：装完在任意目录 `linga` 就能启动）
+## 安装（当产品用：装完在任意目录 `lingan` 就能启动）
 
 不打成「仓库里跑」的形态，而是装成一条命令——像 `claude`、`gh` 那样。
 
@@ -45,15 +45,16 @@ uv tool install dist/lingagent-0.1.0-py3-none-any.whl
 装完先做一次配置（交互式，问三句就写好 `~/.agent-harness/config.toml`）：
 
 ```bash
-linga --init
+lingan --init
 ```
 
 之后随便 `cd` 到哪个目录：
 
 ```bash
-linga             # 启动 TUI（会话 / 轨迹按当前目录的项目身份归档）
-lingagent-web     # 只起后端 + 网页界面
-linga --stop-web  # 关掉后台的后端
+lingan             # 启动终端界面（会话 / 轨迹按当前目录的项目身份归档）
+lingan -tui        # 同上，显式指定（不加参数也是这个）
+lingan -web        # 只起后端 + 网页界面
+lingan --stop-web  # 关掉后台的后端
 ```
 
 装好的包**不需要 Node、不需要仓库、不需要 web/**：前端构建产物跟着 wheel 走，后端一个端口
@@ -130,8 +131,8 @@ api_key_env = "DEEPSEEK_API_KEY"    # 从环境变量读（推荐）
 **终端界面：**
 
 ```bash
-uv run linga                          # 用配置里的 default profile
-uv run linga --model deepseek-v4-pro  # 临时指定 profile
+uv run lingan                          # 用配置里的 default profile
+uv run lingan --model deepseek-v4-pro  # 临时指定 profile
 ```
 
 首次启动会：列出历史会话让你选（`0` 开新会话、`n`/`p` 翻页）→ 自动拉起网页端（`[web] autostart = false` 可关）。
@@ -143,7 +144,7 @@ uv run linga --model deepseek-v4-pro  # 临时指定 profile
 
 ```bash
 # 终端 1：后端（默认 127.0.0.1:8000）
-uv run lingagent-web
+uv run lingan -web
 
 # 终端 2：前端（默认 5173）
 cd web && npm install && npm run dev
@@ -191,7 +192,7 @@ agent 自己的 `run_tests` 工具按项目根的标记文件认测试入口，�
 2. **trace 会一直长**（工具结果全文，审计账不截断）。攒久了清一下：
 
    ```bash
-   uv run linga --clean-trace 30   # 删 30 天前的轨迹（0 = 全删）
+   uv run lingan --clean-trace 30   # 删 30 天前的轨迹（0 = 全删）
    ```
 
    删轨迹不影响会话本身。要彻底不写，配置里 `[trace] enabled = false`——session 照常，只是没有"给人看的账"。TUI 启动时如果发现轨迹一个月没人看过，会提醒一句。
@@ -249,7 +250,7 @@ stop_wait = 120        # 收之前等网页那轮跑完的秒数（0 = 不等）
 也可以手动收（不需要 API key）：
 
 ```bash
-uv run linga --stop-web      # 结束占用 8000 / 5173 的进程
+uv run lingan --stop-web      # 结束占用 8000 / 5173 的进程
 ```
 
 后端复用前 TUI 会先问一句 `/health`：如果 8000 上的进程不是当前版本（协议号对不上），启动时就印一行黄字提醒，而不是假装一切正常。

@@ -433,22 +433,17 @@ def _web_dist_response(path: Path):
 _mount_web_ui()
 
 
-def main() -> None:
-    import argparse
-
+def run_server(model: str | None = None) -> None:
+    """起后端 + 网页界面（`lingan -web` 走这里）。model=None → 用配置默认 profile。"""
     from .settings import load_settings
 
-    ap = argparse.ArgumentParser(description="Agent Harness Web")
-    ap.add_argument("--model", help="模型 profile 名（配置 [models.*]；缺省用 default）")
-    args = ap.parse_args()
-
     s = load_settings()
-    name = args.model or s.default_model
-    if args.model and args.model not in s.models:  # fail fast：别等 WS 连上才在 handler 里炸（前端只看到连接即断）
-        raise SystemExit(f"未知模型 profile：{args.model}（可用：{', '.join(s.models)}）")
-    if args.model:
+    name = model or s.default_model
+    if model and model not in s.models:  # fail fast：别等 WS 连上才在 handler 里炸（前端只看到连接即断）
+        raise SystemExit(f"未知模型 profile：{model}（可用：{', '.join(s.models)}）")
+    if model:
         global _CLI_MODEL
-        _CLI_MODEL = args.model  # ws_endpoint 构造 llm 时用
+        _CLI_MODEL = model  # ws_endpoint 构造 llm 时用
     # 同样在这里把密钥也验掉：否则要等浏览器连上那一刻才 SystemExit，前端只看到「连接闪断」
     p = s.model(name)
     if not p.api_key and not os.environ.get(p.api_key_env):
@@ -462,6 +457,16 @@ def main() -> None:
     )
     print(f"网页界面: {where}")
     uvicorn.run(app, host=s.server_host, port=s.server_port)
+
+
+def main() -> None:
+    """独立入口（测试 / `python -m` 用）：自己解析 --model，其余交给 run_server。"""
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Lingagent Web")
+    ap.add_argument("--model", help="模型 profile 名（配置 [models.*]；缺省用 default）")
+    args = ap.parse_args()
+    run_server(args.model)
 
 
 _CLI_MODEL: str | None = None  # --model 指定（None = 配置 default）

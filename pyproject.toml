@@ -30,9 +30,8 @@ Homepage = "https://github.com/Richardo11chen/Lingagent"
 Repository = "https://github.com/Richardo11chen/Lingagent"
 
 [project.scripts]
-lingagent = "agent_harness:main"
-linga = "agent_harness:main"  # 短名字：装完在任意目录 `linga` 就能开工
-lingagent-web = "agent_harness.server:main"
+# 一个入口，靠 -tui / -web 分派：lingan（默认 TUI）、lingan -tui、lingan -web
+lingan = "agent_harness:main"
 
 [build-system]
 requires = ["uv_build>=0.12.7,<0.13.0"]

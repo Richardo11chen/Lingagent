@@ -133,7 +133,19 @@ def _let_web_finish(settings) -> None:
 def main() -> None:
     import argparse
 
-    ap = argparse.ArgumentParser(description="Agent Harness CLI")
+    ap = argparse.ArgumentParser(
+        description="Lingagent —— 在任意目录启动的 coding agent",
+        epilog="不带参数 = 终端界面（-tui）；lingan -web = 只起后端 + 网页界面。",
+    )
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument(
+        "-tui", "--tui", action="store_true",
+        help="终端界面（默认，不加这个也是一样）",
+    )
+    mode.add_argument(
+        "-web", "--web", action="store_true",
+        help="只起后端 + 网页界面（不开终端）",
+    )
     ap.add_argument("--model", help="模型 profile 名（配置 [models.*]；缺省用 default）")
     ap.add_argument(
         "--clean-trace", type=int, metavar="DAYS",
@@ -169,6 +181,12 @@ def main() -> None:
 
         n, freed = clean_traces(SESSION_ROOT, older_than_days=args.clean_trace)
         print(f"清掉 {n} 个轨迹文件，释放 {freed / 1048576:.1f} MB")
+        return
+
+    if args.web:  # lingan -web：只起后端 + 网页，不进终端界面
+        from .server import run_server
+
+        run_server(args.model)
         return
 
     base_prompt = build_system_prompt()
