@@ -15,9 +15,25 @@ TOOL_SCHEMAS: list[dict] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "文件路径（工作目录内相对或绝对）"},
+                    "path": {"type": "string", "description": "文件路径（工作目录内；优先写相对路径）"},
                 },
                 "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_file",
+            "description": "精确替换文件里的一段文本（old→new），保留其余内容——修改现有代码的首选。old 必须在文件中唯一出现（先 read_file 拿到准确原文）。old 不唯一时，扩大 old 的范围（带上前后几行）直到唯一，不要退回 write_file。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "文件路径（工作目录内）"},
+                    "old": {"type": "string", "description": "要被替换的原文（必须与文件内容一字不差且唯一）"},
+                    "new": {"type": "string", "description": "替换后的新文本"},
+                },
+                "required": ["path", "old", "new"],
             },
         },
     },
@@ -39,28 +55,12 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
-            "name": "edit_file",
-            "description": "精确替换文件里的一段文本（old→new），保留其余内容——修改现有代码的首选。old 必须在文件中唯一出现（先 read_file 拿到准确原文）。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "文件路径（工作目录内）"},
-                    "old": {"type": "string", "description": "要被替换的原文（必须与文件内容一字不差且唯一）"},
-                    "new": {"type": "string", "description": "替换后的新文本"},
-                },
-                "required": ["path", "old", "new"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "run_shell",
-            "description": "执行 shell 命令（bash，工作目录 = 项目根）。查看文件列表、跑构建等。只读命令直接执行；会改动文件、执行程序或无法判定的命令会先询问用户。不会自己结束的命令（dev server / watch）加 background=true。",
+            "description": "执行 shell 命令（bash，工作目录 = 项目根）。查看文件列表、跑构建等。只读命令直接执行；会改动文件、执行程序、访问网络或无法判定的命令会先询问用户。不会自己结束的命令（dev server / watch）加 background=true。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "完整命令，bash 语法（管道、$变量、for ...; do ...; done 都能用；dir/type/del 这类 cmd 命令不存在）"},
+                    "command": {"type": "string", "description": "完整命令。由 bash 执行（Windows 上是 Git Bash），不是 Windows cmd——用 ls / cat / rm，不要用 dir / type / del。"},
                     "timeout": {
                         "type": "number",
                         "description": "超时秒数，默认 120、上限 600。只在装包/跑构建这类慢命令时才调大。",
@@ -115,7 +115,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "run_tests",
-            "description": "跑本项目的测试并返回红绿报告（按项目根自动认 pytest / npm test / go test / cargo test / make test）。绿了只回一句话，红了只给失败清单和详情——比 run_shell 省上下文。改完代码后用它验证：红了看报告改，绿了才收工。认不出测试入口时会明说，让你改用 run_shell。",
+            "description": "跑本项目的测试并返回红绿报告（自动认 pytest / npm test / go test / cargo test / make test）。绿了只回一句话，红了只给失败清单和详情——比 run_shell 省上下文。红了先分清是代码错还是测试错：代码错改代码；测试本身错或用例过时，说清楚，别硬改测试让它变绿；环境跑不起来就说清卡在哪，别假装通过。认不出测试入口时会明说，让你改用 run_shell。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -132,8 +132,9 @@ TOOL_SCHEMAS: list[dict] = [
             "description": (
                 "把一块需要大量探索的子任务派给一个独立上下文的子 agent：它在自己的上下文里读文件、"
                 "查目录、跑命令，只把最终结论回报给你（中间过程不进你的上下文）。适合「先查清楚 X」"
-                "这类过程不必留在主对话的探索型任务。子 agent 不能改文件（写操作留在主对话）。"
+                "这类过程不必留在主对话的探索型任务。"
                 "子 agent 看不到主对话——子任务说明必须自包含。"
+                "简单的一次读取或单文件查看不要派子 agent，直接自己做。"
             ),
             "parameters": {
                 "type": "object",
