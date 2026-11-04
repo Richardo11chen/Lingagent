@@ -93,6 +93,60 @@ def test_ws_approval_approved(monkeypatch, tmp_path):  # 批准路径：命令�
     assert ran.get("cmd") == "rm -rf test_dir"  # 批准后真执行
 
 
+def test_ws_remember_survives_to_the_next_turn(monkeypatch, tmp_path):
+    """「本会话不再问」必须跨轮有效。
+
+    这条守的是一个真实的回归：`approver` 一度被建在 run_user 里（每轮一个新实例），
+    结果记忆和自动批准每轮清零——功能测试全绿，因为单轮里看不出差别。
+    记忆属于连接，实例就该活在连接上。
+    """
+
+    class ShellEachTurn:
+        """每轮都发同一条危险命令：turn 从 user 消息开始，工具结果回灌后收尾。"""
+
+        current = "fake-model"
+
+        def set_notice(self, fn):
+            pass
+
+        def __call__(self, messages, tools, on_text=None, on_reasoning=None, system_prompt=None):
+            if messages[-1].role == "user":
+                return ("", [Action(
+                    tool="run_shell",
+                    args={"command": "rm -rf test_dir"},
+                    tool_call_id="call_1",
+                )], "")
+            return ("好的", [], "")
+
+    monkeypatch.setattr(
+        server, "load_settings_and_llm",
+        lambda sp, m=None, **kw: (ShellEachTurn(), Settings()),
+    )
+    monkeypatch.setattr(server, "save_messages", _no_save)
+    monkeypatch.setattr(server, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
+    monkeypatch.setitem(assembly.tools, "run_shell", lambda command: "退出码 0")
+
+    c = TestClient(server.app)
+    asked = 0
+    with c.websocket_connect("/ws") as ws:
+        ws.receive_json()  # session
+        ws.receive_json()  # status
+        for turn in (1, 2):
+            ws.send_json({"type": "user", "text": f"第 {turn} 次"})
+            while True:
+                m = ws.receive_json()
+                if m["type"] == "approval_request":
+                    asked += 1
+                    ws.send_json({
+                        "type": "approval_response",
+                        "approved": True,
+                        "remember": True,  # 第一轮选了「本会话不再问」
+                    })
+                if m["type"] == "assistant_done":
+                    break
+    assert asked == 1  # 第二轮同一条命令直接放行
+
+
 class _FakeProc:
     """假 Popen：退出收尸只需要 pid 和 poll()。"""
 
@@ -491,6 +545,87 @@ def test_ws_new_session_switches_id_without_reconnect(monkeypatch):
         assert ws.receive_json()["type"] == "status"
 
 
+def test_ws_lists_and_switches_models(monkeypatch):
+    """列模型 / 切模型 / 切一个不存在的：三种回执都要对。
+
+    以前这三支一条测试都没有——`models_request` 读 `llm.profiles`，而测试用的假模型
+    没有这个属性，所以谁也没去碰它。错误分支尤其要紧：切错了必须回给前端，
+    静默失败会让人以为切成功了。
+    """
+
+    class ModelLLM(FakeLLM):
+        current = "a"
+        current_profile = "a"
+        profiles = ["a", "b"]
+
+        def switch(self, name):
+            if name not in self.profiles:
+                raise KeyError(name)
+            self.current = self.current_profile = name
+            return name
+
+    monkeypatch.setattr(
+        server, "load_settings_and_llm", lambda sp, m=None, **kw: (ModelLLM(), Settings())
+    )
+    monkeypatch.setattr(server, "save_session_model", lambda w, s, n: None)
+    c = TestClient(server.app)
+    with c.websocket_connect("/ws") as ws:
+        ws.receive_json()  # session
+        ws.receive_json()  # status
+
+        ws.send_json({"type": "models_request"})
+        assert ws.receive_json() == {"type": "models", "list": ["a", "b"], "current": "a"}
+
+        ws.send_json({"type": "switch_model", "name": "b"})
+        assert ws.receive_json() == {"type": "model_switched", "model": "b"}
+
+        ws.send_json({"type": "switch_model", "name": "nope"})
+        ev = ws.receive_json()
+        assert ev["type"] == "model_switched" and ev["model"] == ""
+        assert "未知" in ev["error"]
+
+
+def test_ws_lists_sessions_for_the_picker(monkeypatch):
+    """前端启动时问一次会话列表：id + 预览，全量下发（弹层自己滚）。"""
+    monkeypatch.setattr(
+        server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings())
+    )
+    monkeypatch.setattr(server, "prune_empty_sessions", lambda w: 0)
+    monkeypatch.setattr(
+        server, "list_visible_sessions",
+        lambda: [{"id": "s1", "first_user_msg": "旧会话"}],
+    )
+    c = TestClient(server.app)
+    with c.websocket_connect("/ws") as ws:
+        ws.receive_json()  # session
+        ws.receive_json()  # status
+        ws.send_json({"type": "sessions_request"})
+        assert ws.receive_json() == {
+            "type": "sessions", "list": [{"id": "s1", "preview": "旧会话"}],
+        }
+
+
+def test_ws_tasks_requests_are_routed(monkeypatch):
+    """底部抽屉的列表与停止：停止要真传到 task_stop，并把新快照回给前端。"""
+    stopped: list[str] = []
+    monkeypatch.setattr(
+        server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings())
+    )
+    monkeypatch.setattr(server, "list_tasks", lambda: [{"id": "t1", "alive": True}])
+    monkeypatch.setattr(server, "task_stop", lambda tid: stopped.append(tid))
+    c = TestClient(server.app)
+    with c.websocket_connect("/ws") as ws:
+        ws.receive_json()  # session
+        ws.receive_json()  # status
+
+        ws.send_json({"type": "tasks_request"})
+        assert ws.receive_json() == {"type": "tasks", "list": [{"id": "t1", "alive": True}]}
+
+        ws.send_json({"type": "task_stop_request", "id": "t1"})
+        assert ws.receive_json()["type"] == "tasks"
+        assert stopped == ["t1"]  # 真的往下传了，不是只回了个刷新
+
+
 def test_resume_renders_tool_detail_and_body(monkeypatch):
     """刷新后恢复会话：工具行的参数（命令）和输出要拼回来，不能只剩名字。"""
     from agent_harness.messages import Msg
@@ -604,12 +739,12 @@ def test_ensure_web_dev_tree_still_uses_vite(monkeypatch, tmp_path):
 
 def test_serves_the_built_ui_on_the_same_port(monkeypatch, tmp_path):
     """有构建产物 → 后端把界面发出去：/ 是 index，深链回 index，/health 还是 JSON。"""
-    from agent_harness import server
+    from agent_harness import server, webapp
 
     dist = tmp_path / "web_dist"
     dist.mkdir()
     (dist / "index.html").write_text('<div id="root"></div>', encoding="utf-8")
-    monkeypatch.setattr(server, "WEB_DIST", dist)
+    monkeypatch.setattr(webapp, "WEB_DIST", dist)  # 路由读的是 webapp 里那个
     c = TestClient(server.app)
     assert b'id="root"' in c.get("/").content
     assert b'id="root"' in c.get("/deep/link").content  # 前端自己按路径渲染
@@ -619,7 +754,106 @@ def test_serves_the_built_ui_on_the_same_port(monkeypatch, tmp_path):
 
 def test_no_built_ui_is_a_clean_404(monkeypatch, tmp_path):
     """没打包（纯 API / 开发模式）→ 404，而不是 500 或者半个 index。"""
-    from agent_harness import server
+    from agent_harness import server, webapp
 
-    monkeypatch.setattr(server, "WEB_DIST", tmp_path / "nope")
+    monkeypatch.setattr(webapp, "WEB_DIST", tmp_path / "nope")
     assert TestClient(server.app).get("/").status_code == 404
+
+
+# ---- 单实例锁：一个端口只归一个活着的实例 ----
+#
+# 后端只服务它启动时那个工作目录。两个 TUI 抢同一个端口时，复用别人的后端 = 把自己的
+# 会话写进别人的项目；后写者还会覆盖 web.json，让先被强杀的那个后端变成无人认领的孤儿。
+
+
+def _write_lock(tmp_path, pid: int, workspace) -> None:
+    """造一份「别人正持有」的锁记录（conftest 已把锁路径重定向到这里）。"""
+    (tmp_path / "web.lock").write_text(
+        json.dumps({"pid": pid, "port": 8000, "workspace": str(workspace), "at": time.time()}),
+        encoding="utf-8",
+    )
+
+
+def test_lock_is_exclusive_and_released_only_by_its_owner(monkeypatch, tmp_path):
+    """三种边角：自己重复拿、别人活着不抢、持有者已死能接管。"""
+    from agent_harness import weblaunch
+
+    assert weblaunch.acquire_lock(8000, tmp_path).held  # 第一次：拿到
+    assert weblaunch.acquire_lock(8000, tmp_path).held  # 同进程重复调用：还是自己的
+
+    monkeypatch.setattr(weblaunch, "_pid_alive", lambda pid: True)
+    weblaunch._unlink_lock()
+    _write_lock(tmp_path, 4242, tmp_path)
+
+    other = weblaunch.acquire_lock(8000, tmp_path)
+    assert other.held is False and other.holder["pid"] == 4242  # 别人活着，不抢
+
+    weblaunch.release_lock()  # 别人的锁不许放
+    assert (tmp_path / "web.lock").exists()
+
+    monkeypatch.setattr(weblaunch, "_pid_alive", lambda pid: False)  # 持有者被强杀了
+    assert weblaunch.acquire_lock(8000, tmp_path).held
+    kept = json.loads((tmp_path / "web.lock").read_text(encoding="utf-8"))
+    assert kept["pid"] == weblaunch.os.getpid()
+
+
+def test_ensure_web_leaves_a_port_owned_by_another_workspace_alone(monkeypatch, tmp_path):
+    """端口归另一个项目：一个进程都不拉，也不改写它的认领记录。"""
+    from agent_harness import weblaunch
+
+    mine, theirs = tmp_path / "mine", tmp_path / "theirs"
+    mine.mkdir()
+    theirs.mkdir()
+    _write_lock(tmp_path, 4242, theirs)
+    monkeypatch.setattr(weblaunch, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(weblaunch, "_port_open", lambda port: True)
+    monkeypatch.setattr(weblaunch, "dev_web_dir", lambda: None)
+    monkeypatch.setattr(weblaunch, "bundled_web_dir", lambda: None)
+    spawned = []
+    monkeypatch.setattr(weblaunch.subprocess, "Popen", lambda *a, **k: spawned.append(a))
+
+    run = weblaunch.ensure_web(8000, mine)
+
+    assert run.started == [] and spawned == []
+    assert run.lock_held is False
+    assert "4242" in (run.warning or "") and "theirs" in (run.warning or "")
+    assert not (tmp_path / "web.json").exists()  # 没动别人的凭据
+
+
+def test_ensure_web_reuses_a_port_its_own_workspace_already_owns(monkeypatch, tmp_path):
+    """同一个目录的第二个 TUI：复用它那一套，不重复拉起、也不报错（不是冲突）。"""
+    from agent_harness import weblaunch
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _write_lock(tmp_path, 4242, ws)
+    monkeypatch.setattr(weblaunch, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(weblaunch, "_port_open", lambda port: True)
+    monkeypatch.setattr(weblaunch, "dev_web_dir", lambda: None)
+    monkeypatch.setattr(weblaunch, "bundled_web_dir", lambda: None)
+
+    run = weblaunch.ensure_web(8000, ws)
+
+    assert run.started == [] and run.warning is None
+    assert run.lock_held is False  # 锁在别人手里 → 退出时不会去收它拉起的进程
+    assert not (tmp_path / "web.json").exists()
+
+
+def test_ensure_web_warns_when_its_own_backend_vanished(monkeypatch, tmp_path):
+    """同目录的持有者还在，但后端已经没了（比如被 --stop-web 收掉）——要说清楚，别静默少个网页端。"""
+    from agent_harness import weblaunch
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _write_lock(tmp_path, 4242, ws)
+    monkeypatch.setattr(weblaunch, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(weblaunch, "_port_open", lambda port: False)
+    monkeypatch.setattr(weblaunch, "dev_web_dir", lambda: None)
+    monkeypatch.setattr(weblaunch, "bundled_web_dir", lambda: None)
+    spawned = []
+    monkeypatch.setattr(weblaunch.subprocess, "Popen", lambda *a, **k: spawned.append(a))
+
+    run = weblaunch.ensure_web(8000, ws)
+
+    assert run.started == [] and spawned == []  # 仍然不去抢别人的端口
+    assert "4242" in (run.warning or "") and "--stop-web" in (run.warning or "")

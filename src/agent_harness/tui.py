@@ -7,6 +7,7 @@ import asyncio
 import shutil
 import sys
 import time
+from typing import Callable
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
@@ -39,7 +40,11 @@ _in_reasoning = False
 _waiting = False  # 已发出请求、还没等到第一个字——先给人一个「它在动」的信号
 _ctrl_c_at = 0.0  # 上次按 Ctrl+C 的时刻（两次之内 = 退出）
 CTRL_C_WINDOW = 2.0  # 秒
-_auto = False  # 自动批准（Shift+Tab 切换）——只在内存里，退出即恢复手动
+# 自动批准（Shift+Tab）的开关**不归这里管**——它属于会话状态，和「本会话不再问某个程序」
+# 是同一份东西，住在 approval.SessionAllow 里。这里只留两个钩子：读一个、切一个。
+# 以前是模块级布尔，等于"一个进程一份"，和网页那边"每个连接一份"对不上。
+_auto_read: Callable[[], bool] | None = None
+_auto_toggle: Callable[[], bool] | None = None
 
 
 class _CommandCompleter(Completer):
@@ -70,15 +75,22 @@ def _width() -> int:
     return shutil.get_terminal_size((80, 24)).columns
 
 
+def set_auto_hooks(read: Callable[[], bool], toggle: Callable[[], bool]) -> None:
+    """把自动批准的读写接到会话状态上（cli 在装配时接一次）。
+
+    不接也不炸：读回 False、切不动——降级成"永远手动"，比在界面上撒谎安全。
+    """
+    global _auto_read, _auto_toggle
+    _auto_read, _auto_toggle = read, toggle
+
+
 def auto_on() -> bool:
-    return _auto
+    return bool(_auto_read()) if _auto_read is not None else False
 
 
 def toggle_auto() -> bool:
     """切换自动批准，返回切换后的状态。"""
-    global _auto
-    _auto = not _auto
-    return _auto
+    return bool(_auto_toggle()) if _auto_toggle is not None else False
 
 
 _context_probe = None  # 由入口注入：() -> (已用, 上限)；None = toolbar 不显示占比
@@ -129,10 +141,11 @@ def _toolbar() -> FormattedText:
 
     模式状态必须一直看得见——「不需要你点头」是个危险状态，藏起来比不提供更糟。
     """
-    hint = "⚡ 自动批准 · Shift+Tab 关闭" if _auto else "Shift+Tab 自动批准"
+    auto = auto_on()
+    hint = "⚡ 自动批准 · Shift+Tab 关闭" if auto else "Shift+Tab 自动批准"
     ratio = _context_ratio()
     span = wcswidth(hint) + 2 + (wcswidth(ratio[0]) + 3 if ratio else 0)
-    base_style = "fg:ansiyellow bold" if _auto else "fg:ansibrightblack"
+    base_style = "fg:ansiyellow bold" if auto else "fg:ansibrightblack"
 
     segs: list[tuple[str, str]] = [(base_style, "─" * max(_width() - span, 0) + " ")]
     if ratio:
@@ -450,6 +463,59 @@ def show_notice(text: str) -> None:
     _stream_line(Text("⟳ " + text, style="yellow"))
 
 
+def show_auto(reason: str) -> None:
+    """自动批准放行：流里留一行。
+
+    「不需要你点头」是个危险状态，每一次都要看得见——比只在工具栏写个 ⚡ 更实在。
+    """
+    _stream_line(Text(f"⚡ 自动批准 · {reason or '需要确认'}", style="yellow"))
+
+
+def show_tool_result(payload: dict) -> None:
+    """工具结束：在工具行下面补一行结果。
+
+    只写"有信息量"的部分：成功、没改文件、耗时也短 → 一个字都不加（不吵）。
+    diff 只给行数不给内容——终端里铺 20 行 diff 会把对话冲出屏幕，全文去 `/trace`
+    或网页详情看。失败时带上原因首行，否则人还得回滚屏幕找哪一步出了什么问题。
+    """
+    status = payload.get("status") or "ok"
+    bits: list[str] = []
+    if status == "denied":
+        bits.append("驳回")
+    elif status == "blocked":
+        bits.append("拦截")
+    elif status == "error":
+        bits.append("失败")
+
+    ms = payload.get("ms") or 0
+    if ms >= 1000:
+        bits.append(f"{ms / 1000:.1f}s")
+    elif ms >= 300:  # 秒以下的耗时没信息量，别占版面
+        bits.append(f"{ms:.0f}ms")
+
+    diff = payload.get("diff") or ""
+    if diff:
+        plus = minus = 0
+        for line in diff.splitlines():
+            if line.startswith(("+++", "---")):
+                continue
+            if line.startswith("+"):
+                plus += 1
+            elif line.startswith("-"):
+                minus += 1
+        if plus or minus:
+            bits.append(f"+{plus} -{minus}")
+
+    if status == "error":
+        first = (payload.get("result") or "").strip().splitlines()
+        if first:
+            bits.append(first[0][:60])
+
+    if not bits:
+        return
+    _stream_line(Text("   ↳ " + " · ".join(bits), style="dim"))
+
+
 def _stream_line(line: Text) -> None:
     """往「当前这一屏的流」里插一行。
 
@@ -505,8 +571,9 @@ def _to_decision(raw: str | None) -> str:
 def show_approval(command: str, reason: str = "", timeout: float = 300.0) -> str:
     """人工审批：先说「为什么问你」，再给完整命令，然后等一个键。
 
-    返回 "approve" / "deny" / "always"（always = 本会话不再问这个程序）/"auto"（自动批准开着）。
-    自动批准也走这里而不是绕过它——审批是唯一知道「什么被放过了」的地方，绕过去就没有痕迹。
+    返回 "approve" / "deny" / "always"（always = 本会话不再问这个程序）。
+    自动批准**不走这里**——那是会话状态，`approval.SessionAllow` 在调本函数之前
+    就短路了，并且自己留痕。让这里也认一个 "auto" 等于同一件事两处判断。
 
     只给命令不够——`find /c /v "" README.md` 看着像只读统计，在 GNU find 语义下
     却会遍历整盘。判定原因必须跟着命令一起递到人眼前，否则审批只是走过场。
@@ -514,9 +581,6 @@ def show_approval(command: str, reason: str = "", timeout: float = 300.0) -> str
     timeout：没人答复就按驳回处理（0 = 一直等）。人走开了不该把整台机器卡死。
     """
     hint = "Enter 执行 · Esc 驳回 · a 记住(本会话) "
-    if _auto:  # 自动批准：不弹提示、也不停 Live（界面不闪），但一定要留痕
-        _stream_line(Text(f"⚡ 自动批准 · {reason or '需要确认'}", style="yellow"))
-        return "auto"
     global _live, _blocks
     restart = False
     if _live is not None:

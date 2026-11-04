@@ -53,10 +53,11 @@ tools = {
 
 def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
                         max_steps: int | None = None, on_hook=None,
-                        should_stop=None, allow_commands=()) -> dict:
+                        should_stop=None, allow_commands=(), workspace=None) -> dict:
     """每个会话的工具表：基础工具 + spawn_subagent（闭包持有该会话的装配）。
 
     模型 / 审批 / trace 都是会话级的——所以 spawn 不能一次性注册进模块级 tools。
+    workspace：给子 agent 判「命令引用界外」用的根，None = 本进程的工作目录。
     """
     session_tools = dict(tools)
     session_tools["spawn_subagent"] = make_spawn_tool(
@@ -72,6 +73,7 @@ def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
         on_hook=on_hook,
         should_stop=should_stop,
         allow_commands=allow_commands,
+        workspace=workspace or WORKSPACE,  # 子 agent 的 shell 也要能提示「引用了工作区外」
     )
     return session_tools
 

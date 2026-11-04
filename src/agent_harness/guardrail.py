@@ -6,7 +6,9 @@ S11 换锁：判定从「危险命令黑名单」翻成「风险分级 + 默认�
 
 规格硬标准（A.4）：护栏是代码机制，不是提示词——判定可确定性单测。
 """
+import functools
 import ntpath
+import os
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -128,12 +130,18 @@ class CommandRisk:
     reason: str = ""
 
 
-def classify_command(command: str, allow: Sequence[str] = ()) -> CommandRisk:
+def classify_command(
+    command: str, allow: Sequence[str] = (), workspace: Path | None = None,
+) -> CommandRisk:
     """把一条 shell 命令拆段、分类——整条取最严的一段（复合命令按最严算）。
 
     allow：人写的允许规则（前缀语义，见 matches_allow）。顺序是
     **灾难 > 规则 > 分类**——写明 `allow = ["*"]` 也放不出 `format c:`，
     这是刻意留的地板。
+
+    workspace：给了才判「这条命令引用了工作区外的东西」，判到就写进 reason
+    （只改提示，不改危险等级——该问人的还是问人）。None = 不判，老调用方行为不变。
+    为什么只做提示不做拦截：见 outside_hints 的说明。
     """
     worst = _classify_segments(command)
     if worst.risk == CATASTROPHIC:
@@ -141,7 +149,62 @@ def classify_command(command: str, allow: Sequence[str] = ()) -> CommandRisk:
     hit = matches_allow(command, allow)
     if hit:
         return CommandRisk(READ_ONLY, f"已允许：{hit}")
+    if workspace is not None:
+        hints = outside_hints(command, workspace)
+        if hints:
+            where = "、".join(hints)
+            return CommandRisk(worst.risk, f"{worst.reason}（引用了工作区外：{where}）")
     return worst
+
+
+def outside_hints(command: str, workspace: Path) -> list[str]:
+    """命令里**明确指向工作区外**的路径线索（启发式：宁漏不误）。
+
+    这不是边界，也不假装是。shell 是图灵完备的——`x=..; cd $x; rm y`、`git -C ../o`、
+    `bash -c "rm ../x"`、符号链接，静态解析都判不出来。所以这里不拦，只把「至少有一处
+    越界线索」写进审批理由：批的人看到的是「这条命令引用了界外的东西」，而不是一条干巴巴的
+    `rm`。一个能被绕过的检查如果冒充边界，比没有更危险——它会让人以为这里安全。
+
+    宁漏不误是有意的：判不准就别说话。误报一次，这句话在审批卡上就再没人信了。
+    """
+    ws = workspace.resolve()
+    hints: list[str] = []
+    segments, _balanced = _split_segments(_strip_fd_redirects(command))
+    for seg in segments:
+        tokens = _tokens(seg)
+        for i, raw in enumerate(tokens):
+            tok = raw.strip('"').strip("'")
+            if len(tok) < 2 or tok.startswith("-") or any(c in tok for c in ">|"):
+                continue  # 空/单字符、旗标、重定向与管道符：不是路径
+            literal = os.path.expanduser(tok) if tok.startswith("~") else tok
+            literal = _msys_to_windows(literal)
+            after_cd = i > 0 and tokens[i - 1].lower() == "cd"
+            looks_like_path = (
+                after_cd
+                or literal.startswith(("/", "\\"))
+                or os.path.isabs(literal)
+                or ".." in re.split(r"[\\/]", literal)
+            )
+            if not looks_like_path or in_workspace(literal, ws):
+                continue
+            shown = tok if len(tok) <= 40 else tok[:37] + "…"
+            if shown not in hints:
+                hints.append(shown)
+            if len(hints) >= 2:  # 两条足够说明问题，再多只是噪音
+                return hints
+    return hints
+
+
+def _msys_to_windows(path: str) -> str:
+    """`/d/work/x` → `D:\\work\\x`（Git Bash 的盘符写法）。
+
+    这台机器上 `run_shell` 默认就跑 Git Bash，模型也按那套写路径；不翻译的话，
+    每条带绝对路径的命令都会被判成「界外」，提示立刻变成噪音。
+    """
+    if os.name != "nt":
+        return path
+    m = re.fullmatch(r"/([A-Za-z])/(.*)", path)
+    return f"{m.group(1).upper()}:\\{m.group(2)}" if m else path
 
 
 def matches_allow(command: str, patterns: Sequence[str] = ()) -> str | None:
@@ -383,7 +446,12 @@ def in_workspace(path: str, workspace: Path) -> bool:
 
 
 def safe_tool(fn, workspace: Path):
-    """包装文件工具：执行前校验路径，越界拦截。工具本身不知道边界（闭包）。"""
+    """包装文件工具：执行前校验路径，越界拦截。工具本身不知道边界（闭包）。
+
+    functools.wraps 不只是礼节：不保留 `__wrapped__`，`inspect.signature` 看到的就是
+    `(path, **kwargs)`，schema 的参数名契约（tests/test_contract.py）就查不了这三个工具。
+    """
+    @functools.wraps(fn)
     def wrapped(path: str, **kwargs):
         if not in_workspace(path, workspace):
             return f"越界拦截：{path} 不在工作目录内。"

@@ -60,10 +60,19 @@ def test_2():  # 不存在的工具：回灌「工具不存在」
     assert any("工具不存在" in m.content for m in history if m.role == "user")
 
 
-def test_3(tmp_path):  # 工具抛异常（读不存在的文件）：回灌「工具调用失败」
+def test_3(tmp_path):  # 工具抛异常：回灌里必须带原因（只给一句「失败」，模型没法改）
     llm = ScriptLLM([Action("read_file", {"path": str(tmp_path / "missing.txt")})])
     _, history = agent_loop("做点事", llm, make_tools(), SYSTEM_PROMPT)
-    assert any("工具调用失败" in m.content for m in history if m.role == "user")
+    fed = [m.content for m in history if m.role == "user"]
+    assert any("FileNotFoundError" in c for c in fed)  # 异常类型回来了
+    assert any("missing.txt" in c for c in fed)        # 路径也在，模型能据此改
+
+
+def test_3b():  # 参数名对不上菜单：说清「是参数的问题、重发有救」，别让它换路瞎试
+    llm = ScriptLLM([Action("read_file", {"dir": "x"})])  # 菜单里这个参数叫 path
+    _, history = agent_loop("做点事", llm, make_tools(), SYSTEM_PROMPT)
+    fed = [m.content for m in history if m.role == "user"]
+    assert any("参数不匹配" in c and "schema" in c for c in fed)
 
 
 def test_4():  # 永不 done（剧本填满 max_steps 个动作）：步数耗尽停机

@@ -24,3 +24,6 @@ wheels/
 
 # 前端构建产物（发布前用 scripts/build_web.py 生成，跟着 wheel 走，不进版本库）
 src/agent_harness/web_dist/
+
+# 架构图产物（本地生成，不入库）
+.archify/

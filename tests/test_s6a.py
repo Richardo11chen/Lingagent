@@ -5,6 +5,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 from agent_harness import tui
 
 
@@ -46,13 +48,13 @@ def test_approval_suspends_live(monkeypatch):  # 流式中途审批：Live 让�
 
 
 def test_choose_session_paginates(monkeypatch, tmp_path):  # 超过一页：n 翻到第 2 页，选到第 2 页的会话
-    import agent_harness
+    from agent_harness import cli
     from agent_harness import session as session_mod
 
     monkeypatch.setattr(session_mod, "SESSION_ROOT", tmp_path / "_archives")
     fake = [{"id": f"s{i:02d}", "mtime": 0.0, "first_user_msg": f"会话{i}"} for i in range(25)]
-    monkeypatch.setattr(agent_harness, "list_visible_sessions", lambda: fake)
-    monkeypatch.setattr(agent_harness, "load_session", lambda w, sid: [])
+    monkeypatch.setattr(cli, "list_visible_sessions", lambda: fake)
+    monkeypatch.setattr(cli, "load_session", lambda w, sid: [])
     monkeypatch.setattr(tui, "interactive", lambda: True)
     shown = []
     monkeypatch.setattr(
@@ -62,7 +64,7 @@ def test_choose_session_paginates(monkeypatch, tmp_path):  # 超过一页：n �
     inputs = iter(["n", "1"])  # 翻到第 2 页 → 选第 1 个
     monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
 
-    sid, history = agent_harness.choose_session(tmp_path)
+    sid, history = cli.choose_session(tmp_path)
     assert sid == "s10"                        # 第 2 页第 1 个 = 总第 11 个
     assert [p for p, _, _ in shown] == [1, 2]  # 渲染了两页
     assert shown[1][1] == 3                    # 25 个 → 共 3 页
@@ -71,12 +73,12 @@ def test_choose_session_paginates(monkeypatch, tmp_path):  # 超过一页：n �
 
 
 def test_choose_session_non_tty(monkeypatch, tmp_path):  # 非终端 → 跳过会话选择，直接新会话
-    import agent_harness
+    from agent_harness import cli
     from agent_harness import session
 
     monkeypatch.setattr(session, "SESSION_ROOT", tmp_path / "sessions")  # 存档隔离，别写进用户目录
     monkeypatch.setattr(tui, "interactive", lambda: False)
-    sid, history = agent_harness.choose_session(tmp_path)
+    sid, history = cli.choose_session(tmp_path)
     assert history == []
     assert sid  # 新会话 id 已生成（占位文件落在隔离的 SESSION_ROOT）
 
@@ -94,7 +96,7 @@ def test_pipe_exhausted_exits_cleanly(tmp_path):
         "HOME": str(tmp_path),
     }
     r = subprocess.run(
-        [sys.executable, "-c", "from agent_harness import main; main()"],
+        [sys.executable, "-c", "from agent_harness.cli import main; main()"],
         stdin=subprocess.DEVNULL, capture_output=True, text=True,
         encoding="utf-8", errors="replace", env=env, cwd=tmp_path, timeout=120,
     )
@@ -132,7 +134,7 @@ def test_exit_closes_the_web_it_started(tmp_path):
     }
     script = (
         "import pathlib\n"
-        "import agent_harness as ah\n"
+        "import agent_harness.cli as ah\n"
         f"ah.WORKSPACE = pathlib.Path(r'{tmp_path}')\n"  # 会话/轨迹落临时目录，不污染真工作区
         "import agent_harness.tui as t\n"
         "t.interactive = lambda: True\n"
@@ -158,7 +160,7 @@ def test_exit_closes_the_web_it_started(tmp_path):
 
 def test_let_web_finish_waits_for_the_web_turn(monkeypatch, capsys):
     """退 TUI 前先等网页那轮跑完——并说一声在等什么，别让人以为卡住了。"""
-    import agent_harness
+    from agent_harness import cli
     from agent_harness.settings import Settings
 
     seen = {}
@@ -168,40 +170,40 @@ def test_let_web_finish_waits_for_the_web_turn(monkeypatch, capsys):
         on_wait(2)  # 模拟：网页上还有 2 轮
         return True
 
-    monkeypatch.setattr(agent_harness, "wait_until_idle", fake_wait)
+    monkeypatch.setattr(cli, "wait_until_idle", fake_wait)
     s = Settings()
     s.server_port, s.web_stop_wait = 8123, 30.0
-    agent_harness._let_web_finish(s)
+    cli._let_web_finish(s)
     assert seen["args"] == (8123, 30.0)
     assert "还有 2 轮在跑" in capsys.readouterr().out
 
 
 def test_let_web_finish_can_be_switched_off(monkeypatch):
     """stop_wait = 0 → 不等，直接关（有人就是想让 TUI 立刻退）。"""
-    import agent_harness
+    from agent_harness import cli
     from agent_harness.settings import Settings
 
     def boom(*a, **k):
         raise AssertionError("不该调用等待")
 
-    monkeypatch.setattr(agent_harness, "wait_until_idle", boom)
+    monkeypatch.setattr(cli, "wait_until_idle", boom)
     s = Settings()
     s.web_stop_wait = 0
-    agent_harness._let_web_finish(s)
+    cli._let_web_finish(s)
 
 
 def test_let_web_finish_lets_ctrl_c_through(monkeypatch):
     """等的时候按 Ctrl+C → 当场不等，而不是把退出卡到超时。"""
-    import agent_harness
+    from agent_harness import cli
     from agent_harness.settings import Settings
 
     def interrupt(*a, **k):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(agent_harness, "wait_until_idle", interrupt)
+    monkeypatch.setattr(cli, "wait_until_idle", interrupt)
     s = Settings()
     s.web_stop_wait = 120.0
-    agent_harness._let_web_finish(s)  # 不抛出去
+    cli._let_web_finish(s)  # 不抛出去
 
 
 def test_slash_commands_autocomplete():  # 输入 / 就列命令——不用记口令，也不用查文档
@@ -246,33 +248,45 @@ def test_approval_keys_map_to_three_decisions():  # Enter 批准 / Esc 驳回 / 
 
 
 def test_shift_tab_toggles_auto_mode(monkeypatch):  # 一键切换，状态可反悔
+    """开关的状态住在会话里，tui 只负责读和切——它自己不再留一份。"""
     from agent_harness import tui
 
-    monkeypatch.setattr(tui, "_auto", False)
+    state = {"on": False}
+
+    def toggle():
+        state["on"] = not state["on"]
+        return state["on"]
+
+    monkeypatch.setattr(tui, "_auto_read", lambda: state["on"])
+    monkeypatch.setattr(tui, "_auto_toggle", toggle)
+
     assert tui.auto_on() is False
     assert tui.toggle_auto() is True and tui.auto_on() is True
     assert tui.toggle_auto() is False and tui.auto_on() is False
 
 
-def test_auto_mode_approves_without_touching_the_terminal(monkeypatch):  # 开着就别再弹审批行
-    from agent_harness import tui
+def test_auto_mode_approves_without_asking():  # 开着就别再弹审批行
+    """自动批准在 SessionAllow 里就短路了——压根走不到"问人"那一步。"""
+    from agent_harness.approval import SessionAllow
 
     def boom(*a, **kw):
         raise AssertionError("自动批准不该打开审批界面")
 
-    monkeypatch.setattr(tui, "_auto", True)
-    monkeypatch.setattr(tui, "_live", None)
-    monkeypatch.setattr(tui, "_approval_session", boom)
-    assert tui.show_approval("del x", "改动文件：del") == "auto"
+    seen = []
+    allow = SessionAllow(boom, on_auto=lambda command, reason: seen.append(reason))
+    allow.auto = True
+
+    assert allow("del x", "改动文件：del") is True
+    assert seen == ["改动文件：del"]  # 放行但必须留痕
 
 
 def test_unknown_approval_result_denies():  # 白名单：只有明确的放行才算放行
-    from agent_harness import _is_approved
+    from agent_harness.approval import is_approved
 
     for ok in ("approve", "always", "auto"):
-        assert _is_approved(ok) is True
+        assert is_approved(ok) is True
     for bad in ("deny", "timeout", "error", "", "APPROVE"):
-        assert _is_approved(bad) is False  # 将来新增结局时，默认落到「不执行」这一侧
+        assert is_approved(bad) is False  # 将来新增结局时，默认落到「不执行」这一侧
 
 
 def test_toolbar_shows_context_share(monkeypatch):  # 底部要看得见上下文用了多少
@@ -303,21 +317,138 @@ def test_toolbar_shows_context_share(monkeypatch):  # 底部要看得见上下�
 
 def test_session_picker_shows_the_model_that_will_be_used(monkeypatch, tmp_path):
     """没记过模型的会话（新建就用默认）要显示「默认」，不能是一根横杠。"""
-    import agent_harness
+    from agent_harness import cli
     from agent_harness import session as session_mod
 
     monkeypatch.setattr(session_mod, "SESSION_ROOT", tmp_path / "_archives")
     fake = [{"id": "s1", "mtime": 0.0, "first_user_msg": "旧会话"}]
-    monkeypatch.setattr(agent_harness, "list_visible_sessions", lambda: fake)
-    monkeypatch.setattr(agent_harness, "load_session", lambda w, sid: [])
+    monkeypatch.setattr(cli, "list_visible_sessions", lambda: fake)
+    monkeypatch.setattr(cli, "load_session", lambda w, sid: [])
     monkeypatch.setattr(tui, "interactive", lambda: True)
     monkeypatch.setattr("builtins.input", lambda prompt="": "0")  # 直接开新会话
     shown: list[str] = []
     monkeypatch.setattr(tui, "show_sessions", lambda rows, *a: shown.append(rows[0]["model"]))
 
-    agent_harness.choose_session(tmp_path, "deepseek-flash")
+    cli.choose_session(tmp_path, "deepseek-flash")
     assert shown == ["deepseek-flash（默认）"]
 
-    monkeypatch.setattr(agent_harness, "load_session_model", lambda w, sid: "MiniMax-M3")
-    agent_harness.choose_session(tmp_path, "deepseek-flash")
+    monkeypatch.setattr(cli, "load_session_model", lambda w, sid: "MiniMax-M3")
+    cli.choose_session(tmp_path, "deepseek-flash")
     assert shown[-1] == "MiniMax-M3"  # 记过的会话用记录值，不加"默认"
+
+
+def test_cli_repl_runs_one_turn_through_the_shared_orchestrator(monkeypatch, tmp_path):
+    """main() 的一轮必须走 run_turn。
+
+    这条守的是「别再抄一遍」：把编排抄回 cli 里，可观察行为完全一样——回灌、落盘、
+    错误文案都对——只有这个 spy 会发现。两个入口已经漂过一次（网页有 diff、终端没有），
+    漂的时候没有任何测试会红。
+    """
+    import sys
+
+    from agent_harness import cli, session as session_mod
+    from agent_harness.llm import Action, ScriptLLM
+    from agent_harness.settings import Settings
+
+    class FakeLLM(ScriptLLM):
+        current = "fake-model"
+        current_profile = "fake"
+        profiles = ["fake"]
+
+        def switch(self, name):
+            return self.current
+
+    saved = []
+    calls = []
+    prompts = iter(["看看这个", "exit"])
+    import agent_harness.turn as turn_mod
+
+    real_run_turn = turn_mod.run_turn
+
+    def spy(goal, **kw):
+        calls.append(kw)
+        return real_run_turn(goal, **kw)
+
+    monkeypatch.setattr(sys, "argv", ["lingan"])
+    monkeypatch.setattr(session_mod, "SESSION_ROOT", tmp_path / "_archives")
+    monkeypatch.setattr(cli, "WORKSPACE", tmp_path)
+    monkeypatch.setattr(turn_mod, "run_turn", spy)
+    monkeypatch.setattr(
+        cli, "load_settings_and_llm",
+        lambda *a, **k: (FakeLLM([Action("no_such_tool", {})]), Settings()),
+    )
+    monkeypatch.setattr(cli, "list_visible_sessions", lambda: [])
+    monkeypatch.setattr(cli, "load_session_model", lambda w, s: None)
+    monkeypatch.setattr(cli, "save_session_model", lambda w, s, p: None)
+    monkeypatch.setattr(cli, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
+    monkeypatch.setattr(cli, "save_messages", lambda w, s, msgs: saved.append(list(msgs)))
+    monkeypatch.setattr(cli, "prune_empty_sessions", lambda w: 0)
+    monkeypatch.setattr(cli, "days_since_viewed", lambda: None)
+    monkeypatch.setattr(cli, "list_trace_files", lambda w: [])
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+    monkeypatch.setattr(tui, "ask", lambda: next(prompts, "exit"))
+    for name in ("begin_stream", "end_stream", "stream_chunk", "reasoning_chunk",
+                 "show_user", "show_tool", "show_hook", "show_notice", "show_banner",
+                 "show_history", "show_web_hint", "show_note"):
+        monkeypatch.setattr(tui, name, lambda *a, **k: None)
+
+    # 规则文件每轮重读：启动时 cli 读一次，之后每轮由 run_turn 读（只有那一处读）
+    reads, turn_reads = [], []
+    real_prompt = cli.build_system_prompt
+    import agent_harness.turn as turn_mod
+    real_turn_prompt = turn_mod.build_system_prompt
+    monkeypatch.setattr(
+        cli, "build_system_prompt", lambda: (reads.append(1), real_prompt())[1]
+    )
+    monkeypatch.setattr(
+        turn_mod, "build_system_prompt", lambda: (turn_reads.append(1), real_turn_prompt())[1]
+    )
+
+    cli.main()
+
+    assert len(reads) == 1      # 启动那次（给探针一个初始值）
+    assert len(turn_reads) == 1  # 这一轮实际用的那份
+    assert len(calls) == 1                      # 走的是共用编排
+    # 终端这次把两条能力都接上了：工具结果（diff / 耗时 / 失败原因）与停止信号
+    assert calls[0]["should_stop"] is not None
+    assert calls[0]["callbacks"].on_tool_result is tui.show_tool_result
+    assert len(saved) == 1                      # 一轮落一次盘
+    # 假模型没有 tool_call_id，工具结果按 user 消息回灌（loop 的两条路径之一）——
+    # 这里只关心「结果真的回到了 history 里」
+    assert "工具不存在" in saved[0][2].content
+    assert list(tmp_path.glob("*.trace.jsonl"))  # 轨迹也写到了本轮自己的文件
+
+
+def test_soft_stop_first_press_waits_second_press_kills(capsys):
+    """软中断：第一次只置位（本步跑完再停），第二次才抛 KeyboardInterrupt。"""
+    from agent_harness.cli import SoftStop
+
+    soft = SoftStop()
+    soft()  # 第一次
+    assert soft.requested is True
+    assert "跑完这一步就停" in capsys.readouterr().err
+
+    with pytest.raises(KeyboardInterrupt):
+        soft()  # 第二次
+
+    soft.reset()  # 下一轮重新开始计数
+    soft()
+    assert soft.requested is True
+
+
+def test_tool_result_line_says_what_changed(capsys):
+    """工具行下面补的那一行：有改动给行数、慢给秒数、失败给原因首行。"""
+    from agent_harness import tui
+
+    tui.show_tool_result({
+        "status": "ok", "ms": 1200,
+        "diff": "--- a/x.py\n+++ b/x.py\n-old\n+new\n+more\n",
+    })
+    out = capsys.readouterr().out
+    assert "+2 -1" in out and "1.2s" in out
+
+    tui.show_tool_result({"status": "ok", "ms": 10})  # 成功、没改动、也不慢 → 不占版面
+    assert capsys.readouterr().out.strip() == ""
+
+    tui.show_tool_result({"status": "error", "ms": 5, "result": "boom 执行出错（OSError）：磁盘满了"})
+    assert "失败" in capsys.readouterr().out

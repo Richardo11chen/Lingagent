@@ -55,6 +55,12 @@ class ScriptLLM:
     def __init__(self, script: list[Action], fix_script: list[Action] | None = None):
         self._script = list(script)
         self._fix_script = list(fix_script or [])
+        self.notice = None  # 提示口（假模型不产生压缩事件，存着供测试检查）
+
+    def set_notice(self, fn) -> None:
+        """门面接口之一：真适配器与 SwitchableLLM 都有，假模型也得有——
+        否则「用它替身跑一遍编排」这件事本身就跑不起来。"""
+        self.notice = fn
 
     def __call__(
         self, messages: list[Msg], tools: list[dict], on_text=None, on_reasoning=None,

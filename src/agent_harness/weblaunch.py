@@ -37,6 +37,7 @@ class WebRun:
     warning: str | None = None
     reaped: list[str] = field(default_factory=list)  # 上次 TUI 被强杀时留下的，这次开工前收了
     ui_port: int | None = None  # 网页界面的端口（开发 = vite 5173，装好的包 = 后端端口）
+    lock_held: bool = False  # 本次是否拿到单实例锁（没拿到 = 这个端口归别的实例）
 
     @property
     def started(self) -> list[str]:
@@ -184,6 +185,104 @@ def _state_path() -> Path:
 STATE_TTL = 7 * 24 * 3600  # 超过一周的记录不信了（端口和 pid 都可能早被别人占走）
 
 
+# ---- 单实例锁（一个端口只归一个活着的实例）----
+#
+# 为什么需要一个锁，而不是继续只看端口在不在听：
+# 后端只服务**它启动时那个工作目录**（`_spawn(cwd=workspace)`）。第二个 TUI 撞上「端口已有
+# 人在听」就复用它，等于把自己的会话写进别人的项目；而它一旦也拉起过东西，`web.json`
+# 会被后写者覆盖，前者被强杀之后它的后端就没人认领了。锁把这两件事变成启动时的一次明面判定。
+#
+# 分工：锁管**活着的实例互斥**，`web.json` 管**死了之后的认领**。两者不互相替代。
+
+LOCK_NAME = "web.lock"
+
+
+@dataclass
+class LockState:
+    """拿锁的结果。
+
+    held=True  → 本次持有（或同进程重复调用），可以拉起 / 接管网页端
+    holder     → 别人持有时的那份记录（pid / port / workspace），用来告诉人「端口归谁」
+    """
+
+    held: bool
+    holder: dict | None = None
+
+
+def _lock_path() -> Path:
+    from .settings import CONFIG_PATH
+
+    return CONFIG_PATH.parent / LOCK_NAME
+
+
+def _read_lock() -> dict | None:
+    try:
+        data = json.loads(_lock_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _unlink_lock() -> None:
+    try:
+        _lock_path().unlink()
+    except OSError:
+        pass
+
+
+def _same_workspace(other: str, workspace: Path) -> bool:
+    """两个工作目录是不是同一个（按 resolve 后的路径比）。"""
+    try:
+        return Path(other).resolve() == workspace.resolve()
+    except OSError:
+        return False
+
+
+def acquire_lock(backend_port: int, workspace: Path) -> LockState:
+    """抢这把锁：O_EXCL 创建，绝不覆盖别人的记录。
+
+    三种既有记录的处理：
+    - 自己（同 pid）：同进程重复调用，直接放行；
+    - 持有者还活着：不抢，把记录交回去让调用方决定（同目录复用 / 别目录放弃）；
+    - 持有者已死（被强杀 / 崩溃）：删掉记录接管——那种情况下没有句柄可认，只能这样。
+    """
+    path = _lock_path()
+    me = os.getpid()
+    holder: dict | None = None
+    for _ in range(2):  # 最多两轮：第一轮可能只是在清一份遗留记录
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "x", encoding="utf-8") as f:  # O_CREAT|O_EXCL：并发也只有一个赢
+                f.write(json.dumps({
+                    "pid": me,
+                    "port": backend_port,
+                    "workspace": str(workspace.resolve()),
+                    "at": time.time(),
+                }, ensure_ascii=False))
+            return LockState(held=True)
+        except FileExistsError:
+            holder = _read_lock()
+            if holder is None:  # 空文件 / 写一半崩了——当遗留处理
+                _unlink_lock()
+                continue
+            holder_pid = int(holder.get("pid") or 0)
+            if holder_pid == me:
+                return LockState(held=True)
+            if _pid_alive(holder_pid):
+                return LockState(held=False, holder=holder)
+            _unlink_lock()
+        except OSError:  # 目录不可写（只读挂载等）：退化成没锁，不影响能不能用
+            return LockState(held=True)
+    return LockState(held=False, holder=holder)
+
+
+def release_lock() -> None:
+    """放锁——只放自己那把（pid 对得上才删，否则等于替别人开锁）。"""
+    holder = _read_lock()
+    if holder and int(holder.get("pid") or 0) == os.getpid():
+        _unlink_lock()
+
+
 def _write_state(run: WebRun, backend_port: int) -> None:
     data = {
         "tui": os.getpid(),
@@ -275,14 +374,48 @@ def reap_orphans(backend_port: int) -> list[str]:
     return lines
 
 
+def _ui_port(backend_port: int) -> int | None:
+    """网页界面在哪个端口：开发树是 vite 的 5173，装好的包由后端同端口托管。"""
+    if dev_web_dir():
+        return FRONTEND_PORT
+    if bundled_web_dir():
+        return backend_port
+    return None
+
+
 def ensure_web(backend_port: int, workspace: Path) -> WebRun:
     """确保网页端在跑：缺后端起后端；开发树的 web/ 缺前端就起 vite。返回这次拉起的东西。
 
     两种形态：
     - 源码树（`dev_web_dir()` 有）：vite 5173 + 后端 8000，热更新改前端
     - 装好的包（`bundled_web_dir()` 有）：只有后端，静态文件由它托管 → 一个端口 8000
+
+    先拿单实例锁再动手：端口归别的实例时，一个进程都不拉起、也不改写它的认领记录。
     """
     run = WebRun()
+    lock = acquire_lock(backend_port, workspace)
+    run.lock_held = lock.held
+    if not lock.held:
+        holder = lock.holder or {}
+        other = str(holder.get("workspace") or "?")
+        pid = holder.get("pid") or "?"
+        run.ui_port = _ui_port(backend_port)
+        if _same_workspace(other, workspace):
+            # 同一个目录：复用它已经拉起的那一套（退出时也不收——不是我拉起的）
+            if not _port_open(backend_port):
+                run.warning = (
+                    f"这个工作目录的网页端归另一个实例（PID {pid}），"
+                    f"但 {backend_port} 上已经没有后端了（可能是被 --stop-web 收掉的）。"
+                    f"先结束那个实例再开 TUI。"
+                )
+            return run
+        # 后端服务的是别人的工作目录：复用等于把本项目的会话写进别人项目
+        run.warning = (
+            f"端口 {backend_port} 归另一个实例（PID {pid}，工作目录 {other}）"
+            f"——这次不拉起网页端，也不会去动它。"
+        )
+        return run
+
     run.reaped = reap_orphans(backend_port)  # 先清遗物，否则端口还被它占着、会被当成"已在跑"
     if not _port_open(backend_port):
         run.procs.append(
@@ -302,10 +435,7 @@ def ensure_web(backend_port: int, workspace: Path) -> WebRun:
             else:
                 argv = [npm, "run", "dev"]
             run.procs.append(("前端", _spawn(argv, cwd=web_dir)))
-    if web_dir:
-        run.ui_port = FRONTEND_PORT
-    elif bundled_web_dir():
-        run.ui_port = backend_port  # 静态文件由后端托管：同一个端口
+    run.ui_port = _ui_port(backend_port)
     if run.procs:
         _write_state(run, backend_port)  # 给"下次启动"留一份认领凭据
     return run

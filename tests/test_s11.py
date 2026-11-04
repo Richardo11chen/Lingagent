@@ -207,4 +207,49 @@ def test_version_flag_is_the_only_read_only_form():  # `python --version` 不问
     assert risk("python script.py") != "read_only"
 
 
+# ---- 越界线索：只进审批理由，不改危险等级 ----
+
+
+def test_outside_hints_flag_paths_beyond_the_workspace(tmp_path):
+    from agent_harness.guardrail import outside_hints
+
+    ws = tmp_path / "proj"
+    ws.mkdir()
+    assert outside_hints("rm ../other/x", ws) == ["../other/x"]
+    assert outside_hints("cd .. && rm x", ws) == [".."]        # /cd 的参数也要看
+    assert outside_hints("cat /etc/passwd", ws) == ["/etc/passwd"]
+    assert outside_hints("rm a.txt", ws) == []                 # 界内不吵
+    assert outside_hints("git status", ws) == []
+
+
+def test_outside_hint_changes_the_reason_not_the_risk(tmp_path):
+    """等级不变——只让批的人看见「界外」，而不是替他把命令拦下来。"""
+    ws = tmp_path / "proj"
+    ws.mkdir()
+    r = classify_command("rm ../other/x", workspace=ws)
+    assert r.risk == "mutating"
+    assert "工作区外" in r.reason and "../other/x" in r.reason
+
+
+def test_no_workspace_means_no_judgement():  # 不传 = 老行为，外部调用方不受影响
+    assert "工作区外" not in classify_command("rm ../other/x").reason
+
+
+def test_loop_puts_the_hint_into_the_approval_reason(tmp_path):
+    """一路传到底：入口传 workspace → loop 判 → 审批回调拿到的 reason 里有这句话。"""
+    from agent_harness.tools import run_shell
+
+    seen = {}
+
+    def approver(cmd, reason):
+        seen["reason"] = reason
+        return False  # 驳回，命令不会真跑
+
+    ws = tmp_path / "proj"
+    ws.mkdir()
+    llm = ScriptLLM([Action("run_shell", {"command": "rm ../outside.txt"})])
+    agent_loop("干活", llm, {"run_shell": run_shell}, "sp", approver=approver, workspace=ws)
+    assert "工作区外" in seen["reason"]
+
+
 

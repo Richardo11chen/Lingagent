@@ -1,6 +1,6 @@
 [project]
 name = "lingagent"
-version = "0.1.2"
+version = "0.1.3"
 description = "A coding-agent harness: LLM decides, the harness dispatches tools, guards and logs"
 readme = "README.md"
 license = "MIT"
@@ -31,7 +31,7 @@ Repository = "https://github.com/Richardo11chen/Lingagent"
 
 [project.scripts]
 # 一个入口，靠 -tui / -web 分派：lingan（默认 TUI）、lingan -tui、lingan -web
-lingan = "agent_harness:main"
+lingan = "agent_harness.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.12.7,<0.13.0"]

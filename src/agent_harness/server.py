@@ -9,26 +9,19 @@ import json
 import os
 import threading
 from functools import partial
-from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import WebSocket, WebSocketDisconnect
 
 from .assembly import (
-    POST_HOOKS,
-    PRE_HOOKS,
     WORKSPACE,
-    build_session_tools,
     build_system_prompt,
     list_visible_sessions,
     load_settings_and_llm,
 )
-from .guardrail import command_head
+from .approval import SessionAllow
 from .compact import estimate_tokens
 from .llm import Msg
-from .loop import agent_loop
 from .session import (
     load_session,
     load_session_model,
@@ -40,35 +33,10 @@ from .session import (
 )
 from .tools import task_snapshot, task_stop, tool_detail
 from .trace import Tracer, TRACE_FIELD_CHARS, ellipsis_note, load_trace, mark_viewed
+from .turn import Session, TurnCallbacks, describe_failure
 
-app = FastAPI()
-
-# 前后端消息版本。加/改 WS 消息（或 /health 里新增 TUI 依赖的字段）时 +1，weblaunch 用它判断
-# 「8000 上那个进程是不是旧代码」。别指望端口探测：上一个 TUI 拉起的后端会一直活着，占着端口
-# 假装自己是新的。3 = /health 多了 busy（TUI 退出前靠它决定等不等网页那轮）。
-PROTOCOL = 3
-
-# 正在跑几轮（进程级）。TUI 退出前问一句：网页上还有人在等回复就先别关，不然那半轮就断了。
-_BUSY = {"n": 0}
-_BUSY_LOCK = threading.Lock()
-
-
-def _turn_started() -> None:
-    with _BUSY_LOCK:
-        _BUSY["n"] += 1
-
-
-def _turn_ended() -> None:
-    with _BUSY_LOCK:
-        _BUSY["n"] = max(0, _BUSY["n"] - 1)  # 兜住：重复减不出现负数，免得一直「有人在跑」
-
-
-@app.get("/health")
-def health() -> dict:
-    """给 weblaunch 的自检端点：应用名 + 协议版本 + 还有几轮在跑。"""
-    with _BUSY_LOCK:
-        busy = _BUSY["n"]
-    return {"app": "agent-harness", "protocol": PROTOCOL, "busy": busy}
+from . import webapp
+from .webapp import PROTOCOL, _turn_ended, _turn_started, app, health  # noqa: F401  (对外沿用 server.app / server.health / server.PROTOCOL)
 
 # 工具结果过 WS 的上限：结果与 diff 都是给眼睛看的，不必几十万字符一起推。
 # 超限的部分前端拿不到，但 trace 文件里一直是全文（审计账不截断）。
@@ -111,10 +79,48 @@ async def ws_endpoint(ws: WebSocket):
         on_notice=lambda text: send({"type": "notice", "text": text}),
     )
     approval: dict = {}  # 审批等待槽：{"event": Event, "result": bool, "remember": bool}
-    approved_programs: set[str] = set()  # 本连接内"不再问"的程序名（重启即忘）
-    auto_approve = {"on": False}  # 网页版「自动批准」（对应 TUI 的 Shift+Tab），内存态
+    # 当前这一轮的 tracer（每轮重建：resume 会换 session_id，也就换了文件）。
+    # 用一格列表而不是普通变量，是因为 approver 活在 ws 生命周期里、比某一轮长。
+    tracer_now: list = [Tracer()]
     stop_event = threading.Event()  # 本轮「别继续了」——网页停止按钮置位，loop 每步看一眼
     user_task: asyncio.Task | None = None
+
+    def _ask(command: str, reason: str) -> str:
+        """网页怎么问：推卡片，等 Event。返回 decision（approve / always / deny）。
+
+        reason 一起推给前端：只给命令的话，批的人不知道自己批的是什么风险。
+        记忆、自动批准、判定都不在这里——`SessionAllow` 与终端共用同一份。
+        """
+        ev = threading.Event()
+        approval["event"] = ev
+        approval["result"] = False
+        approval["remember"] = False
+        send({"type": "approval_request", "command": command, "reason": reason})
+        waited = ev.wait(timeout=settings.approval_timeout or None)
+        if not waited:  # 没人回答：按驳回处理，别让这一轮永远挂着
+            send({"type": "notice", "text": f"审批超时（{settings.approval_timeout:g} 秒无人答复），已按驳回处理。"})
+            return "deny"
+        if not approval["result"]:
+            return "deny"
+        return "always" if approval.get("remember") else "approve"
+
+    def _on_auto(command: str, reason: str) -> None:
+        send({"type": "notice", "text": f"自动批准 · {reason}"})
+        tracer_now[0].emit("auto", command=command, reason=reason)
+
+    # 建在连接级（不是每轮）：它记着「本会话不再问哪些程序」和自动批准开关，
+    # 每轮重建等于每轮失忆——那正好是这份记忆存在的意义。
+    approver = SessionAllow(
+        _ask,
+        on_granted=lambda head: send({"type": "notice", "text": f"本会话不再询问 {head}"}),
+        on_reused=lambda head: send({"type": "notice", "text": f"本会话已允许 {head}，直接执行"}),
+        on_auto=_on_auto,
+    )
+    # 会话级装配建一次（模型 / 审批 / 工作区 / 历史）：每轮只递 goal 和回调。
+    session = Session(
+        llm=llm, settings=settings, approver=approver,
+        workspace=WORKSPACE, history=history,
+    )
 
     def status_payload() -> dict:
         """顶栏要的那点状态：审批模式 + 上下文用量。
@@ -124,7 +130,7 @@ async def ws_endpoint(ws: WebSocket):
         """
         return {
             "type": "status",
-            "auto": auto_approve["on"],
+            "auto": approver.auto,
             "used": estimate_tokens(history) + len(build_system_prompt()),
             "limit": settings.compact_threshold,
         }
@@ -188,77 +194,33 @@ async def ws_endpoint(ws: WebSocket):
                 "removed": removed,
             })
 
-        def approver(command: str, reason: str) -> bool:
-            """线程内阻塞等前端答复——收消息 task 唤醒 Event。
-
-            reason 一起推给前端：只给命令的话，批的人不知道自己批的是什么风险。
-            本会话"不再问"的记忆存在这里（按程序名），重启即忘。
-            """
-            if auto_approve["on"]:  # 网页版自动批准：不弹卡片，但必须留一条痕迹
-                send({"type": "notice", "text": f"自动批准 · {reason}"})
-                tracer.emit("auto", command=command, reason=reason)
-                return True
-            head = command_head(command)
-            if head and head in approved_programs:
-                send({"type": "notice", "text": f"本会话已允许 {head}，直接执行"})
-                return True
-            ev = threading.Event()
-            approval["event"] = ev
-            approval["result"] = False
-            approval["remember"] = False
-            send({"type": "approval_request", "command": command, "reason": reason})
-            waited = ev.wait(timeout=settings.approval_timeout or None)
-            if not waited:  # 没人回答：按驳回处理，别让这一轮永远挂着
-                send({"type": "notice", "text": f"审批超时（{settings.approval_timeout:g} 秒无人答复），已按驳回处理。"})
-                return False
-            if approval["result"] and approval.get("remember") and head:
-                approved_programs.add(head)
-                send({"type": "notice", "text": f"本会话不再询问 {head}"})
-            return approval["result"]
-
         old_len = len(history)
         # 每轮现取——resume 换 id 后自动跟到新文件；关掉 trace 就不写盘
         tracer = Tracer(trace_path(WORKSPACE, session_id)) if settings.trace_enabled else Tracer()
+        tracer_now[0] = tracer  # approver 活在连接级，自动批准要记到「这一轮」的账上
 
-        def notice(text: str, **fields) -> None:  # 提示 + 留痕（tracer 每轮换，所以每轮重挂）
-            send({"type": "notice", "text": text})
-            tracer.emit("compact", text=text, **fields)
-
-        llm.set_notice(notice)
-        sp = build_system_prompt()
-        session_tools = build_session_tools(  # S10：本会话工具表（带 spawn_subagent）
-            llm, sp, approver=approver, tracer=tracer,
-            max_steps=settings.max_steps, on_hook=on_hook,
-            should_stop=stop_event.is_set,
-            allow_commands=settings.guardrail_allow,
-        )
         run = partial(
-            agent_loop,
+            session.run,
             goal,
-            llm,
-            session_tools,
-            sp,
-            approver=approver,
-            history=history,
-            on_text=on_text,
-            on_tool=on_tool,
-            on_tool_result=on_tool_result,
-            on_reasoning=on_reasoning,
-            tracer=tracer,
-            pre_hooks=PRE_HOOKS, post_hooks=POST_HOOKS,
-            on_hook=on_hook,
-            max_steps=settings.max_steps,
+            tracer=tracer,  # 每轮换：resume 之后轨迹要跟到新文件
+            callbacks=TurnCallbacks(
+                on_text=on_text,
+                on_reasoning=on_reasoning,
+                on_tool=on_tool,
+                on_tool_result=on_tool_result,
+                on_hook=on_hook,
+                on_notice=lambda text: send({"type": "notice", "text": text}),
+            ),
             should_stop=stop_event.is_set,
-            allow_commands=settings.guardrail_allow,
         )
         try:
-            reply, new_history = await asyncio.to_thread(run)
+            result = await asyncio.to_thread(run)
         except Exception as e:  # 网络断了 / 模型报错 / 参数解析炸了——推给前端，别让界面一直转圈
-            send({"type": "error", "text": f"本轮失败：{type(e).__name__}: {e}"})
+            send({"type": "error", "text": describe_failure(e)})
             return
-        history[:] = new_history  # 原地更新（闭包外的引用同步）
-        save_messages(WORKSPACE, session_id, new_history[old_len:])
-        await ws.send_json({"type": "assistant_done", "text": reply})
+        # 历史已由 Session 原地更新（外面那个 history 引用同步可见）
+        save_messages(WORKSPACE, session_id, session.history[old_len:])
+        await ws.send_json({"type": "assistant_done", "text": result.reply})
         await ws.send_json(status_payload())  # 这一轮的上下文用量
 
     async def run_user_counted(goal: str) -> None:
@@ -308,7 +270,7 @@ async def ws_endpoint(ws: WebSocket):
                     await ws.send_json({"type": "history", "messages": []})
                     await ws.send_json(status_payload())
             elif mtype == "set_auto":  # 网页版「自动批准」开关（= TUI 的 Shift+Tab）
-                auto_approve["on"] = bool(msg.get("on"))
+                approver.auto = bool(msg.get("on"))
                 await ws.send_json(status_payload())
             elif mtype == "models_request":  # 列可选模型（/model）
                 await ws.send_json(
@@ -397,40 +359,7 @@ async def ws_endpoint(ws: WebSocket):
 
 # 打包形态：前端构建产物跟着包走（src/agent_harness/web_dist），后端一个端口全包
 # ——装完不用 Node、不用 vite，直接开 http://127.0.0.1:8000。
-WEB_DIST = Path(__file__).parent / "web_dist"
-
-
-def _mount_web_ui() -> None:
-    """挂前端路由。构建产物在就托管，不在就是纯 API（开发时前端在 5173，由 vite 顶着）。
-
-    路由无条件注册、响应时才看文件在不在：否则测试和线上会因为"dist 有没有构建过"走出
-    两套不同的 URL 表，藏 bug。
-    """
-    if (WEB_DIST / "assets").is_dir():
-        app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
-
-    @app.get("/", include_in_schema=False)
-    def _ui_index():
-        return _web_dist_response(WEB_DIST / "index.html")
-
-    @app.get("/{path:path}", include_in_schema=False)
-    def _ui_file(path: str):
-        """dist 里的真文件发文件，其余一律回 index.html（前端自己按路径渲染）。"""
-        target = (WEB_DIST / path).resolve()
-        try:
-            target.relative_to(WEB_DIST.resolve())  # 挡住 ../ 穿越
-        except ValueError:
-            target = WEB_DIST / "index.html"
-        return _web_dist_response(target if target.is_file() else WEB_DIST / "index.html")
-
-
-def _web_dist_response(path: Path):
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="网页界面没打包（只跑 API）")
-    return FileResponse(path)
-
-
-_mount_web_ui()
+# （静态托管本身在 webapp.py，这里只用来决定启动时打印哪个地址）
 
 
 def run_server(model: str | None = None) -> None:
@@ -452,7 +381,7 @@ def run_server(model: str | None = None) -> None:
         )
     where = (
         f"http://{s.server_host}:{s.server_port}"
-        if (WEB_DIST / "index.html").exists()
+        if (webapp.WEB_DIST / "index.html").exists()
         else "http://localhost:5173（开发模式：在 web/ 下 npm run dev）"
     )
     print(f"网页界面: {where}")

@@ -7,7 +7,7 @@
 - 终端界面（TUI）+ 网页界面（React，实时流 + 网页审批）
 - 危险动作走风险分级：只读放行 / 改动静默问人 / 极危险直拒
 - 每步动作留轨迹（trace），会话可恢复（session）
-- 硬标准：**移除真 LLM 后核心机制仍能用确定性单测验证**（202 条测试）
+- 硬标准：**移除真 LLM 后核心机制仍能用确定性单测验证**（264 条测试）
 
 ## 环境要求
 
@@ -28,18 +28,18 @@ uv sync
 
 不打成「仓库里跑」的形态，而是装成一条命令——像 `claude`、`gh` 那样。
 
-**最省事：发布到 PyPI 之后一行**（见下「为什么是三行」）：
+**装上就用（PyPI 上的最新版）：**
 
 ```bash
 uv tool install lingagent     # 或 pipx install lingagent
 ```
 
-**还没发布时的本地做法（三条命令，只跑一次）：**
+**从源码装（改了代码、或想跑未发布版本时）：**
 
 ```bash
 uv run python scripts/build_web.py   # 把前端构建产物打进包里（需要 Node）
-uv build                             # 产出 dist/lingagent-0.1.0-py3-none-any.whl
-uv tool install dist/lingagent-0.1.0-py3-none-any.whl
+uv build                             # 产出 dist/lingagent-0.1.3-py3-none-any.whl
+uv tool install dist/lingagent-0.1.3-py3-none-any.whl
 ```
 
 装完先做一次配置（交互式，问三句就写好 `~/.agent-harness/config.toml`）：
@@ -62,9 +62,8 @@ lingan --stop-web  # 关掉后台的后端
 
 卸载：`uv tool uninstall lingagent`。
 
-**为什么上面是三行而不是一行**：`web_dist/` 不提交进 git（构建产物不该进版本库），所以本地要先
-`build_web` 把前端塞进 wheel；也没发布到 PyPI，所以要 `uv build` 现打一个。只要把 wheel 推到 PyPI，
-`uv tool install lingagent` 就是唯一一行——这是下一步该做的事，跟安装方式无关。
+**为什么从源码装要三行**：`web_dist/` 不提交进 git（构建产物不该进版本库），包里得现塞前端，
+所以要先 `build_web`、再 `uv build`。PyPI 上那条路不用管这些——wheel 是 CI 打好发上去的。
 
 ## 配置
 
@@ -122,7 +121,7 @@ api_key_env = "DEEPSEEK_API_KEY"    # 从环境变量读（推荐）
 | | `stop_on_exit` | `true` | 退 TUI 收掉这次自己拉起的进程 |
 | | `stop_wait` | `120` | 收之前先等网页那轮跑完的秒数（`0` = 不等） |
 | `[trace]` | `enabled` | `true` | 写轨迹文件（关掉只留 session，省磁盘） |
-| `[guardrail]` | `allow` | `[]` | 不再问人的命令（前缀语义，如 `git *`；灾难命令不受影响） |
+| `[guardrail]` | `allow` | `[]` | 不再问人的命令（前缀语义，如 `git status *`；写 `git *` 会连 push 一起放行） |
 
 关于 `compact_threshold` 补一句：它按**字符数当量**粗估（中文≈1:1、英文保守高估），不是精确 token。调太低会过早压缩——丢细节、还打断 DeepSeek 的前缀缓存；调太高可能撞上模型真实的上下文窗口上限。默认 `300000` 是个折中。
 
@@ -138,7 +137,8 @@ uv run lingan --model deepseek-v4-pro  # 临时指定 profile
 首次启动会：列出历史会话让你选（`0` 开新会话、`n`/`p` 翻页）→ 自动拉起网页端（`[web] autostart = false` 可关）。
 
 界面内命令：输入 `/` 会弹出命令菜单——`/model` 切模型、`/trace` 看本轮轨迹（`/trace N` 钻取单条）。
-退出：`Ctrl+C` 连按两次，或 `Ctrl+D`。
+跑一轮的时候按 `Ctrl+C`：**跑完手里这一步就停**，已经做完的部分照常落盘；再按一次才立刻中断（那一轮不落盘）。
+空闲时退出：`Ctrl+C` 连按两次，或 `Ctrl+D`。
 
 **网页界面：**
 
@@ -157,9 +157,12 @@ cd web && npm install && npm run dev
 ## 测试
 
 ```bash
-uv run pytest                  # 全量（170 条）
+uv run pytest                  # 全量（264 条）
 cd web && npx tsc --noEmit     # 前端类型检查
 ```
+
+CI 在 Windows 上跑同一条 `uv run pytest`：PR 和推到 main 都跑，打 tag 时**先过测试再发布**
+（PyPI 不许重传同名文件，坏包发出去就永久占住那个版本号）。
 
 agent 自己的 `run_tests` 工具按项目根的标记文件认测试入口，所以换个项目也能用：
 
@@ -258,15 +261,19 @@ uv run lingan --stop-web      # 结束占用 8000 / 5173 的进程
 ## 已知边界（有意不做的）
 
 - **没有 OS 级沙箱**：`run_shell` 靠风险分级 + 人工审批，不是容器隔离。别拿它跑不可信的任务。
+- **路径围栏只管文件工具**：`read_file` / `write_file` / `edit_file` 越界直接拒；`run_shell` 不受它约束（`cd ..` 之后干什么都能干）。命令里出现界外路径时，审批理由会写一句「引用了工作区外：…」——**那是提示不是拦截**，shell 里换个写法就绕过去了，别把它当边界。
 - **审批会超时**：默认 5 分钟没人答复就按驳回处理（`[loop] approval_timeout`，设 0 = 一直等）。
-- **网页端的「停止」只在本步结束后生效**：正在跑的命令 / 子 agent 会跑完，之后不再发起新动作（不硬杀进程）。TUI 用 Ctrl+C。
+- **「停止」只在本步结束后生效**：网页点按钮、终端按第一次 `Ctrl+C`，都是「跑完手里这一步就不再发起新动作」（不硬杀进程；终端按第二次才是硬中断）。Windows 上这台机器的 `Ctrl+C` 是控制台事件，子进程也会收到，所以正在跑的 shell 命令仍可能被打断——软中断保证的是「不再开新步 + 这一轮已有结果照常落盘」。
 - **子 agent 的「只读」靠提示词**，工具是全量的；它不能再派生孙 agent（深度上限 1）。
 - **子 agent 的中间过程不进实时流**，只进 trace。
+- **Linux / macOS 上找「谁占着端口」靠 `lsof`**：它不在 Python 依赖里，极简镜像（Alpine、最小容器）默认可能没有。缺了不报错——只是认不出僵尸后端，`--stop-web` 会变成"没找到"。`apt install lsof` / `apk add lsof` 即可。
 - 只接 OpenAI 兼容协议面；DeepSeek 私有参数（`thinking` / `reasoning_effort`）默认不传。
 
 ## 审批怎么答
 
 危险动作会停下来问你一句，只认三个键：
+
+问题分两行：先给**为什么要问**（`改动文件：rm（引用了工作区外：../other）`），再给完整命令——只给命令等于让人盲批。
 
 | 键 | 含义 |
 |---|---|
@@ -280,8 +287,10 @@ uv run lingan --stop-web      # 结束占用 8000 / 5173 的进程
 
 ```toml
 [guardrail]
-allow = ["git *", "uv *", "rg *"]   # 前缀语义：以这些词开头的命令不再问
+allow = ["git status *", "git diff *", "rg *"]   # 前缀语义：整条命令以它开头就不再问
 ```
+
+**`allow` 是前缀匹配，不是"这一条命令"**。写 `git *` 等于把整个 git 放行——`git push`、`git reset --hard`、`git config --global` 都不会再问你，而这几条恰恰最该问。想只放行看图那几条，就把子命令写进去（上面那样）；`uv *` 同理，会连 `uv add`（改依赖）一起放过。
 
 `catastrophic` 档（`format` / `mkfs` / `dd` / `rm -rf /`）**不受 allow 影响**——写 `allow = ["*"]` 也放不出来，这是刻意留的地板。
 
@@ -354,15 +363,19 @@ task_stop("t1")                              → 连子进程一起停
 
 - **同一台机器上 `find` 有两个**：在 Git Bash 里 `find` 是 GNU 的（找文件），`cmd` 里是 Windows 的（逐行搜文本）。跑命令的是 bash，所以 `find . -name "*.py"` 才对；`find /c /v ""` 那套是 cmd 语法，在这里会把 `*.py` 当路径（2026-10-19 就这么灌出过 91MB 输出）。不确定就 `command -v find` 看一眼。
 - **`write_file` 覆盖整个文件**，改已有文件用 `edit_file`。
-- 项目约定写在 `AGENTS.md`，启动时自动注入 system prompt。
+- 项目约定写在 `AGENTS.md`，每轮请求前重读并注入 system prompt——改完立刻生效，两个入口都不用重启。
+- `~/.agent-harness/config.toml` 相反：**进程启动时读一次**（网页端是每个连接读一次），改了要重启/重连才生效。提示词每轮读、配置不重读，这个差别是刻意的——配置里是端口、密钥、模型表，中途换掉会让已经在跑的那一轮前后不一致。
 
 ## 目录结构
 
 ```
 src/agent_harness/
-  __init__.py   CLI 主入口（选会话 / REPL / 落盘）
+  __init__.py   包根：只有身份说明，不导入任何运行时模块
+  cli.py        CLI 主入口（分派 / 选会话 / REPL / 落盘 / 收网页端）
+  turn.py       一轮编排：装配 → agent_loop（TUI 与 Web 共用，只统一顺序不统一界面）
   loop.py       主循环：护栏 → 预钩子 → 执行 → 回灌 → 停机
   guardrail.py  命令风险分级 + 路径围栏
+  approval.py   审批的会话记忆（记住哪个程序不再问；终端与网页共用这一份）
   llm.py        OpenAI 兼容流式适配器（含 413 反应式压缩、思考流拆分）
   tools.py      工具实现（读 / 写 / 编辑 / shell / 后台任务 / pytest）+ 结果截断
   shell.py      挑一个 shell（bash → pwsh7 → pwsh5 → cmd）
@@ -377,8 +390,9 @@ src/agent_harness/
   paths.py      应用目录（~/.agent-harness）
   assembly.py   公共装配 + SwitchableLLM
   tui.py        终端界面
-  server.py     FastAPI + WebSocket 后端
+  server.py     WebSocket 会话协议（一个连接 = 一个会话）
+  webapp.py     HTTP 面：探活、静态界面托管
   weblaunch.py  TUI 启动时拉起网页端
-tests/          test_s1 ~ test_s11 + test_tools（155 条）
+tests/          test_s1 ~ test_s11（含 s4b/s4c/s6a/s6b）+ tools / contract / package / turn / approval 等（264 条）
 web/            React + TS + Vite 前端
 ```

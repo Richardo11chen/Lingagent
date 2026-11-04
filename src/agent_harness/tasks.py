@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -61,10 +62,15 @@ def next_id() -> str:
 
 
 def output_path(task_id: str) -> Path:
-    """输出文件路径：时间戳在前，按名字排序就是时间序。"""
+    """输出文件路径：时间戳在前，按名字排序就是时间序。
+
+    文件名里带 pid：任务 id 是**进程内**计数（t1 / t2），而 TUI 与网页后端是两个进程，
+    各自都有 t1。同一秒各起一个时文件名会撞在一起，`open("wb")` 把对方正在写的日志
+    直接截断——表现是「日志突然只剩前几行」，查不到原因。
+    """
     _prune()
     TASKS_DIR.mkdir(parents=True, exist_ok=True)
-    return TASKS_DIR / f"{int(time.time())}-{task_id}.log"
+    return TASKS_DIR / f"{int(time.time())}-{os.getpid()}-{task_id}.log"
 
 
 def register(task_id: str, command: str, proc, path: Path) -> Task:

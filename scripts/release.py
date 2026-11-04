@@ -81,6 +81,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("version", help="要发的版本号，如 0.2.0")
     ap.add_argument("--test", action="store_true", help="发到 TestPyPI（不是真 PyPI）")
     ap.add_argument("--no-publish", action="store_true", help="只改版本号 + 打包，不发布")
+    ap.add_argument(
+        "--skip-tests", action="store_true",
+        help="跳过测试（打 tag 走 CI 时本来就跑一遍；这里是本地直发唯一那道门）",
+    )
     args = ap.parse_args(argv)
 
     _validate_shape(args.version)
@@ -88,17 +92,25 @@ def main(argv: list[str]) -> int:
     if _already_published("lingagent", args.version, index):
         raise SystemExit(f"{args.version} 已经在 {index} 上发过了——换一个版本号。")
 
-    # ① 前端打进包里（忘了这步 wheel 就没网页端）
-    _run([sys.executable, "scripts/build_web.py"])
-
-    # ② 版本号 + 锁文件一起动（uv.lock 里也记着版本，不同步的话 uv 会报 lockfile 过期）
-    bump_version(args.version)
     uv = shutil.which("uv")
     if uv is None:
         raise SystemExit("找不到 uv——它没在 PATH 里。装一下：https://docs.astral.sh/uv/")
+
+    # ① 先跑测试。两条发布路径的安全级别必须一样：打 tag 走 CI 会先跑测试，
+    #    脚本直发要是不跑，就成了「最方便的那条路最不安全」——而人多半会走方便的那条。
+    if args.skip_tests:
+        print("\n跳过测试（--skip-tests）。祈祷这一版是对的。")
+    else:
+        _run([uv, "run", "pytest", "-q", "-p", "no:cacheprovider"])
+
+    # ② 前端打进包里（忘了这步 wheel 就没网页端）
+    _run([sys.executable, "scripts/build_web.py"])
+
+    # ③ 版本号 + 锁文件一起动（uv.lock 里也记着版本，不同步的话 uv 会报 lockfile 过期）
+    bump_version(args.version)
     _run([uv, "lock"])
 
-    # ③ 打包
+    # ④ 打包
     _run([uv, "build"])
 
     if args.no_publish:
@@ -106,7 +118,7 @@ def main(argv: list[str]) -> int:
         print(f"  uv publish{' --publish-url ' + TEST_PYPI_URL if args.test else ''}")
         return 0
 
-    # ④ 发布
+    # ⑤ 发布
     publish = [uv, "publish"]
     if args.test:
         publish += ["--publish-url", TEST_PYPI_URL]

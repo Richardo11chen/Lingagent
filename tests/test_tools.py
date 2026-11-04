@@ -1,14 +1,24 @@
 """工具层单测：run_shell 的超时兜底 + 输出处理（合并 / 编码 / stdin）。"""
 
+import os
 import sys
 import time
 
 from agent_harness.tools import read_file, run_shell, task_output, task_stop
 
 
+def _slow_command(seconds: int) -> str:
+    """跨平台的「睡一会儿」。
+
+    `ping -n N` 是 Windows 语法（-n = 次数）；在 Linux 上 -n 表示"只输出数字 IP"，
+    会一直 ping 下去——拿它当"跑 N 秒就结束"的命令，在 Linux 上测试会假死/假过。
+    """
+    return f"ping -n {seconds + 1} 127.0.0.1" if os.name == "nt" else f"sleep {seconds}"
+
+
 def test_run_shell_timeout_kills_hang():
     t0 = time.perf_counter()
-    out = run_shell("ping -n 6 127.0.0.1", timeout=0.3)  # 正常要 ~5 秒
+    out = run_shell(_slow_command(5), timeout=0.3)  # 正常要 ~5 秒
     assert "超时" in out
     assert time.perf_counter() - t0 < 4  # 没等它自己跑完
 
@@ -91,7 +101,7 @@ def test_shell_timeout_is_clamped():  # 调大可以，但不能无限；乱给�
 
 
 def test_shell_honours_a_larger_timeout():  # 放宽之后慢命令真的能跑完
-    out = run_shell("ping -n 3 127.0.0.1", timeout=20)  # 约 2 秒
+    out = run_shell(_slow_command(2), timeout=20)  # 约 2 秒
     assert "超时" not in out
     assert "退出码" in out
 
@@ -104,9 +114,9 @@ def _bg_id(msg: str) -> str:
 def test_background_returns_at_once_and_then_has_output():  # 服务不会「跑完」，前台的等法根本不成立
     from agent_harness import tasks
 
-    start = time.time()
+    # 不拿墙钟断言「立刻」：CI/负载高的机器上起个进程就能花十几秒，那条断言会随机红，
+    # 而它想证明的其实是「没等那条 sleep 30 跑完」——返回时进程还活着，就是这件事本身。
     msg = run_shell("echo bg-hello; sleep 30", background=True)
-    assert time.time() - start < 10  # 立刻回来，不等那 30 秒
     tid = _bg_id(msg)
     try:
         assert tasks.get(tid) is not None and tasks.get(tid).alive
@@ -219,3 +229,29 @@ def test_task_snapshot_shape(tmp_path, monkeypatch):  # 给界面用的结构化
     assert "5173" in snap["tail"]
     assert snap["started"] > 0  # 排序用
     assert task_snapshot("没有这个") is None
+
+
+def test_task_log_names_do_not_collide_across_processes(tmp_path, monkeypatch):
+    """TUI 与网页后端是两个进程，各自都有 t1——同一秒起的日志名必须不同。
+
+    撞名不是抽象风险：`open("wb")` 会把对方正在写的日志截断，现象是「日志只剩前几行」，
+    而且两边都指望着那份日志排错。
+    """
+
+    class _Clock:  # 钉在同一秒，把撞名条件逼出来
+        @staticmethod
+        def time():
+            return 1_700_000_000
+
+    from agent_harness import tasks
+
+    monkeypatch.setattr(tasks, "TASKS_DIR", tmp_path)
+    monkeypatch.setattr(tasks, "time", _Clock)
+    monkeypatch.setattr(tasks.os, "getpid", lambda: 11111)
+    a = tasks.output_path("t1")
+    monkeypatch.setattr(tasks.os, "getpid", lambda: 22222)
+    b = tasks.output_path("t1")
+
+    assert a != b
+    assert a.name.endswith("-t1.log") and b.name.endswith("-t1.log")
+    assert "1700000000" in a.name  # 时间戳仍在最前：按名字排序就是时间序

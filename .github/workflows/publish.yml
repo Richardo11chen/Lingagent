@@ -1,17 +1,52 @@
-name: Publish to PyPI
+name: Test & Publish
 
-# 打 tag（v*）就自动构建 + 发布。配合 PyPI 的 Trusted Publishing（OIDC）：
-# 本地不用存令牌，GitHub 用短期令牌直连 PyPI。
+# - PR / 推到 main：只跑测试
+# - 打 tag（v*）：先跑测试，过了才构建 + 发布
+# - 手动触发：跑测试
+#
+# 为什么发布前必须过测试：PyPI 不许重传同名文件，一个坏包发出去就永久占住那个版本号。
+# 发布本身配合 Trusted Publishing（OIDC）：本地不存令牌，GitHub 用短期令牌直连 PyPI。
+
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  test:
+    # 两个平台都守：这个项目在 Windows 上开发（shell 检测、taskkill、netstat 都是 Windows
+    # 语义），但装给别人用的是 Linux / macOS。少一个平台，就等于那句 "OS Independent" 是猜的。
+    strategy:
+      fail-fast: false # 一个平台红了，另一个也要跑完——才知道是平台问题还是都有问题
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: 装依赖（含 dev 组）
+        run: uv sync
+
+      - name: 跑测试
+        run: uv run pytest -q -p no:cacheprovider
+
   publish:
+    needs: test # 测试不过就不发
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       id-token: write # OIDC 必需——没有它拿不到短期令牌，trusted publishing 会失败

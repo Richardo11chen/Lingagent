@@ -2,9 +2,8 @@
 
 描述质量直接决定模型调用正确率——参数名必须和函数签名一字不差
 （**action.args 的键名契约），description 告诉模型何时用、参数什么含义。
+这条契约由 `tests/test_contract.py` 守着：改签名就必须改这里，反之亦然。
 """
-
-from .tools import read_file, write_file, run_shell
 
 TOOL_SCHEMAS: list[dict] = [
     {

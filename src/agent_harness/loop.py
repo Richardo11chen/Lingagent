@@ -1,6 +1,7 @@
 """主循环：组织上下文 → 调模型 → 解析动作 → 分发执行 → 回灌结果 → 停机判断。"""
 
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Callable
 from .llm import LLM, Action
 from .messages import Msg
@@ -12,6 +13,21 @@ from .hooks import run_post, run_pre
 
 MAX_STEPS = 40
 Tool = Callable[..., str]
+
+
+def _tool_error(tool: str, exc: Exception) -> str:
+    """工具抛异常时回灌给模型的那句话。
+
+    必须带异常类型和消息：模型要靠它决定下一步（改路径 / 换工具 / 停下来），
+    只说一句「失败」，它能做的只有原地重试——同一句话对 FileNotFound、权限、
+    编码、参数错配全都一样，猜中的概率靠运气。
+
+    TypeError 单独说：那是参数对不上菜单（schema 契约破了），重发一次有救；
+    其余多半是工具内部出错，重试只会撞同一个地方，得让它换路。
+    """
+    if isinstance(exc, TypeError):
+        return f"{tool} 参数不匹配：{exc}。请对照工具 schema 重发。"
+    return f"{tool} 执行出错（{type(exc).__name__}）：{exc}"
 
 def agent_loop(
     goal: str,
@@ -31,6 +47,7 @@ def agent_loop(
     on_hook: Callable[[str, str], None] | None = None,  # 策略拦截回调（by, reason）——界面实时流用
     should_stop: Callable[[], bool] | None = None,  # 每步开始问一次「还继续吗」——网页的停止按钮
     allow_commands: Sequence[str] = (),  # 配置里写死的允许规则（前缀语义，见 guardrail）
+    workspace: Path | None = None,  # 给了才判「命令引用了工作区外」——只进审批理由，不拦
 ) -> tuple[str, list[Msg]]:
     if tracer is None:
         tracer = Tracer()  # 关闭态空对象：不传 tracer 的调用方，代码一行不改
@@ -77,8 +94,12 @@ def agent_loop(
                 # S11：黑名单 → 风险分级——只读放行；改动 / 执行 / 未知问人；极危险直接拒
                 may_run = True
                 if action.tool == "run_shell":
-                    risk = classify_command(action.args.get("command", ""), allow_commands)
+                    risk = classify_command(
+                        action.args.get("command", ""), allow_commands, workspace,
+                    )
                     ev.fields["risk"] = risk.risk
+                    # 判定理由也进账：事后查「当时为什么批了」全靠它（自动批准时更是唯一痕迹）
+                    ev.fields["reason"] = risk.reason
                     if risk.risk == "catastrophic":
                         result = f"命令被策略直接拒绝（{risk.reason}），未执行。"
                         ev.fields["status"] = "blocked"
@@ -132,7 +153,7 @@ def agent_loop(
                             result = tool_func(**action.args)
                             ev.fields["status"] = "ok"
                         except Exception as e:
-                            result = f"{action.tool}工具调用失败。"
+                            result = _tool_error(action.tool, e)
                             ev.fields["status"] = "error"
                             ev.fields["error"] = f"{type(e).__name__}: {e}"
                         else:
