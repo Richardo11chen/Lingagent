@@ -68,10 +68,10 @@ def test_edit_file_rejects_no_match(tmp_path):  # old 不匹配 → 拒绝并回
     assert f.read_text(encoding="utf-8") == "x = 1\n"  # 文件没动
 
 
-def test_edit_file_rejects_ambiguous(tmp_path):  # old 多次出现（不唯一）→ 拒绝
+def test_edit_file_rejects_ambiguous(tmp_path):  # old 多次出现（不唯一）→ 拒绝，并说清几处
     from agent_harness.tools import edit_file
     f = tmp_path / "a.py"
-    f.write_text("pass\npass\n", encoding="utf-8")
+    f.write_text("pass\npass\n", encoding="utf-8", newline="\n")
     out = edit_file(str(f), old="pass", new="continue")
-    assert "编辑失败" in out and "不唯一" in out
+    assert "编辑失败" in out and "2 次" in out and "第 1、2 行" in out
     assert f.read_text(encoding="utf-8") == "pass\npass\n"  # 文件没动

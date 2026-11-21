@@ -44,6 +44,21 @@ class ModelProfile:
     temperature: float = 1.0
     thinking: str = "off"  # "enabled" / "disabled" / "off"（off = 不传）
     reasoning_effort: str = "off"  # "low" / "high" / "max" / "off"（off = 不传）
+    # "auto" = 发一次试试，失败时按服务端报错说清；true/false = 直接声明。
+    # 不做模型能力对照表——那张表永远过时，而错误信息里明确写着 "does not support image"。
+    vision: str | bool = "auto"
+
+
+@dataclass
+class SearchConfig:
+    """联网搜索。`auto` = 当前 profile 是 deepseek 就用它，否则看有没有 TAVILY_API_KEY。"""
+
+    provider: str = "auto"  # auto | deepseek | tavily | brave | searxng | off
+    max_results: int = 5
+    # 所有摘要加起来的字符预算，按结果条数均分（5 条 → 每条 300；2 条 → 每条 750）
+    snippet_budget: int = 1_500
+    api_key_env: str = ""  # 空 = 按 provider 约定（TAVILY_API_KEY / BRAVE_API_KEY）
+    searxng_url: str = ""  # 自建实例地址，如 http://localhost:8080
 
 
 @dataclass
@@ -68,6 +83,9 @@ class Settings:
     trace_enabled: bool = True  # 写轨迹文件（关掉 = 只留 session，省磁盘）
     # 人写的允许规则：`["git *", "uv *"]` = 这些命令不再问（前缀语义，灾难命令不受影响）
     guardrail_allow: list[str] = field(default_factory=list)
+    search: SearchConfig = field(default_factory=SearchConfig)
+    # 看图用哪个 profile（空 = 用当前模型）。主模型可能是推理型、看不了图，这时指一个能看的。
+    vision_profile: str = ""
 
     def model(self, name: str | None = None) -> ModelProfile:
         """取 profile（指定名 或 default）；名字不存在回退 default。"""
@@ -86,6 +104,8 @@ def _profile_from(data: dict) -> ModelProfile:
     p.thinking = th if th in ("enabled", "disabled", "off") else "off"  # 非法回退 off（不传）
     eff = str(data.get("reasoning_effort", p.reasoning_effort)).lower()
     p.reasoning_effort = eff if eff in ("low", "high", "max", "off") else "off"
+    # bool 与字符串都收（TOML 里 vision = true 是 bool，写成 "auto" 是字符串）
+    p.vision = data.get("vision", p.vision)
     return p
 
 
@@ -134,6 +154,16 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
     if isinstance(allow, str):  # 允许写单条字符串
         allow = [allow]
     s.guardrail_allow = [str(x) for x in allow]
+
+    se = data.get("search", {})
+    s.search.provider = str(se.get("provider", s.search.provider))
+    s.search.max_results = int(se.get("max_results", s.search.max_results))
+    s.search.snippet_budget = int(se.get("snippet_budget", s.search.snippet_budget))
+    s.search.api_key_env = str(se.get("api_key_env", s.search.api_key_env))
+    s.search.searxng_url = str(se.get("searxng_url", s.search.searxng_url))
+
+    tl = data.get("tools", {})
+    s.vision_profile = str(tl.get("vision_profile", s.vision_profile))
 
     if s.default_model not in s.models:  # default 指向不存在的 profile → 当场说清楚（别等 KeyError）
         raise SystemExit(

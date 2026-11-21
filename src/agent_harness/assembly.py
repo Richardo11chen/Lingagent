@@ -20,7 +20,9 @@ SYSTEM_PROMPT = (
     "## 工具\n"
     "优先用最窄的工具；具体用法、参数、风险和边界看工具 schema。"
     "只使用菜单里实际存在的工具，不要调用提示词提到但菜单里没有的工具。"
-    "改完代码必须验证，没验证过不算完成。\n\n"
+    "改完代码必须验证，没验证过不算完成。\n"
+    "两条容易踩的：**read_file 只能读文本**——图片、截图、二进制看不了，别声称看过渲染结果；"
+    "**慢活儿用 background=true**——构建 / 渲染 / 批量转换会跑完，但可能超过 timeout 上限。\n\n"
     "## 什么时候先问\n"
     "命令类操作按 run_shell 描述里的风险分级决定要不要先问；"
     "用户明确要求范围内的文件改动直接做。\n\n"
@@ -53,11 +55,14 @@ tools = {
 
 def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
                         max_steps: int | None = None, on_hook=None,
-                        should_stop=None, allow_commands=(), workspace=None) -> dict:
+                        should_stop=None, allow_commands=(), workspace=None,
+                        settings=None) -> dict:
     """每个会话的工具表：基础工具 + spawn_subagent（闭包持有该会话的装配）。
 
     模型 / 审批 / trace 都是会话级的——所以 spawn 不能一次性注册进模块级 tools。
     workspace：给子 agent 判「命令引用界外」用的根，None = 本进程的工作目录。
+    settings：给了才装联网搜索与看图。没有 settings 就不装——宁可少两个工具，
+    也不要装一个每次调用都报「没配置」的工具。
     """
     session_tools = dict(tools)
     session_tools["spawn_subagent"] = make_spawn_tool(
@@ -75,6 +80,25 @@ def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
         allow_commands=allow_commands,
         workspace=workspace or WORKSPACE,  # 子 agent 的 shell 也要能提示「引用了工作区外」
     )
+    if settings is not None:
+        from .vision import make_view_image
+        from .websearch import build_provider, make_tools
+
+        provider = build_provider(
+            settings.search,
+            # getattr：子 agent / 测试里的假模型未必实现完整门面，缺了就退回默认 profile
+            settings.model(getattr(llm, "current_profile", "")),
+        )
+        if provider is not None:
+            # 搜索源造不出来就压根不注册：菜单里没有，模型不会去调（loop 按工具表过滤 schema）
+            session_tools.update(
+                make_tools(
+                    provider,
+                    max_results=settings.search.max_results,
+                    snippet_budget=settings.search.snippet_budget,
+                )
+            )
+        session_tools["view_image"] = make_view_image(settings, llm)
     return session_tools
 
 

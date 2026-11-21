@@ -16,6 +16,8 @@ temperature = 1.0           # ⚠️ 思考模式下不生效（官方：不报�
 thinking = "enabled"        # DeepSeek 私有：开关——"enabled" / "disabled" / "off"（off = 不传）
 # strip_think_tags = true   # 正文里包 <mm:think>…</mm:think> 的网关才开（MiniMax 形态；默认关）
 reasoning_effort = "high"   # DeepSeek 私有：强度——"low" / "high" / "max"；"off" = 不传
+vision = "auto"             # 能不能看图：auto（发一次看报错）/ true / false。
+                            # deepseek-flash 支持；deepseek-v4-pro 不支持（会 400）
 
 # 示例：其他厂商 / 中转站（OpenAI 兼容——取消注释即可用）。
 # [models.某厂商-大]
@@ -59,3 +61,16 @@ enabled = true              # false = 不写轨迹文件（session 仍在，只�
 # catastrophic 档（format / mkfs / dd / rm -rf /）不受这里影响。
 allow = []
 # allow = ["git *", "uv *", "rg *", "pytest *"]
+
+[search]
+# 联网搜索。auto = 当前 profile 是 DeepSeek 就用 DeepSeek 的 Search API（复用模型那把 key），
+# 否则看环境里有没有 TAVILY_API_KEY，都没有就不开（工具不会出现在菜单里）。
+provider = "auto"           # auto | deepseek | tavily | brave | searxng | off
+max_results = 5
+snippet_budget = 1500       # 摘要总预算（字符），按条数均分：5 条 → 每条 300
+# api_key_env = "TAVILY_API_KEY"   # 空 = 按 provider 约定（tavily→TAVILY_API_KEY，brave→BRAVE_API_KEY）
+# searxng_url = "http://localhost:8080"   # provider = "searxng" 时必填
+
+[tools]
+# 看图用哪个 profile（空 = 用当前模型）。主模型是推理型、看不了图时，指一个有视觉的。
+vision_profile = ""

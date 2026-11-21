@@ -7,7 +7,7 @@
 - 终端界面（TUI）+ 网页界面（React，实时流 + 网页审批）
 - 危险动作走风险分级：只读放行 / 改动静默问人 / 极危险直拒
 - 每步动作留轨迹（trace），会话可恢复（session）
-- 硬标准：**移除真 LLM 后核心机制仍能用确定性单测验证**（264 条测试）
+- 硬标准：**移除真 LLM 后核心机制仍能用确定性单测验证**（304 条测试）
 
 ## 环境要求
 
@@ -157,7 +157,7 @@ cd web && npm install && npm run dev
 ## 测试
 
 ```bash
-uv run pytest                  # 全量（264 条）
+uv run pytest                  # 全量（304 条）
 cd web && npx tsc --noEmit     # 前端类型检查
 ```
 
@@ -267,6 +267,9 @@ uv run lingan --stop-web      # 结束占用 8000 / 5173 的进程
 - **子 agent 的「只读」靠提示词**，工具是全量的；它不能再派生孙 agent（深度上限 1）。
 - **子 agent 的中间过程不进实时流**，只进 trace。
 - **Linux / macOS 上找「谁占着端口」靠 `lsof`**：它不在 Python 依赖里，极简镜像（Alpine、最小容器）默认可能没有。缺了不报错——只是认不出僵尸后端，`--stop-web` 会变成"没找到"。`apt install lsof` / `apk add lsof` 即可。
+- **`read_file` 读不了图片**：它只解文本，图片字节读出来是乱码。看图要用 `view_image`（见下节）——但它是下采样后转述，读不清小字、也做不了像素级比对；那种需求仍然要写脚本算指标。
+- **`/tmp` 不是同一个目录**：`run_shell` 走 Git Bash（`/tmp` → `%TEMP%`），而 node 这类原生程序把 `/tmp` 解析到当前盘根（`D:\tmp`）。跨进程传路径用绝对路径。
+- **后台任务只在内存里**：进程重启就清空；而且 TUI 与网页后端是两个进程、各自编号（两边都有 `t1`），在一个入口起的任务，另一个入口查不到。
 - 只接 OpenAI 兼容协议面；DeepSeek 私有参数（`thinking` / `reasoning_effort`）默认不传。
 
 ## 审批怎么答
@@ -359,6 +362,48 @@ task_stop("t1")                              → 连子进程一起停
 - **重启即忘**：任务只活在内存里，和「本会话记住的批准」同一个尺度。
 - **有的程序把输出攒在缓冲区**：迟迟看不到日志时，加 `PYTHONUNBUFFERED=1` 或 `stdbuf -oL` 再起一次。
 
+## 联网搜索与看图
+
+两个工具，都要在配置里开或配好才会出现在菜单里（配不出来就**不注册**，模型看不见，不会去调）。
+
+```
+web_search("DeepSeek API 定价")   → 标题 / 链接 / 摘要（不返回正文）
+fetch_url("https://…")            → 该页正文，转成纯文本，截断 8k
+view_image("shot.png", "有没有报错？") → 文字描述
+```
+
+**搜索源不绑定厂商**。`[search] provider` 支持 `deepseek`（复用模型那把 key）、`tavily`、`brave`、`searxng`（自建），`auto` 的默认顺序是：当前 profile 是 DeepSeek 就用它 → 否则看环境里有没有 `TAVILY_API_KEY` → 都没有就不开。
+
+```toml
+[search]
+provider = "auto"        # auto | deepseek | tavily | brave | searxng | off
+max_results = 5
+snippet_budget = 1500    # 所有摘要加起来的字符预算，按条数均分（5 条 → 每条 300）
+# api_key_env = "TAVILY_API_KEY"   # 空 = 按 provider 约定
+# searxng_url = "http://localhost:8080"
+```
+
+摘要按**条数均分预算**，而不是每条固定字数：只拿到 2 条时每条能分到 750 字，拿到 10 条时每条 150 字——两头都不浪费、也不挤爆上下文。截断会**停在句号上**并带 `…`，因为在词中间砍断的半个句子会被模型当成完整事实。摘要里的 markdown 标记（标题井号、链接语法、图片）先压掉再算长度。
+
+Brave 和 SearXNG 不提供正文抓取，`fetch_url` 会自动落到内置抓取器——它带 **SSRF 挡板**（拒绝 loopback / 私网 / link-local / 云元数据，每一跳重定向都重验），只交纯文本。
+
+**看图**走的是"子调用"：`view_image` 自己发一次带图的请求，主对话历史里只留那段文字。原因是协议限制——图片只能出现在 user 消息的 content blocks 里，而工具结果的 role 是 `tool`。
+
+```toml
+[models.flash]
+name = "deepseek-flash"
+vision = "auto"          # auto | true | false（auto = 发一次试试，失败时按服务端报错说清）
+
+[tools]
+vision_profile = ""      # 空 = 用当前模型；主模型是推理型看不了图时，指一个能看的
+```
+
+清晰度**按问题自适应**：问"报错写的什么""标题文字"这类要读字的，自动用 `detail=high`（保原图，约 1024 token 封顶）；问"布局对不对""主色调是什么"用 `detail=low`（下采样 512×512，便宜三到五倍）。工具也可以显式传 `detail`。
+
+用 low 时返回结果末尾会带一句"这是 512×512 缩略图，要看细节再传 high"——模型看到这句才有机会补一次，而不是拿着缩略图硬猜小字。
+
+两个都验证过真机：搜索 / 抓取用 DeepSeek 的 `/v1/tools/*`，看图用 `deepseek-flash`（左红右蓝的测试图，答对了）。
+
 ## 常见坑
 
 - **同一台机器上 `find` 有两个**：在 Git Bash 里 `find` 是 GNU 的（找文件），`cmd` 里是 Windows 的（逐行搜文本）。跑命令的是 bash，所以 `find . -name "*.py"` 才对；`find /c /v ""` 那套是 cmd 语法，在这里会把 `*.py` 当路径（2026-10-19 就这么灌出过 91MB 输出）。不确定就 `command -v find` 看一眼。
@@ -393,6 +438,6 @@ src/agent_harness/
   server.py     WebSocket 会话协议（一个连接 = 一个会话）
   webapp.py     HTTP 面：探活、静态界面托管
   weblaunch.py  TUI 启动时拉起网页端
-tests/          test_s1 ~ test_s11（含 s4b/s4c/s6a/s6b）+ tools / contract / package / turn / approval 等（264 条）
+tests/          test_s1 ~ test_s11（含 s4b/s4c/s6a/s6b）+ tools / contract / package / turn / approval 等（304 条）
 web/            React + TS + Vite 前端
 ```

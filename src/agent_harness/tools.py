@@ -120,7 +120,12 @@ def run_shell(command: str, timeout: float = SHELL_TIMEOUT, background: bool = F
     )
     try:
         out, _ = proc.communicate(timeout=timeout)
-        return f"退出码 {proc.returncode}\n{_decode(out)}"
+        text = _decode(out)
+        if not text.strip():
+            # 「跑成功但没输出」和「根本没执行」长得一模一样（Windows 商店的 python
+            # 就是个 exit 0 且零输出的转发器），至少别让模型把空白读成"执行过了"
+            text = "（命令没有产生任何输出）"
+        return f"退出码 {proc.returncode}\n{text}"
     except subprocess.TimeoutExpired:
         _kill_tree(proc)
         tail = b""
@@ -207,7 +212,11 @@ def task_output(task_id: str) -> str:
     t = tasks.get(task_id)
     if t is None:
         known = ", ".join(x.id for x in tasks.all_tasks())
-        return f"没有任务 {task_id}。已知任务：{known or '（无）'}"
+        return (
+            f"没有任务 {task_id}。已知任务：{known or '（无）'}\n"
+            "任务簿只在内存里：进程重启就清空；而且 TUI 和网页后端是两个进程、各有各的编号——"
+            "在另一个入口起的任务，这里看不到。"
+        )
 
     if t.alive and not _size(t.path):  # 刚启动，输出还没落盘——给它半秒
         time.sleep(0.5)
@@ -317,17 +326,38 @@ def _decode(raw: bytes) -> str:
 
 
 def _read_text(p: Path) -> str:
-    """按常见编码依次尝试；都失败了宽松解码（坏字符变 ?，至少能读能改）。
+    """读文本：按常见编码依次尝试，换行统一成 LF。
 
     死认 utf-8 的代价很实在：碰到 GBK 文件工具直接抛异常，而模型改不了文件编码，
     只能绕开——等于这个文件对它不可读。
+
+    换行归一这条是真踩出来的：Windows 上写出去的是 `\\r\\n`，而模型给的多行 `old`
+    是 `\\n`——一字不差也匹配不上，报「未找到」，人只能怀疑自己看错了文件。
     """
-    return _decode(p.read_bytes())
+    return _decode(p.read_bytes()).replace("\r\n", "\n")
 
 
-def read_file(path: str) -> str:
-    """读取文件内容"""
-    return _read_text(Path(path))
+def _write_text(p: Path, text: str) -> None:
+    """写文本：一律 LF，父目录不存在就建。
+
+    不指定 newline 的话，`Path.write_text` 在 Windows 上会把每个 `\\n` 翻成 `\\r\\n`
+    ——读回来的字节带着 `\\r`，下一次多行编辑又匹配不上，形成"改一次坏一次"的循环。
+    """
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8", newline="\n")
+
+
+def read_file(path: str, offset: int = 1, limit: int | None = None) -> str:
+    """读取文件内容。offset/limit 按行切（1 起始），不给就是全文。"""
+    text = _read_text(Path(path))
+    if offset <= 1 and limit is None:
+        return text
+    lines = text.splitlines(keepends=True)
+    start = max(int(offset), 1) - 1
+    end = start + int(limit) if limit else len(lines)
+    end = min(end, len(lines))
+    # 头部说明让模型知道"还有多少没看"——否则它会把一段当成全文，改错地方
+    return f"（第 {start + 1}-{end} 行，共 {len(lines)} 行）\n" + "".join(lines[start:end])
 
 # ── 改动留痕 ──────────────────────────────────────────────────────
 # 写文件的工具顺手算出 diff，loop 在调用后取走一次。
@@ -364,26 +394,79 @@ def _record_diff(old: str, new: str, path: str) -> None:
 
 
 def write_file(path: str, content: str):
-    """写入文件内容"""
+    """写入文件内容（父目录不存在会建；换行统一成 LF）"""
     p = Path(path)
     old = _read_text(p) if p.exists() else ""  # 覆盖前先留一份，界面才能显示"改了什么"
-    p.write_text(content, encoding="utf-8")
+    content = content.replace("\r\n", "\n")  # 落盘前归一，diff 才不会显示整篇都变了
+    _write_text(p, content)
     _record_diff(old, content, path)
     return f'写入文件 {path} {len(content)} 字符。'
+
+
+def _line_no(text: str, index: int) -> int:
+    return text.count("\n", 0, index) + 1
+
+
+def _occurrence_lines(content: str, old: str) -> list[int]:
+    """old 在文件里出现的每一处，换算成行号。"""
+    out: list[int] = []
+    start = 0
+    while True:
+        i = content.find(old, start)
+        if i < 0:
+            return out
+        out.append(_line_no(content, i))
+        start = i + len(old)
+
+
+def _nearest_line(content: str, old: str) -> tuple[int, float, str] | None:
+    """文件里最像 old 首行的行——「未找到」时唯一有用的线索。"""
+    first = next((ln.strip() for ln in old.splitlines() if ln.strip()), "")
+    if not first:
+        return None
+    best: tuple[int, float, str] | None = None
+    for i, line in enumerate(content.splitlines(), 1):
+        ratio = difflib.SequenceMatcher(None, first, line.strip()).ratio()
+        if best is None or ratio > best[1]:
+            best = (i, ratio, line.strip())
+    return best
+
 
 def edit_file(path: str, old: str, new: str) -> str:
     """精确替换文件里的一段文本（保留其余内容）。
 
-    old 必须在文件中唯一出现——0 次（不匹配）或多次（歧义）都拒绝并回灌原因。
+    old 必须在文件中唯一出现。0 次和多次都拒绝，但要**分清是哪一种**：前者要改 old，
+    后者要缩小范围——报同一句话等于让人自己猜，而猜错的代价是又一轮试错。
+
+    换行两边都归一：模型从别处复制来的 old 可能带 \\r\\n，文件里可能是 \\n。
     """
     p = Path(path)
     content = _read_text(p)
-    count = content.count(old)
-    if count == 0:
-        return "编辑失败：未找到要替换的文本（old 与文件当前内容不匹配，请先读文件确认）。"
-    if count > 1:
-        return f"编辑失败：要替换的文本出现 {count} 次（不唯一），请给出更多上下文使其唯一。"
-    p.write_text(content.replace(old, new), encoding="utf-8")
-    _record_diff(content, content.replace(old, new), path)
+    old = old.replace("\r\n", "\n")
+    new = new.replace("\r\n", "\n")
+
+    if old not in content:
+        near = _nearest_line(content, old)
+        hint = ""
+        if near is not None:
+            line_no, ratio, line = near
+            hint = (
+                f"\n最接近的是第 {line_no} 行（相似度 {ratio:.0%}）：{line[:80]}"
+                if ratio >= 0.6
+                else "\n文件里没有相近的行——先 read_file 确认目标在哪个文件。"
+            )
+        return f"编辑失败：未找到要替换的文本（old 与文件当前内容不匹配）。{hint}"
+
+    lines = _occurrence_lines(content, old)
+    if len(lines) > 1:
+        where = "、".join(str(n) for n in lines[:6]) + ("…" if len(lines) > 6 else "")
+        return (
+            f"编辑失败：要替换的文本出现 {len(lines)} 次（第 {where} 行），"
+            "请带上更多上下文，让它唯一。"
+        )
+
+    updated = content.replace(old, new, 1)
+    _write_text(p, updated)
+    _record_diff(content, updated, path)
     return f"已编辑 {path}（替换 {len(old)} 字符 → {len(new)} 字符）。"
 

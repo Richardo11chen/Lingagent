@@ -27,6 +27,7 @@ class FakeLLM:
     """假模型：第一轮发危险命令动作；后续轮回 done。"""
 
     current = "fake-model"  # SwitchableLLM 门面属性（server 的 session 事件带模型名）
+    current_profile = "default"  # 门面属性：工具装配要按 profile 取搜索/视觉配置
 
     def set_notice(self, fn):  # 门面接口：server 每轮给模型挂「压缩提示」口
         self.notice = fn

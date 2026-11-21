@@ -23,13 +23,33 @@ SCHEMA_NAMES = [s["function"]["name"] for s in TOOL_SCHEMAS]
 
 
 def _callables() -> dict:
-    """模型实际能调到的工具表：基础注册表 + 会话级注入的 spawn_subagent。
+    """模型实际能调到的工具表：基础注册表 + 会话级注入的那几个。
 
-    spawn_subagent 不在 assembly.tools 里（它要闭包持有会话装配），所以这里现造一个
-    只用于取签名的空壳——`make_spawn_tool` 不调用就不会碰 llm / loop。
+    会话级工具（spawn_subagent / web_search / fetch_url / view_image）不在
+    `assembly.tools` 里——它们要闭包持有会话装配。这里现造一份只用于取签名：
+    不调用就不会碰 llm / 网络。
     """
+    from agent_harness.settings import Settings
+    from agent_harness.vision import make_view_image
+    from agent_harness.websearch import make_tools
+
+    class _StubProvider:  # 只要能答出名字，make_tools 就不会碰网络
+        name = "stub"
+        supports_fetch = False
+
+        def search(self, query, n):
+            return []
+
+        def fetch(self, url):
+            return ""
+
+    class _LLM:
+        current_profile = "default"
+
     tools = dict(assembly.tools)
     tools["spawn_subagent"] = make_spawn_tool(llm=None, tools={}, system_prompt="")
+    tools.update(make_tools(_StubProvider()))
+    tools["view_image"] = make_view_image(Settings(), _LLM())
     return tools
 
 

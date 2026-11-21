@@ -130,6 +130,7 @@ def run_turn(
         should_stop=should_stop,
         allow_commands=settings.guardrail_allow,
         workspace=workspace,
+        settings=settings,  # 联网搜索 / 看图要靠它拿 profile 和开关
     )
 
     reply, new_history = agent_loop(

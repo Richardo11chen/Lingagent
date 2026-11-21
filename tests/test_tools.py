@@ -4,7 +4,9 @@ import os
 import sys
 import time
 
-from agent_harness.tools import read_file, run_shell, task_output, task_stop
+from agent_harness.tools import (
+    edit_file, read_file, run_shell, task_output, task_stop, write_file,
+)
 
 
 def _slow_command(seconds: int) -> str:
@@ -29,7 +31,10 @@ def test_tool_menu_matches_registry():  # 菜单与注册表必须同集合：�
 
     menu = {s["function"]["name"] for s in TOOL_SCHEMAS}
     assert set(tools) - menu == set()                # 注册了却没菜单 → 模型永远看不到
-    assert menu - set(tools) == {"spawn_subagent"}   # 菜单多出来的只能是会话级注入的
+    # 菜单多出来的只能是会话级注入的：它们要 llm / settings 才能造，进不了模块级注册表
+    assert menu - set(tools) == {
+        "spawn_subagent", "web_search", "fetch_url", "view_image",
+    }
 
 
 def test_read_file_handles_gbk(tmp_path):  # 不是 utf-8 的文件也能读（Windows 老文件很常见）
@@ -255,3 +260,69 @@ def test_task_log_names_do_not_collide_across_processes(tmp_path, monkeypatch):
     assert a != b
     assert a.name.endswith("-t1.log") and b.name.endswith("-t1.log")
     assert "1700000000" in a.name  # 时间戳仍在最前：按名字排序就是时间序
+
+
+# ---- 文本 I/O：换行、目录、行范围、诊断 ----
+
+
+def test_write_file_writes_lf_even_on_windows(tmp_path):
+    """Windows 上写出 CRLF 是这次实跑踩出来的坑：模型给的多行 old 永远匹配不上。"""
+    p = tmp_path / "a.js"
+    write_file(str(p), "line1\nline2\n")
+    assert b"\r\n" not in p.read_bytes()
+
+
+def test_edit_file_matches_multiline_across_line_endings(tmp_path):
+    """文件是 CRLF、old 是 LF，也要能改；写回统一成 LF。"""
+    p = tmp_path / "a.js"
+    p.write_bytes(b"line1\r\nline2\r\nline3\r\n")  # 模拟别的编辑器留下的老文件
+
+    out = edit_file(str(p), "line1\nline2", "x")
+
+    assert "已编辑" in out
+    assert p.read_bytes() == b"x\nline3\n"
+
+
+def test_edit_file_says_which_failure(tmp_path):
+    """0 次和多次要能分清：前者该改 old，后者该缩小范围——报同一句话等于让人猜。"""
+    p = tmp_path / "a.py"
+    p.write_text("a = 1\nb = 2\na = 1\n", encoding="utf-8", newline="\n")
+
+    miss = edit_file(str(p), "c = 3", "c = 4")
+    assert "未找到" in miss
+
+    dup = edit_file(str(p), "a = 1", "a = 9")
+    assert "2 次" in dup and "第 1、3 行" in dup  # 直接说到哪去找
+
+
+def test_edit_file_hints_the_nearest_line(tmp_path):
+    """「未找到」时至少指出最像的那一行——不然只能整篇重读。"""
+    p = tmp_path / "a.py"
+    p.write_text("def handler(req):\n    return 1\n", encoding="utf-8", newline="\n")
+
+    out = edit_file(str(p), "def handle(req):\n    return 2", "x")
+
+    assert "最接近的是第 1 行" in out
+
+
+def test_write_file_creates_missing_directories(tmp_path):
+    p = tmp_path / "scripts" / "serve.mjs"
+    write_file(str(p), "console.log(1)\n")
+    assert p.exists()
+
+
+def test_read_file_can_read_a_slice(tmp_path):
+    """18KB 的文件不该整篇灌进上下文。"""
+    p = tmp_path / "big.js"
+    p.write_text("".join(f"line{i}\n" for i in range(1, 11)), encoding="utf-8", newline="\n")
+
+    out = read_file(str(p), offset=3, limit=2)
+
+    assert "第 3-4 行，共 10 行" in out  # 说清还有多少没看，否则会把一段当全文
+    assert "line3" in out and "line5" not in out
+
+
+def test_shell_marks_empty_output():
+    """「跑成功但没输出」和「根本没执行」长得一样，至少标出来。"""
+    out = run_shell("true")
+    assert "退出码 0" in out and "没有产生任何输出" in out
