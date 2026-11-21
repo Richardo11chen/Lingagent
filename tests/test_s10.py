@@ -164,3 +164,30 @@ def test_child_stops_when_parent_stops():  # 父按了停止：子 agent 下一�
     spawn = _spawn(llm, tools, should_stop=lambda: len(ran) >= 1)
     agent_loop("父任务", llm, {**tools, "spawn_subagent": spawn}, "sys", max_steps=3)
     assert len(ran) == 1  # 子 agent 跑完第一个动作就停了
+
+
+def test_child_events_can_be_watched_without_polluting_the_answer():
+    """子 agent 的过程默认看不见，但界面要能"看见它在干什么"——不传回调就不显示。"""
+    seen_tools, seen_text = [], []
+    tools = {"probe": lambda: "子工具结果"}
+    calls = {"n": 0}
+
+    def child_llm(messages, menu, on_text=None, on_reasoning=None, system_prompt=None):
+        calls["n"] += 1
+        if on_text:  # 真模型是流式的；假模型也要走同一条回调，否则测不到桥接
+            on_text("子 agent 正在想…")
+        if calls["n"] == 1:
+            return ("", [Action(tool="probe", args={})], "")
+        return ("子任务：完成。", [], "")
+
+    spawn = make_spawn_tool(
+        llm=child_llm, tools=tools, system_prompt="sys", depth=0,
+        on_child_tool=lambda name, args: seen_tools.append(name),
+        on_child_text=lambda chunk: seen_text.append(chunk),
+    )
+
+    answer = spawn("子任务")
+
+    assert seen_tools == ["probe"]        # 工具活动看得见
+    assert "正在想" in "".join(seen_text)  # 正文增量也到得了界面
+    assert "子工具结果" not in answer     # 但父 agent 只拿结论，过程不进它的上下文

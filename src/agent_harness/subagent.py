@@ -52,6 +52,9 @@ def make_spawn_tool(
     should_stop=None,
     allow_commands=(),
     workspace=None,
+    on_child_text=None,
+    on_child_tool=None,
+    on_child_tool_result=None,
 ):
     """构造 spawn_subagent 工具（装配层工厂）。
 
@@ -79,6 +82,9 @@ def make_spawn_tool(
                 should_stop=should_stop,
                 allow_commands=allow_commands,
                 workspace=workspace,
+                on_child_text=on_child_text,
+                on_child_tool=on_child_tool,
+                on_child_tool_result=on_child_tool_result,
             )
         child_tracer = _ChildTracer(tracer, child_depth) if tracer is not None else None
         answer, _child_history = agent_loop(  # 子 agent 的 history 用完即弃（上下文隔离）
@@ -92,6 +98,12 @@ def make_spawn_tool(
             pre_hooks=pre_hooks,
             post_hooks=post_hooks,
             on_hook=on_hook,
+            # 子 agent 的过程默认是"看不见的"：它在自己的上下文里读十几个文件，
+            # 主对话只该看到结论。但**看不见**和**没反应**是两回事——屏幕三十秒
+            # 不动，人分不清是在干活还是卡死。所以把事件桥出去，由界面决定怎么收着显示。
+            on_text=on_child_text,
+            on_tool=on_child_tool,
+            on_tool_result=on_child_tool_result,
             max_steps=max_steps or MAX_STEPS,
             should_stop=should_stop,  # 父按了停止，子 agent 下一步也停
             allow_commands=allow_commands,  # 允许规则跟着一起下去，别让子 agent 反过来问

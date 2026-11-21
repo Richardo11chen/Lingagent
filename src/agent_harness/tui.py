@@ -46,6 +46,13 @@ CTRL_C_WINDOW = 2.0  # 秒
 _auto_read: Callable[[], bool] | None = None
 _auto_toggle: Callable[[], bool] | None = None
 
+# 正在跑的工具（栈：子 agent 的工具压在上面）。栈顶那条带转圈和计时——
+# 工具跑三十秒而屏幕一动不动，人分不清"在跑"还是"卡死"。
+_run_stack: list[dict] = []
+_child_buf = ""  # 子 agent 正在输出的文字（暗色缩进，单独一条缓冲）
+_CHILD_INDENT = "   ⤷ "
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
 
 class _CommandCompleter(Completer):
     """输入 / 就自动列出命令——不用记，也不用先查文档。"""
@@ -296,8 +303,10 @@ def _live_open() -> None:
 
 def begin_stream() -> None:
     """本轮开始：开 Live（唯一输出通道——思考/工具/正文都在里面组合渲染）。"""
-    global _blocks, _reasoning_buf, _text_buf, _in_reasoning, _waiting
+    global _blocks, _reasoning_buf, _text_buf, _in_reasoning, _waiting, _child_buf
     _blocks, _reasoning_buf, _text_buf, _in_reasoning = [], "", "", False
+    _child_buf = ""
+    _run_stack.clear()  # 上一轮如果异常退出，别让转圈留在新一轮里
     _waiting = True  # 请求已发出、还没回音——先挂一个「等」的提示，别让屏幕像死了
     _live_open()
     _refresh()  # 立刻画一帧，否则「等」要等到第一个 chunk 才出现（等于没写）
@@ -315,16 +324,58 @@ def _seal_current() -> None:
     _in_reasoning = False
 
 
+def _push_run(name: str, detail: str, prefix: str = "⚙ ") -> None:
+    """工具开始跑：压栈并让转圈出现。栈顶是"此刻最里面在干什么"。"""
+    _run_stack.append(
+        {"name": name, "detail": detail, "prefix": prefix, "started": time.time()}
+    )
+    _refresh()
+
+
+def _pop_run() -> None:
+    if _run_stack:
+        _run_stack.pop()
+    _refresh()
+
+
+def _flush_child() -> None:
+    """把子 agent 攒着的文字封成一条暗色块（换行时调用，保持先后顺序）。"""
+    global _child_buf
+    if _child_buf:
+        _blocks.append(Text(_CHILD_INDENT + _child_buf.rstrip(), style="dim"))
+        _child_buf = ""
+
+
+def _running_line() -> Text | None:
+    """当前在跑的那一行：转圈帧 + 名字 + 已跑秒数。没有在跑就返回 None。
+
+    不带参数详情——紧挨着上面那行「⚙ name: detail」已经写过了，每帧再重复一遍
+    会变成两块几乎一样的文字叠在一起，反而更难读。
+    """
+    if not _run_stack:
+        return None
+    top = _run_stack[-1]
+    elapsed = time.time() - top["started"]
+    frame = _SPINNER[int(elapsed * 8) % len(_SPINNER)]  # 帧随时间变，Live 8fps 重绘就是动画
+    return Text(f"  {frame} {top['prefix']}{top['name']} · {int(elapsed)}s", style="dim")
+
+
 def _refresh() -> None:
     if not _live:
         return
     current = []
     if _waiting and not _blocks and not _reasoning_buf and not _text_buf:
-        current.append(Text("⋯ 等待模型响应", style="dim"))  # 第一个字到之前，给个活着的信号
+        frame = _SPINNER[int(time.time() * 8) % len(_SPINNER)]
+        current.append(Text(f"{frame} 等待模型响应", style="dim"))  # 第一个字到之前，给个活着的信号
     if _reasoning_buf:
         current.append(Text("💭 " + _reasoning_buf, style="dim italic"))
     if _text_buf:
         current.append(Markdown("● " + _text_buf))
+    if _child_buf:
+        current.append(Text(_CHILD_INDENT + _child_buf, style="dim"))
+    running = _running_line()
+    if running is not None:
+        current.append(running)
     _live.update(Group(*_blocks, *current))
 
 
@@ -350,8 +401,11 @@ def stream_chunk(chunk: str) -> None:
 
 
 def end_stream() -> None:
-    global _live, _waiting
+    global _live, _waiting, _child_buf
     _waiting = False
+    _flush_child()  # 没封行的子 agent 文字别丢
+    _child_buf = ""
+    _run_stack.clear()
     _seal_current()
     if _live:
         _live.stop()  # 停 Live——内容留在屏幕
@@ -456,6 +510,29 @@ def show_tool(name: str, args: dict | None = None) -> None:
     if len(detail) > 50:
         detail = detail[:50] + "…"
     _stream_line(Text(f"⚙  {name}{': ' + detail if detail else ''}", style="dim"))
+    _push_run(name, detail)  # 从这一刻起转圈，直到 show_tool_result
+
+
+def child_text(chunk: str) -> None:
+    """子 agent 的正文增量：暗色缩进，和主对话分开但看得见它在写什么。"""
+    global _child_buf
+    _child_buf += chunk
+    _refresh()
+
+
+def child_tool(name: str, args: dict | None = None) -> None:
+    """子 agent 开始跑一个工具：先把手上的文字封行，再压栈（转圈跟着往下沉一层）。"""
+    detail = tool_detail(args)
+    if len(detail) > 40:
+        detail = detail[:40] + "…"
+    _flush_child()
+    _stream_line(Text(f"{_CHILD_INDENT}⚙ {name}{': ' + detail if detail else ''}", style="dim"))
+    _push_run(name, detail, prefix="⤷ ⚙ ")
+
+
+def child_tool_result(payload: dict) -> None:
+    """子 agent 的工具结束：只摘转圈。结果不进主流——它属于子 agent 自己的上下文。"""
+    _pop_run()
 
 
 def show_notice(text: str) -> None:
@@ -479,6 +556,7 @@ def show_tool_result(payload: dict) -> None:
     或网页详情看。失败时带上原因首行，否则人还得回滚屏幕找哪一步出了什么问题。
     """
     status = payload.get("status") or "ok"
+    _pop_run()  # 先摘转圈：这一条工具结束了，下面要么补结果行、要么什么都不说
     bits: list[str] = []
     if status == "denied":
         bits.append("驳回")

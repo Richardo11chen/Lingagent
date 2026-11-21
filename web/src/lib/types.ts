@@ -84,6 +84,7 @@ export type Msg =
       diff?: string
       added?: number
       removed?: number
+      at?: number // 收到「开始」的本地时刻：body 还是 undefined 时用它算"已跑多久"
     }
   | { kind: 'reasoning'; text: string }
   | { kind: 'hook'; text: string }

@@ -31,6 +31,10 @@ class TurnCallbacks:
     on_tool_result: Callable[[dict], None] | None = None  # 工具结束（状态 / 耗时 / 结果 / diff）
     on_hook: Callable[[str, str], None] | None = None     # 策略拦下（by, reason）
     on_notice: Callable[[str], None] | None = None        # 压缩这类"背后发生了事"的一句话
+    # 子 agent 的过程：默认不显示，但界面可以选择折叠显示——"看不见"和"没反应"是两回事
+    on_child_text: Callable[[str], None] | None = None
+    on_child_tool: Callable[[str, dict], None] | None = None
+    on_child_tool_result: Callable[[dict], None] | None = None
 
 
 @dataclass
@@ -127,6 +131,9 @@ def run_turn(
         tracer=tracer,
         max_steps=settings.max_steps,
         on_hook=cb.on_hook,
+        on_child_text=cb.on_child_text,
+        on_child_tool=cb.on_child_tool,
+        on_child_tool_result=cb.on_child_tool_result,
         should_stop=should_stop,
         allow_commands=settings.guardrail_allow,
         workspace=workspace,

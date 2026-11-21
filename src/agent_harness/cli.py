@@ -317,6 +317,9 @@ def main() -> None:
                         on_reasoning=tui.reasoning_chunk,
                         on_hook=tui.show_hook,
                         on_notice=tui.show_notice,
+                        on_child_text=tui.child_text,
+                        on_child_tool=tui.child_tool,
+                        on_child_tool_result=tui.child_tool_result,
                     ),
                     should_stop=lambda: soft.requested,
                 )

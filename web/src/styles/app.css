@@ -270,6 +270,32 @@
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--text-3);
+}
+
+/* 思考过程默认收起：它经常比回答长三倍，铺开会把正文冲出屏幕 */
+.reasoning-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.reasoning-head:hover {
+  color: var(--text-2);
+}
+
+.reasoning-size {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-4);
+}
+
+.reasoning-body {
+  margin-top: 4px;
   white-space: pre-wrap;
 }
 
@@ -739,7 +765,7 @@
   color: var(--accent);
 }
 
-/* ── 工具行尾部：改了多少 / 状态 ── */
+/* ── 工具行尾部：运行中 / 改了多少 / 状态 ── */
 .tool-tail {
   margin-left: auto;
   display: flex;
@@ -748,6 +774,40 @@
   flex: none;
   font-family: var(--font-mono);
   font-size: 11.5px;
+}
+
+/* 「在跑」和「卡住」看起来必须不一样：转圈 + 秒数 */
+.tool-running {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+}
+
+.spin {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--border-3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* 等你点头：不是转圈，是一个静止的提示——它没在跑，它在停下等你 */
+.tool-waiting {
+  color: var(--warn);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation-duration: 3s;
+  }
 }
 
 .delta-add {

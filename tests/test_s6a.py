@@ -452,3 +452,40 @@ def test_tool_result_line_says_what_changed(capsys):
 
     tui.show_tool_result({"status": "error", "ms": 5, "result": "boom 执行出错（OSError）：磁盘满了"})
     assert "失败" in capsys.readouterr().out
+
+
+def test_tool_spinner_tracks_what_is_running(monkeypatch):
+    """工具跑起来要有转圈和计时——屏幕三十秒不动，人分不清在干活还是卡死。"""
+    from agent_harness import tui
+
+    tui._run_stack.clear()
+    tui.show_tool("run_shell", {"command": "npm test"})
+
+    line = tui._running_line()
+    assert line is not None
+    assert "run_shell" in line.plain
+    assert "npm test" not in line.plain  # 命令详情在上一行，转圈行不重复
+    assert line.plain.rstrip().endswith("s")  # 带已跑秒数
+
+    # 子 agent 的工具压在上面：显示的是最里面那个
+    tui.child_tool("read_file", {"path": "a.py"})
+    assert "read_file" in tui._running_line().plain
+
+    tui.child_tool_result({"status": "ok"})
+    assert "run_shell" in tui._running_line().plain  # 子工具结束，回到父的
+
+    tui.show_tool_result({"status": "ok", "ms": 10})
+    assert tui._running_line() is None  # 结束就没有转圈了
+
+
+def test_child_text_is_indented_and_flushed():
+    """子 agent 的输出要能看见，但不能跟主对话混在一起。"""
+    from agent_harness import tui
+
+    tui._blocks, tui._child_buf = [], ""
+    tui.child_text("正在读配置文件")
+    tui._flush_child()
+
+    assert tui._blocks and tui._blocks[-1].plain.startswith(tui._CHILD_INDENT)
+    assert "正在读配置文件" in tui._blocks[-1].plain
+    assert tui._child_buf == ""

@@ -56,7 +56,8 @@ tools = {
 def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
                         max_steps: int | None = None, on_hook=None,
                         should_stop=None, allow_commands=(), workspace=None,
-                        settings=None) -> dict:
+                        settings=None, on_child_text=None, on_child_tool=None,
+                        on_child_tool_result=None) -> dict:
     """每个会话的工具表：基础工具 + spawn_subagent（闭包持有该会话的装配）。
 
     模型 / 审批 / trace 都是会话级的——所以 spawn 不能一次性注册进模块级 tools。
@@ -79,6 +80,9 @@ def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
         should_stop=should_stop,
         allow_commands=allow_commands,
         workspace=workspace or WORKSPACE,  # 子 agent 的 shell 也要能提示「引用了工作区外」
+        on_child_text=on_child_text,
+        on_child_tool=on_child_tool,
+        on_child_tool_result=on_child_tool_result,
     )
     if settings is not None:
         from .vision import make_view_image

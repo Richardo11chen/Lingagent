@@ -165,6 +165,11 @@ async def ws_endpoint(ws: WebSocket):
         def on_hook(by: str, reason: str) -> None:
             send({"type": "hook", "by": by, "reason": reason})
 
+        def on_child_tool(name: str, args: dict) -> None:
+            """子 agent 开始跑工具：一行 notice。前端不用改，也能看见它在干活。"""
+            detail = tool_detail(args)[:40]
+            send({"type": "notice", "text": f"⤷ {name}{'：' + detail if detail else ''}"})
+
         def on_tool_result(payload: dict) -> None:
             """工具结束：把状态、耗时、输出和改动推给前端。
 
@@ -210,6 +215,9 @@ async def ws_endpoint(ws: WebSocket):
                 on_tool_result=on_tool_result,
                 on_hook=on_hook,
                 on_notice=lambda text: send({"type": "notice", "text": text}),
+                # 子 agent 的工具活动用 notice 带出来：前端不用改也能看见"它在干活"。
+                # 正文增量不转发——碎片太多，会把主流刷满；结论本来就会回给父 agent。
+                on_child_tool=on_child_tool,
             ),
             should_stop=stop_event.is_set,
         )

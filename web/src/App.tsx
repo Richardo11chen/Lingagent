@@ -134,7 +134,12 @@ export default function App() {
           break
         case 'tool':
           setPending(false)
-          setMsgs((ms) => [...ms, { kind: 'tool', name: ev.name, detail: ev.detail }])
+          // at：记下本地时刻。body 还是 undefined 时，界面据此显示"运行中 · 12s"——
+          // 服务端不用发心跳，前端自己数秒。
+          setMsgs((ms) => [
+            ...ms,
+            { kind: 'tool', name: ev.name, detail: ev.detail, at: Date.now() },
+          ])
           break
         case 'tool_result':
           // 回填到刚刚那一行（同名的最后一条还没结果的）——事件顺序是「开始 → 结束」，
@@ -358,7 +363,13 @@ export default function App() {
           </button>
         </div>
 
-        <ChatArea msgs={msgs} pending={pending} selected={selectedTool} onSelect={setSelectedTool} />
+        <ChatArea
+          msgs={msgs}
+          pending={pending}
+          waitingApproval={approval !== null}
+          selected={selectedTool}
+          onSelect={setSelectedTool}
+        />
 
         {approval && (
           <div className="approval">
