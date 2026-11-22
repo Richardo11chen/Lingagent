@@ -106,7 +106,7 @@ def test_child_inherits_approver():
     assert asked and "rm -rf" in asked[0]  # 同一个审批者：子 agent 的危险动作照样问人
 
 
-def test_child_receives_own_system_prompt():  # 子 agent 的只读约束真的送到模型（曾经空转）
+def test_child_receives_own_system_prompt():  # 子 agent 的附加约束真的送到模型（曾经空转）
     tools = {"probe": lambda: "ok"}
     llm = RouteLLM({
         "父任务": [Action(tool="spawn_subagent", args={"subtask": "子任务"})],
@@ -118,7 +118,8 @@ def test_child_receives_own_system_prompt():  # 子 agent 的只读约束真的�
     assert llm.prompts["父任务"] == "sys"
     child_prompt = llm.prompts["子任务"]
     assert child_prompt.startswith("sys")
-    assert "默认只读" in child_prompt and "明确要求修改文件" in child_prompt
+    # 附加的不是"只读"（已撤），而是隔离带来的必要条件：它看不到父对话
+    assert "看不到父对话" in child_prompt and "自包含" in child_prompt
 
 
 def test_child_gets_all_tools():  # 用户拍板：工具面全量，只读靠提示词默认约束
