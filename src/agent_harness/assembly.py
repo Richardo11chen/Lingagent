@@ -43,7 +43,7 @@ def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
                         should_stop=None, allow_commands=(), workspace=None,
                         settings=None, on_child_text=None, on_child_tool=None,
                         on_child_tool_result=None) -> dict:
-    """每个会话的工具表：基础工具 + spawn_subagent（闭包持有该会话的装配）。
+    """每个会话的工具表：基础工具 + 联网/看图（按配置）+ spawn_subagent。
 
     模型 / 审批 / trace 都是会话级的——所以 spawn 不能一次性注册进模块级 tools。
     workspace：给子 agent 判「命令引用界外」用的根，None = 本进程的工作目录。
@@ -51,24 +51,6 @@ def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
     也不要装一个每次调用都报「没配置」的工具。
     """
     session_tools = dict(tools)
-    session_tools["spawn_subagent"] = make_spawn_tool(
-        llm=llm,
-        tools=tools,
-        system_prompt=system_prompt,
-        approver=approver,
-        tracer=tracer,
-        pre_hooks=PRE_HOOKS,
-        post_hooks=POST_HOOKS,
-        depth=0,
-        max_steps=max_steps,
-        on_hook=on_hook,
-        should_stop=should_stop,
-        allow_commands=allow_commands,
-        workspace=workspace or WORKSPACE.root,  # 子 agent 的 shell 也要能提示「引用了工作区外」
-        on_child_text=on_child_text,
-        on_child_tool=on_child_tool,
-        on_child_tool_result=on_child_tool_result,
-    )
     if settings is not None:
         from .vision import make_view_image
         from .websearch import build_provider, make_tools
@@ -88,6 +70,29 @@ def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
                 )
             )
         session_tools["view_image"] = make_view_image(settings, llm)
+    # 子 agent 拿到的是"父的这份表，减掉 spawn"：父能搜、能看图，子也能。
+    # 传快照而不是传 session_tools 本身——make_spawn_tool 会一直持有这个 dict，
+    # 而下一行才往里加 spawn；传引用的话子 agent 的 dict(tools) 里也带着 spawn，
+    # 深度上限就形同虚设了。
+    child_base = dict(session_tools)
+    session_tools["spawn_subagent"] = make_spawn_tool(
+        llm=llm,
+        tools=child_base,
+        system_prompt=system_prompt,
+        approver=approver,
+        tracer=tracer,
+        pre_hooks=PRE_HOOKS,
+        post_hooks=POST_HOOKS,
+        depth=0,
+        max_steps=max_steps,
+        on_hook=on_hook,
+        should_stop=should_stop,
+        allow_commands=allow_commands,
+        workspace=workspace or WORKSPACE.root,  # 子 agent 的 shell 也要能提示「引用了工作区外」
+        on_child_text=on_child_text,
+        on_child_tool=on_child_tool,
+        on_child_tool_result=on_child_tool_result,
+    )
     return session_tools
 
 

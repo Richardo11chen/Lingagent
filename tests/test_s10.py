@@ -137,6 +137,33 @@ def test_child_gets_all_tools():  # 用户拍板：工具面全量，只读靠�
     assert "write_file" in child_menu and "edit_file" in child_menu  # 全量工具（翻案后）
 
 
+def test_child_inherits_the_session_table_not_just_the_base_one():
+    """子 agent 和父是**同一份**工具表（除 spawn）：父能搜、能看图，子也能。
+
+    以前传的是基础表，于是配了搜索的父 agent 能搜、它派出去的子 agent 不能——
+    而子 agent 干的恰恰多是"查清楚再回来"的活。
+    """
+    from agent_harness.assembly import build_session_tools
+    from agent_harness.settings import Settings
+
+    seen: list[list[str]] = []
+
+    class FakeLLM:
+        current_profile = "default"
+
+        def __call__(self, messages, tools, **kw):
+            seen.append([s["function"]["name"] for s in tools])
+            return ("查完了", [], "")
+
+    session_tools = build_session_tools(FakeLLM(), "sys", settings=Settings())
+    session_tools["spawn_subagent"]("子任务")
+
+    child_menu = set(seen[0])
+    assert "view_image" in child_menu  # 会话级工具跟着下去了
+    assert "read_file" in child_menu and "write_file" in child_menu
+    assert "spawn_subagent" not in child_menu  # 深度到顶：子 agent 不能再派
+
+
 def test_trace_marks_child_events_with_sub(tmp_path):
     p = tmp_path / "t.trace.jsonl"
     tools = {"probe": lambda: "ok"}

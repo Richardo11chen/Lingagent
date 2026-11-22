@@ -59,8 +59,9 @@ def make_spawn_tool(
     """构造 spawn_subagent 工具（装配层工厂）。
 
     depth：**使用这个工具的** agent 所在层级（父 = 0）；子 agent 跑在 depth + 1。
-    tools：基础工具表（不含 spawn）——到顶时子 agent 的工具表里不会再挂 spawn。
-    子 agent 拿**全量基础工具**；只读是系统提示词的默认约束（用户拍板，2026-10-19）。
+    tools：父那一层的工具表**减去 spawn**——子 agent 和父看到同一份工具（联网、看图都在），
+    只是多了"到顶不能再派"。父的装配由 `assembly.build_session_tools` 负责切这一刀。
+    只读是系统提示词的默认约束，不是工具面（用户拍板，2026-10-19）。
     """
 
     def spawn_subagent(subtask: str) -> str:
