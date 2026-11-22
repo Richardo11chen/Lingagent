@@ -12,6 +12,7 @@ TOOL_SCHEMAS: list[dict] = [
             "name": "read_file",
             "description": (
                 "读取文件内容。大文件用 offset/limit 分段读，别把几万行一次灌进上下文。"
+                "**只读文本**——图片、截图、PDF、二进制读不了；要看图用 view_image。"
             ),
             "parameters": {
                 "type": "object",
