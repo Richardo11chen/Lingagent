@@ -11,13 +11,13 @@ TOOL_SCHEMAS: list[dict] = [
         "function": {
             "name": "read_file",
             "description": (
-                "读取文件内容。大文件用 offset/limit 分段读，别把几万行一次灌进上下文。"
-                "**只读文本**——图片、截图、PDF、二进制读不了；要看图用 view_image。"
+                "读取文本文件。大文件用 offset/limit 分段读，别把几万行一次灌进上下文。"
+                "**图片、PDF、二进制读不了**——要看图用 view_image。"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "文件路径（工作目录内；优先写相对路径）"},
+                    "path": {"type": "string", "description": "文件路径（工作目录内）"},
                     "offset": {
                         "type": "integer",
                         "description": "从第几行开始（1 起始，默认 1）",
@@ -35,7 +35,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "edit_file",
-            "description": "精确替换文件里的一段文本（old→new），保留其余内容——修改现有代码的首选。old 必须在文件中唯一出现（先 read_file 拿到准确原文）。old 不唯一时，扩大 old 的范围（带上前后几行）直到唯一，不要退回 write_file。",
+            "description": "精确替换一段文本（old→new），保留其余内容——改现有代码的首选。old 必须与文件一字不差且唯一（先 read_file 拿准原文）；出现多次就带上前后几行扩大范围，别退回 write_file。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -66,7 +66,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "run_shell",
-            "description": "执行 shell 命令（bash，工作目录固定为项目根；每条命令都是独立的 shell——cd 只对当前这条生效，要换目录就 `cd x && …`）。查看文件列表、跑构建等。只读命令直接执行；会改动文件、执行程序、访问网络或无法判定的命令会先询问用户。不会自己结束的命令（dev server / watch）加 background=true。",
+            "description": "执行 shell 命令（bash，工作目录固定为项目根；每条命令都是独立的 shell——cd 只对当前这条生效，换目录用 `cd x && …`）。只读命令直接执行；会改动文件、执行程序、访问网络或无法判定的命令会先询问用户。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -125,7 +125,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "run_tests",
-            "description": "跑本项目的测试并返回红绿报告（自动认 pytest / npm test / go test / cargo test / make test）。绿了只回一句话，红了只给失败清单和详情——比 run_shell 省上下文。红了先分清是代码错还是测试错：代码错改代码；测试本身错或用例过时，说清楚，别硬改测试让它变绿；环境跑不起来就说清卡在哪，别假装通过。认不出测试入口时会明说，让你改用 run_shell。",
+            "description": "跑本项目的测试并返回红绿报告（自动认 pytest / npm test / go test / cargo test / make test）。绿了只回一句话，红了只给失败清单和详情——比 run_shell 省上下文。红了先分清是代码错还是测试错：别为了让测试变绿去改测试；环境跑不起来就说清卡在哪，别假装通过。认不出测试入口会明说，改用 run_shell。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -171,7 +171,7 @@ TOOL_SCHEMAS: list[dict] = [
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "搜索词；带上版本号或报错原文效果更好"},
-                    "n": {"type": "integer", "description": "要几条结果（1-10，默认看配置）"},
+                    "n": {"type": "integer", "description": "要几条结果（1-10；不传就用配置里的条数）"},
                 },
                 "required": ["query"],
             },
@@ -200,8 +200,8 @@ TOOL_SCHEMAS: list[dict] = [
             "name": "view_image",
             "description": (
                 "看一张本地图片，返回文字描述。适合判断界面渲染对不对、截图里有没有报错、"
-                "图表趋势是什么。图片会被下采样，读不清小字，也做不了像素级比对——"
-                "那种需求写脚本算指标。"
+                "图表趋势是什么。默认下采样，读不清小字——要读小字用 detail=high；"
+                "像素级比对别找它，写脚本算指标。"
             ),
             "parameters": {
                 "type": "object",
