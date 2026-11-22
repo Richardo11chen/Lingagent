@@ -249,7 +249,7 @@ export default function App() {
   const send = () => {
     const text = input.trim()
     if (!text || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
-    if (running) return // 上一轮还没完——服务端也会忽略，这里先在按钮上挡住
+    if (running) return // 上一轮还没完——服务端也会拒（并回一句提示），这里先在按钮上挡住
     if (text === '/model') {
       wsRef.current.send(JSON.stringify({ type: 'models_request' }))
       setInput('')

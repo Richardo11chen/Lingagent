@@ -49,6 +49,33 @@ class SessionBusy(RuntimeError):
     """会话正被一轮占着，命令被拒。消息就是 `BUSY_MESSAGE`。"""
 
 
+class ApprovalSlot:
+    """一条待答的审批：**runtime 持有它，UI 只负责把答案填回来**。
+
+    为什么放在 runtime 而不是 UI：这个槽的生命周期跟"一轮"绑定，不是跟"一次渲染"绑定。
+    放 UI 里的话，断线、用户按停、超时三条路径各要记得清一次——漏一次就是"线程永远挂着"，
+    而现象是"关掉页面后进程不退"，很难追。
+
+    UI 那边的分工不变：**怎么问**（终端按键 / 网页卡片）仍归 UI，这里只管"谁在等、答了没"。
+    """
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+        self._decision = "deny"  # 没答就是驳回：宁可停，不要默认放行
+
+    def answer(self, approved: bool, remember: bool = False) -> None:
+        if approved:
+            self._decision = "always" if remember else "approve"
+        else:
+            self._decision = "deny"
+        self._event.set()
+
+    def wait(self, timeout: float | None) -> tuple[str, bool]:
+        """返回 `(决定, 是否超时)`。超时按驳回——别让一轮永远挂着。"""
+        answered = self._event.wait(timeout)
+        return self._decision, not answered
+
+
 @dataclass(frozen=True)
 class SessionView:
     """会话此刻长什么样——UI 拿去渲染，不要从运行时里抠细节。"""
@@ -137,6 +164,12 @@ class SessionRuntime:
         self.approver = approver
         self.workspace = Path(workspace)
         self._lock = threading.Lock()
+        # 「这一轮停不停」归这里：UI 只调 stop()，不再自己传 should_stop 进来。
+        # 每轮开头清一次（见 run），否则上一轮按下的停会立刻掐掉下一轮。
+        self._stop = threading.Event()
+        # 当前待答的审批（同一时刻最多一条：一轮只跑一个）
+        self._slot: ApprovalSlot | None = None
+        self._slot_lock = threading.Lock()
         # 上下文用量的分母要用「这一轮真的发出去的那份提示词」，所以缓存一份；
         # 每轮跑完用 TurnResult.system_prompt 更新（谁读提示词只能有一处）。
         self._system_prompt = build_system_prompt()
@@ -251,24 +284,63 @@ class SessionRuntime:
         """自动批准也留账。屏幕上那行会滚走，trace 才是事后能查的地方。"""
         self.tracer.emit("auto", command=command, reason=reason)
 
+    # ---- 停 / 审批：这两样原来攥在 UI 手里 ----
+
+    def stop(self) -> None:
+        """请求停：loop 在**每步开始**检查一次，所以是"跑完手里这一步就停"。
+
+        硬中断不在这里——那是控制台信号的事（终端按两次 Ctrl+C）。这里只表达
+        "不再发起新的一步，已完成的部分照常落盘"。
+        """
+        self._stop.set()
+
+    def begin_approval(self) -> ApprovalSlot:
+        """开始等一条审批。UI 拿到槽之后：推/画问题，然后用 `answer_approval` 作答。"""
+        slot = ApprovalSlot()
+        with self._slot_lock:
+            self._slot = slot
+        return slot
+
+    def answer_approval(self, approved: bool, remember: bool = False) -> bool:
+        """作答。返回 False = 当前没有待答的（迟到的答复，丢掉就好）。
+
+        答完就把槽摘掉：第二个答复不该还能改第一次的结论。
+        """
+        with self._slot_lock:
+            slot, self._slot = self._slot, None
+        if slot is None:
+            return False
+        slot.answer(approved, remember)
+        return True
+
+    def deny_pending_approval(self) -> None:
+        """没人能答了（断线 / 用户按停）：按驳回放掉，别让线程挂到超时。
+
+        这条路径原来分散在两个入口里各写一遍，而它恰恰是"忘了就泄漏一个线程"的地方。
+        """
+        with self._slot_lock:
+            slot, self._slot = self._slot, None
+        if slot is not None:
+            slot.answer(False)
+
     # ---- 一轮 ----
 
-    def run(
-        self,
-        goal: str,
-        *,
-        callbacks: TurnCallbacks | None = None,
-        should_stop=None,
-    ) -> TurnResult:
+    def run(self, goal: str, *, callbacks: TurnCallbacks | None = None) -> TurnResult:
         """跑一轮，成功后把这一轮新增的消息落盘；失败原样抛出去（这一轮不记）。
 
         落盘放在这里而不是各界面：现在的写法是"跑完 → 手动切 history[old_len:] → 存"，
         两边都写过一遍，而且都依赖于"跑失败时 history 没被改写"这个约定。
         约定只该由懂它的人守——这就是这里。
+
+        `should_stop` 不再由调用方传：停的旗子在 `stop()` 那边，每轮开头清一次——
+        上一轮按下的停不该掐掉下一轮。
         """
         with self._claim():
+            self._stop.clear()
             old_len = len(self.session.history)
-            result = self.session.run(goal, callbacks=callbacks, should_stop=should_stop)
+            result = self.session.run(
+                goal, callbacks=callbacks, should_stop=self._stop.is_set
+            )
             self._system_prompt = result.system_prompt
             # 只有跑到这里才落盘：中途抛异常时 history 未被替换，"这一轮不记"是刻意的
             save_messages(self.workspace, self.session_id, self.session.history[old_len:])

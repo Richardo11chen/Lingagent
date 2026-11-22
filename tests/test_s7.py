@@ -89,6 +89,17 @@ def test_stop_on_exit_defaults_to_true(tmp_path):
     assert load_settings(p).web_stop_on_exit is True
 
 
+def test_web_autostart_defaults_to_false(tmp_path):
+    """进 TUI 不自动拉网页端（默认关）。
+
+    两端各持一份 history 副本，同时往一个会话写会让因果错乱——所以"顺手拉起"这件事
+    不能是默认行为。要网页就单开 `lingan -web`，想让它自动起再显式打开。
+    """
+    p = tmp_path / "c.toml"
+    p.write_text("[loop]\nmax_steps = 3\n", encoding="utf-8")
+    assert load_settings(p).web_autostart is False
+
+
 def test_private_params_fallback(tmp_path):  # 私有参数非法值一律回退 off（= 不传）——别瞎猜厂商语义
     p = tmp_path / "c.toml"
     p.write_text('[models.x]\nreasoning_effort = "none"\nthinking = true\n', encoding="utf-8")

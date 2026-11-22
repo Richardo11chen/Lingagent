@@ -439,12 +439,16 @@ def test_cli_repl_runs_one_turn_through_the_shared_orchestrator(monkeypatch, tmp
 
 
 def test_soft_stop_first_press_waits_second_press_kills(capsys):
-    """软中断：第一次只置位（本步跑完再停），第二次才抛 KeyboardInterrupt。"""
+    """软中断：第一次只把「停」递出去（本步跑完再停），第二次才抛 KeyboardInterrupt。
+
+    「停」的状态本身在 runtime 里，这里守的是**按下顺序**：第一次调回调、第二次抛。
+    """
     from agent_harness.cli import SoftStop
 
-    soft = SoftStop()
+    stopped: list[int] = []
+    soft = SoftStop(lambda: stopped.append(1))
     soft()  # 第一次
-    assert soft.requested is True
+    assert stopped == [1]  # 请求递到了 runtime，而不是留在自己身上
     assert "跑完这一步就停" in capsys.readouterr().err
 
     with pytest.raises(KeyboardInterrupt):
@@ -452,7 +456,7 @@ def test_soft_stop_first_press_waits_second_press_kills(capsys):
 
     soft.reset()  # 下一轮重新开始计数
     soft()
-    assert soft.requested is True
+    assert stopped == [1, 1]
 
 
 def test_tool_result_line_says_what_changed(capsys):

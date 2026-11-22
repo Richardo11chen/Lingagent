@@ -78,7 +78,11 @@ class Settings:
     # 网页端只接受本机来源的浏览器连接（防"任意网页连 ws://127.0.0.1"）。
     # 要从局域网/手机访问时，把你的访问地址写进来，如 ["http://192.168.1.5:8000"]。
     extra_origins: list[str] = field(default_factory=list)
-    web_autostart: bool = True  # 进 TUI 时自动把网页端（后端 + 前端 dev server）拉起来
+    # 进 TUI 时自动把网页端（后端 + 前端 dev server）拉起来。
+    # 默认关：两端各持一份 history 副本，同时往同一个会话写会让"因果"错乱——文件里
+    # 顺序正常，但后一轮是在不知道前一轮的情况下生成的。要两边都用就显式打开，
+    # 并记住一条：同一时刻只在一端发指令。
+    web_autostart: bool = False
     # 退 TUI 时收掉这次自己拉起的进程（端口上原有的不动）。False = 网页端活得比 TUI 久
     web_stop_on_exit: bool = True
     # 收之前先等网页上正在跑的那一轮跑完（秒）。0 = 不等，直接关

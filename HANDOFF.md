@@ -12,7 +12,7 @@
 uv sync                          # 装依赖（Python >= 3.11，本机 .python-version 是 3.14）
 uv run pytest -q                 # 全量测试（当前 323 passed + 1 skipped）
 uv run ruff check src tests      # 静态检查
-uv run lingan                    # 启动（TUI + 自动拉起网页端）
+uv run lingan                    # 启动（终端界面；网页端不再自动拉起）
 uv run lingan -web               # 只起后端（http://127.0.0.1:8000）
 ```
 
@@ -114,6 +114,7 @@ uv run lingan -web               # 只起后端（http://127.0.0.1:8000）
 | LLM 摘要旧历史 | 缓存命中 0.02 元/M、未命中 1 元/M，**差 50 倍**。摘要重写前缀 = 每轮全量重算 |
 | 精确 token 计数（tiktoken） | 那是 OpenAI 的 BPE，中文误差 30%。真正的问题是"哪段该丢" |
 | mypy | 8k 行一次性严格检查只产出噪音，先把 ruff 用起来 |
+| **同一会话并发跑两轮** | **永不支持**，不是"还没做"（别当 backlog）。history 是整份替换（`turn.py` 的 `history[:] = result.history`），两轮都从同一份快照出发，后完成的把前一轮整个覆盖；`tool_calls` 要 N 调用 ↔ N 回应且紧邻，交错就 400 且 `_repair_tool_pairs` 只补不排，会话永久坏掉；审批槽只有一格，第二轮会覆盖第一轮的 Event，第一轮卡到超时；trace 同一文件、落盘切片会重。排队串行是另一回事，也没做——跑着的时候再敲一句，多半是"我改主意了" |
 
 ### 5.10 写盘只走 `apply_change`
 
@@ -164,7 +165,7 @@ curl -s https://api.github.com/repos/Richardo11chen/Lingagent/commits/main
 
 - 已发布：`0.1.6`（PyPI，`Requires-Python: >=3.11`）
 - 已提交未发布：`a742db7`（WS token + 工作区实体化）、`5b2da04`（P0 diff 意图化）、本条（P1 会话运行时）
-- 测试：337 passed + 1 skipped（skipped 是仅 POSIX 有效的进程树测试）
+- 测试：338 passed + 1 skipped（skipped 是仅 POSIX 有效的进程树测试）
 - CI：`.github/workflows/publish.yml`，4 个 test job（windows/ubuntu × 3.11/3.14）+ 1 个 publish
 
 ## 8. 待做项
@@ -213,15 +214,37 @@ curl -s https://api.github.com/repos/Richardo11chen/Lingagent/commits/main
 
 **已知边界**：`SessionRuntime` 持有 `_lock`，所以"一轮"的最小粒度是整个 turn。真要做"打断当前轮并立刻开新会话"得等 P2 的 mailbox。
 
-### P2：actor 化（"连店面也改成一个柜台"）
+### P2：actor 化 —— 拆成三段，只有第二段要等条件
 
 把 `SessionRuntime` 变成 mailbox + 事件流：UI 投递命令、渲染事件，不再"问能不能做"。
 
-**现在不做。** 它买的是"加第三个入口零成本"，而现在只有两个入口。
+**先拆清楚，三段的风险完全不同：**
 
-**触发条件**（满足任一）：真出现第三个入口；或者 P1 做完后，又在某个 UI 里写下了「如果正在跑……」。
+| 段 | 做什么 | 碰异步吗 | 现在该做吗 |
+|---|---|---|---|
+| ① 搬状态 | `stop`、审批槽从 UI 搬进 runtime（`runtime.stop()` / 放掉挂起的审批） | 不碰 | **该做**，正收益 |
+| ② 搬控制流 | `submit()` + `on_event()`，UI 只剩两根管子 | 碰 | 等触发条件 |
+| ③ 加第三个入口 | 新 UI 只写渲染层 | 不碰 | 有入口才做 |
 
-**风险**：同步循环和 asyncio 的阻抗、事件顺序、丢消息、异常被吞。这些 bug 的表现是"偶尔卡住"，最难 debug。
+①是②的严格前提（actor 得先拥有状态，才谈得上接管控制流），所以现在做不白做。①做完的判据：UI 里只剩渲染状态（流式缓冲、转圈动画），不再有 `stop_event` / `approval` dict。
+
+**②的触发条件**：**只有一条硬的**——同一进程内出现第二个能拿到同一个 `SessionRuntime` 的驱动源。可操作判据：数"同时持有这个对象引用的地方"，现在是 1（cli 一个、server 一个，各在自己进程里）。>1 才是触发。
+
+两条软信号（做了会顺手，但不单独构成理由）：
+
+- 需要把同一轮的过程实时广播给多个订阅者。**这条可以用 listener 列表解决**（runtime 里存一串回调，10 行），不必换控制流。
+- 又在某个 UI 里写下「如果正在跑……」。这是"判定正在漏回 UI"的早期症状，值得记一笔，但还没到重构的地步。
+
+**明确不构成触发**（这几条最容易误判）：
+
+- **面板变多**。面板是读侧，调的是 `usage()` / `trace_records()` / 事件回调，弄不坏会话状态。要的是"更窄的写侧接口"，40 行的门面就够，不需要换控制流。
+- **跨进程同步**（TUI 和网页共享一个会话）。那是"单一权威 + 会话锁"的事；而且按"同一会话不许并发跑两轮"（§5.9）这条原则，正确形态是**单写者**，不是多写者广播。
+- **想要能力裁剪**（UI 不能调 `run()`）。把 runtime 私有、只交给 UI 一个门面对象即可；不写 `__getattr__` 透传就是运行时事实，不用等 actor。
+
+**②的真实成本比听起来高**：审批是**阻塞等待**（`_ask` 里 `ev.wait()`）。今天它能工作，是因为"跑一轮"在 `to_thread` 的线程、收 `approval_response` 在事件循环线程。单循环 actor 里，跑一轮会阻塞在 `_ask`，而答复就排在同一个 mailbox 里没人取——**直接死锁到超时**。所以②必须同时把 actor 做成 async（`agent_loop` 变协程，从 `loop.py` 往下大改），或把"等审批"改成状态机。
+
+**②引入的新风险**：顺序从"语言保证"降级成"约定"（`done` 必须排在最后一条 `tool_result` 之后——P0 那个 diff 错配就是顺序错误的现成例子）；dispatcher 为了不死几乎必然 `except: continue`，而这个项目刚因为"静默"改过一次；连接断了以后队列里的事件谁清。这些 bug 的表现都是"偶尔卡住"，最难 debug。
+_这些风险不会报错，只会让程序"偶尔卡住"——所以②动手前必须先把验收测试写出来，不能靠跑一遍看看。_
 
 ### P3：知道但不急的小口子
 

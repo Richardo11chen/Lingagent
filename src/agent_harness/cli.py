@@ -67,6 +67,10 @@ NUDGE_DAYS = 30  # 轨迹这么久没人看，就该考虑清掉或关掉
 class SoftStop:
     """Ctrl+C 的软中断：第一次「跑完这一步就停」，第二次才是硬中断。
 
+    「停」这个状态本身在 runtime 里（`runtime.stop()`）——这里只管按键的时序：
+    第一次把请求递过去，第二次才 raise。状态不在这里，所以它没有 `requested` 可读，
+    也就没人会忍不住去"问它还该不该跑"。
+
     为什么不能直接让 KeyboardInterrupt 穿出去：它会从当前字节码处炸开，把正在跑的这一步
     连同整轮 history 一起丢掉。而 `should_stop` 只在**每步开始**检查（loop.py），所以想要
     「本步跑完再停、已完成的照常落盘」，就得让第一次 Ctrl+C 只置位、不抛异常。
@@ -75,18 +79,18 @@ class SoftStop:
     命令仍可能被打断。软中断保证的是「不再发起新的一步，且这一轮已有的结果照常落盘」。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, on_stop=None) -> None:
         self.hits = 0
-        self.requested = False
+        self._on_stop = on_stop
 
     def reset(self) -> None:
         self.hits = 0
-        self.requested = False
 
     def __call__(self, signum=None, frame=None) -> None:
         self.hits += 1
         if self.hits == 1:
-            self.requested = True
+            if self._on_stop is not None:
+                self._on_stop()
             # 不用 rich/console：信号处理器里碰控制台的锁可能死锁
             sys.stderr.write("\n[中断] 跑完这一步就停（再按一次立刻中断）\n")
             sys.stderr.flush()
@@ -267,11 +271,12 @@ def main() -> None:
                 continue
             tui.show_user(goal)
             tui.begin_stream()
-            soft = SoftStop()
+            soft = SoftStop(runtime.stop)  # 第一次 Ctrl+C → runtime.stop()；第二次 → 硬中断
             # 只在跑这一轮时装软中断：输入行那边 prompt_toolkit 自己管 Ctrl+C，别抢
             prev_sigint = signal.signal(signal.SIGINT, soft)
             try:
-                # 落盘也在 runtime.run 里：跑成功才存这一轮新增的消息
+                # 落盘也在 runtime.run 里：跑成功才存这一轮新增的消息。
+                # 停的旗子也在那边——这里不再传 should_stop。
                 runtime.run(
                     goal,
                     callbacks=TurnCallbacks(
@@ -285,10 +290,6 @@ def main() -> None:
                         on_child_tool=tui.child_tool,
                         on_child_tool_result=tui.child_tool_result,
                     ),
-                    # 绑默认参数：lambda 捕获的是**变量**，而 soft 每轮都会被重新赋值。
-                    # 今天 run_turn 是同步调用所以撞不上，但这属于"哪天有人把 should_stop
-                    # 存起来延后调用"就会静默取到最后一个 soft 的坑。
-                    should_stop=lambda s=soft: s.requested,
                 )
             except KeyboardInterrupt:  # 第二次 Ctrl+C：硬中断，这一轮不落盘
                 tui.end_stream()

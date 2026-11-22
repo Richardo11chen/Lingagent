@@ -8,7 +8,6 @@ import asyncio
 import json
 import os
 import secrets
-import threading
 
 import uvicorn
 from fastapi import WebSocket, WebSocketDisconnect
@@ -17,7 +16,6 @@ from . import webapp
 from .approval import SessionAllow
 from .assembly import WORKSPACE, build_system_prompt, load_settings_and_llm
 from .runtime import (
-    BUSY_MESSAGE,
     SessionBusy,
     SessionRuntime,
     choices,
@@ -91,27 +89,20 @@ async def ws_endpoint(ws: WebSocket):
         build_system_prompt(), _CLI_MODEL,
         on_notice=lambda text: send({"type": "notice", "text": text}),
     )
-    approval: dict = {}  # 审批等待槽：{"event": Event, "result": bool, "remember": bool}
-    stop_event = threading.Event()  # 本轮「别继续了」——网页停止按钮置位，loop 每步看一眼
 
     def _ask(command: str, reason: str) -> str:
-        """网页怎么问：推卡片，等 Event。返回 decision（approve / always / deny）。
+        """网页怎么问：推卡片，等答复。返回 decision（approve / always / deny）。
 
         reason 一起推给前端：只给命令的话，批的人不知道自己批的是什么风险。
-        记忆、自动批准、判定都不在这里——`SessionAllow` 与终端共用同一份。
+        **谁在等**归 runtime（`begin_approval`），记忆和自动批准归 `SessionAllow`——
+        这里只负责"怎么问"，三件事各有各的家。
         """
-        ev = threading.Event()
-        approval["event"] = ev
-        approval["result"] = False
-        approval["remember"] = False
+        slot = runtime.begin_approval()
         send({"type": "approval_request", "command": command, "reason": reason})
-        waited = ev.wait(timeout=settings.approval_timeout or None)
-        if not waited:  # 没人回答：按驳回处理，别让这一轮永远挂着
+        decision, timed_out = slot.wait(settings.approval_timeout or None)
+        if timed_out:  # 没人回答：按驳回处理，别让这一轮永远挂着
             send({"type": "notice", "text": f"审批超时（{settings.approval_timeout:g} 秒无人答复），已按驳回处理。"})
-            return "deny"
-        if not approval["result"]:
-            return "deny"
-        return "always" if approval.get("remember") else "approve"
+        return decision
 
     def _on_auto(command: str, reason: str) -> None:
         send({"type": "notice", "text": f"自动批准 · {reason}"})
@@ -157,7 +148,7 @@ async def ws_endpoint(ws: WebSocket):
         if exc is not None:
             send({"type": "error", "text": f"本轮失败：{type(exc).__name__}: {exc}"})
 
-    async def run_user(goal: str, stop: threading.Event) -> None:
+    async def run_user(goal: str) -> None:
         """跑一轮 agent（旁路线程）——回调经事件循环推回 WS。"""
 
         def on_text(chunk: str) -> None:
@@ -222,7 +213,6 @@ async def ws_endpoint(ws: WebSocket):
                     # 正文增量不转发——碎片太多，会把主流刷满；结论本来就会回给父 agent。
                     on_child_tool=on_child_tool,
                 ),
-                should_stop=stop.is_set,
             )
         except SessionBusy as e:  # 上一轮还没跑完：run 里的占位是唯一判定，这里只负责说出口
             send({"type": "notice", "text": str(e)})
@@ -233,14 +223,14 @@ async def ws_endpoint(ws: WebSocket):
         await ws.send_json({"type": "assistant_done", "text": result.reply})
         await ws.send_json(status_payload())  # 这一轮的上下文用量
 
-    async def run_user_counted(goal: str, stop: threading.Event) -> None:
+    async def run_user_counted(goal: str) -> None:
         """给 run_user 套个计数器：/health 的 busy 就是它。
 
         TUI 退出前会问 busy——网页上还有一轮在跑，就先等它跑完再关（否则那半轮被拦腰砍断）。
         """
         _turn_started()
         try:
-            await run_user(goal, stop)
+            await run_user(goal)
         finally:
             _turn_ended()
 
@@ -249,30 +239,18 @@ async def ws_endpoint(ws: WebSocket):
             msg = await ws.receive_json()
             mtype = msg.get("type")
             if mtype == "user":
-                if runtime.busy:
-                    # 判定在 runtime（run 里的占位还会再挡一次，防两条消息挤在同一个 tick）；
-                    # 这里只负责把话说出口——以前是静默丢掉，用户以为发送失败了
-                    await ws.send_json({"type": "notice", "text": BUSY_MESSAGE})
-                    continue
-                # 每轮一面新旗：上一轮按下的「停」不该影响这一轮
-                stop_event = threading.Event()
-                task = asyncio.create_task(
-                    run_user_counted(str(msg.get("text", "")), stop_event)
-                )
+                # 不再预检 busy：拒还是跑由 runtime 的占位决定（投进去再说），
+                # 被拒会以 SessionBusy 冒回来，在这里变成一句提示。
+                task = asyncio.create_task(run_user_counted(str(msg.get("text", ""))))
                 task.add_done_callback(_report_round_failure)
             elif mtype == "interrupt":
                 # 停止本轮：置位给 loop 的检查点；若正卡在审批上，顺手驳回把它放出来
-                stop_event.set()
-                ev = approval.get("event")
-                if ev:
-                    approval["result"] = False
-                    ev.set()
+                runtime.stop()
+                runtime.deny_pending_approval()
             elif mtype == "approval_response":
-                ev = approval.get("event")
-                if ev:
-                    approval["result"] = bool(msg.get("approved"))
-                    approval["remember"] = bool(msg.get("remember"))
-                    ev.set()
+                runtime.answer_approval(
+                    bool(msg.get("approved")), bool(msg.get("remember"))
+                )
             elif mtype == "new_session":  # 开一个新会话（前端「＋ 新会话」）
                 try:
                     view = runtime.new_session()
@@ -371,10 +349,7 @@ async def ws_endpoint(ws: WebSocket):
         pass
     finally:
         # 连接没了 = 没人能回答那条审批：放掉阻塞的线程（否则每断一次线泄漏一个）
-        ev = approval.get("event")
-        if ev is not None:
-            approval["result"] = False
-            ev.set()
+        runtime.deny_pending_approval()
 
 
 # 打包形态：前端构建产物跟着包走（src/agent_harness/web_dist），后端一个端口全包

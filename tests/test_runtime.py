@@ -175,6 +175,60 @@ def test_a_failed_turn_is_not_persisted(tmp_path, monkeypatch):
     assert not rt.busy  # 抛异常也要放开锁，否则这个会话从此不可用
 
 
+# ---- 停 / 审批：这两样原来是 UI 攥着的 ----
+
+def test_stop_reaches_the_turn_and_is_cleared_for_the_next_one(tmp_path):
+    """停的旗子在 runtime 里：跑着的时候能被看见；下一轮开头自动清掉。"""
+    from agent_harness.llm import Action
+
+    holder: dict = {}
+
+    class StopOnce(FakeLLM):
+        def __init__(self):
+            self.first = True
+
+        def __call__(self, *a, **k):
+            if self.first:
+                self.first = False
+                holder["rt"].stop()  # 第一步跑到一半，用户按了停
+                return ("", [Action("noop", {})], "")
+            return ("做完了", [], "")
+
+    rt = _rt(tmp_path, llm=StopOnce())
+    holder["rt"] = rt
+
+    first = rt.run("干活")
+    assert "中止" in first.reply  # 不再发起下一步
+
+    second = rt.run("再来")
+    assert second.reply == "做完了"  # 上一轮的「停」没有掐掉这一轮
+
+
+def test_approval_slot_is_answered_once(tmp_path):
+    """审批槽归 runtime：答一次就摘掉，迟到的答复改不了结论。"""
+    rt = _rt(tmp_path)
+    slot = rt.begin_approval()
+
+    assert rt.answer_approval(True, remember=True) is True
+    assert rt.answer_approval(False) is False  # 已经消费掉了
+    assert slot.wait(0) == ("always", False)   # remember → always
+
+
+def test_approval_times_out_as_deny(tmp_path):
+    """没人答就按驳回——默认放行是安全事故，默认拒绝只是慢一步。"""
+    rt = _rt(tmp_path)
+    assert rt.begin_approval().wait(0.01) == ("deny", True)
+
+
+def test_pending_approval_is_released_when_nobody_can_answer(tmp_path):
+    """断线 / 按停：放掉挂起的审批，否则那个线程会挂到超时。"""
+    rt = _rt(tmp_path)
+    slot = rt.begin_approval()
+    rt.deny_pending_approval()
+    assert slot.wait(0) == ("deny", False)  # 不是超时，是被拒
+    assert rt.deny_pending_approval() is None  # 再放一次不炸
+
+
 # ---- 回放 / 模型记忆 ----
 
 
