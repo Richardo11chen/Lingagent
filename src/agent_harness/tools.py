@@ -4,8 +4,9 @@ import os
 import signal
 import subprocess
 import time
-from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from .shell import detect as _shell
 
@@ -408,28 +409,48 @@ def read_file(path: str, offset: int = 1, limit: int | None = None) -> str:
     return f"（第 {start + 1}-{end} 行，共 {len(lines)} 行）\n" + "".join(lines[start:end])
 
 # ── 改动留痕 ──────────────────────────────────────────────────────
-# 写文件的工具顺手算出 diff，loop 在调用后取走一次。
+# 写盘只有一个出口，三个角色分工：
+#   write_file / edit_file  →  校验并返回**意图**（FileChange），自己不落盘
+#   apply_change            →  唯一的写盘点：写盘 + 算 diff + 给出确认文案
+#   loop.agent_loop         →  拿到意图就 apply，把 diff 同时送进 trace 和界面
 #
-# 为什么不让工具把 diff 拼进返回值：返回值要原样回灌给模型（进 history 就按 32k 截断、
-# 还要算 token）。diff 是给人看的，混进模型那一份纯属浪费。
-# 为什么不用模块全局变量：网页端每个连接各跑一轮，全局会串到别的会话。
+# 为什么不让工具自己写（P0）：diff 原先走 ContextVar 旁路——写工具时顺手记下、
+# loop 事后 take_diff() 取走。可后钩子排在这两步中间，钩子改的文件就被算到
+# 上一个工具头上，一个纯读工具会报出 `+1 −1`；而且事件在 timed 块退出时就落盘了，
+# trace 里从来没有 diff 字段。改成「工具只表态、执行点落盘」之后，diff 与写盘同源，
+# 工具也没有能力"写盘但忘了算 diff"。
+#
+# 为什么 diff 跟着返回值走，而不是再搞一个旁路：网页端每个连接各跑一轮，
+# 任何模块级 / ContextVar 状态都有机会串到别的会话——旁路只要存在就迟早被踩。
 MAX_DIFF_CHARS = 20_000  # 超大文件的整篇替换能产出几十万行 diff，先在源头封顶
 
-_LAST_DIFF: ContextVar[str] = ContextVar("last_diff", default="")
+
+@dataclass(frozen=True)
+class FileChange:
+    """一次改动的**意图**——还没写盘。old=None 表示新建（磁盘上没有旧内容）。"""
+
+    path: str
+    old: str | None
+    new: str
+    # 工具自己那句确认话（"写入文件 x 12 字符"）：模型看到的文本仍由工具决定，
+    # 换执行点不改模型视角的任何一句话——否则回归时分不清是重构坏了还是措辞变了。
+    summary: str
 
 
-def take_diff() -> str:
-    """取走并清空本次调用产生的 diff（loop 每次调用后取一次）。"""
-    diff = _LAST_DIFF.get()
-    _LAST_DIFF.set("")
-    return diff
+class ToolResult(NamedTuple):
+    """执行点的产出：给模型的那句话 + 给人看的 diff（同一份改动，两个读者）。"""
+
+    content: str
+    diff: str = ""
 
 
-def _record_diff(old: str, new: str, path: str) -> None:
-    """「改前 / 改后」→ unified diff；没有变化就记空。"""
+def _make_diff(old: str, new: str, path: str) -> str:
+    """「改前 / 改后」→ unified diff；没有变化就是空串。
+
+    纯函数：没有隐藏状态，所以能单独测——这是拆掉 ContextVar 之后白送的。
+    """
     if old == new:
-        _LAST_DIFF.set("")
-        return
+        return ""
     text = "\n".join(
         difflib.unified_diff(
             old.splitlines(), new.splitlines(),
@@ -438,17 +459,32 @@ def _record_diff(old: str, new: str, path: str) -> None:
     )
     if len(text) > MAX_DIFF_CHARS:
         text = text[:MAX_DIFF_CHARS] + f"\n…（diff 共 {len(text)} 字符，已截断）"
-    _LAST_DIFF.set(text)
+    return text
 
 
-def write_file(path: str, content: str):
-    """写入文件内容（父目录不存在会建；换行统一成 LF）"""
+def apply_change(change: FileChange) -> ToolResult:
+    """唯一写盘点：落盘 + 算 diff。写完才算"改动发生过"。
+
+    写失败（权限 / 磁盘满）直接抛给调用方——loop 的 try 把它变成一句回灌给模型的
+    错误，和工具自己抛异常走同一条路。不在这里吞掉：吞了就成了"界面说改好了、
+    文件其实没变"。
+
+    `_write_text` 只在这里被调用，架构测试（tests/test_tools.py）盯着这一点：
+    新增写盘路径必须经过这里，否则 diff 就又有机会缺席。
+    """
+    _write_text(Path(change.path), change.new)
+    return ToolResult(change.summary, _make_diff(change.old or "", change.new, change.path))
+
+
+def write_file(path: str, content: str) -> FileChange:
+    """准备写入文件内容（父目录不存在会建；换行统一成 LF）——只返回意图，不落盘。
+
+    覆盖前先留一份旧内容：界面要显示"改了什么"，而这时候文件还没动。
+    """
     p = Path(path)
-    old = _read_text(p) if p.exists() else ""  # 覆盖前先留一份，界面才能显示"改了什么"
     content = content.replace("\r\n", "\n")  # 落盘前归一，diff 才不会显示整篇都变了
-    _write_text(p, content)
-    _record_diff(old, content, path)
-    return f'写入文件 {path} {len(content)} 字符。'
+    old = _read_text(p) if p.exists() else None
+    return FileChange(path, old, content, f"写入文件 {path} {len(content)} 字符。")
 
 
 def _line_no(text: str, index: int) -> int:
@@ -480,8 +516,11 @@ def _nearest_line(content: str, old: str) -> tuple[int, float, str] | None:
     return best
 
 
-def edit_file(path: str, old: str, new: str) -> str:
-    """精确替换文件里的一段文本（保留其余内容）。
+def edit_file(path: str, old: str, new: str) -> FileChange | str:
+    """精确替换文件里的一段文本（保留其余内容）——成功返回意图，不落盘。
+
+    替换成功时返回 `FileChange`；**校验失败时返回 str**（那句给模型看的失败原因），
+    因为失败不是一个"改动"。调用方按类型分派：拿到的不是意图，就没什么可落盘的。
 
     old 必须在文件中唯一出现。0 次和多次都拒绝，但要**分清是哪一种**：前者要改 old，
     后者要缩小范围——报同一句话等于让人自己猜，而猜错的代价是又一轮试错。
@@ -514,7 +553,7 @@ def edit_file(path: str, old: str, new: str) -> str:
         )
 
     updated = content.replace(old, new, 1)
-    _write_text(p, updated)
-    _record_diff(content, updated, path)
-    return f"已编辑 {path}（替换 {len(old)} 字符 → {len(new)} 字符）。"
+    return FileChange(
+        path, content, updated, f"已编辑 {path}（替换 {len(old)} 字符 → {len(new)} 字符）。"
+    )
 

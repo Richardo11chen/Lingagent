@@ -8,11 +8,13 @@ from .hooks import run_post, run_pre
 from .llm import LLM
 from .messages import Msg
 from .schema import TOOL_SCHEMAS
-from .tools import cap_result, take_diff
+from .tools import FileChange, ToolResult, apply_change, cap_result
 from .trace import Tracer
 
 MAX_STEPS = 40
-Tool = Callable[..., str]
+# 工具可以给"结果"（str），也可以给"改动意图"（FileChange，由 loop 落盘）——
+# 两者都是正常返回，loop 按类型分派。见 tools.py 顶部「改动留痕」的分工。
+Tool = Callable[..., str | FileChange]
 
 
 def _tool_error(tool: str, exc: Exception) -> str:
@@ -86,6 +88,7 @@ def agent_loop(
         )
         for action in actions:
             with tracer.timed("tool", step=step, tool=action.tool, args=action.args) as ev:
+                diff = ""  # 每条动作自带一份：没有改动就是空串，不会串到下一条上
                 if on_tool:
                     on_tool(action.tool, action.args)
                 tool_func = tools.get(action.tool)
@@ -150,24 +153,34 @@ def agent_loop(
                 if may_run:
                     if tool_func:
                         try:
-                            result = tool_func(**action.args)
+                            res = tool_func(**action.args)
+                            # 执行点（P0）：工具的意图在这里落盘——写盘 + 算 diff 一次完成。
+                            # 越界拦截不走这条：safe_tool 返回 str，没有意图可落。
+                            if isinstance(res, FileChange):
+                                res = apply_change(res)
+                            if isinstance(res, ToolResult):
+                                result, diff = res.content, res.diff
+                            else:
+                                result = res
                             ev.fields["status"] = "ok"
                         except Exception as e:
+                            diff = ""  # 写盘失败：不留半份 diff（否则成了"界面说改了、文件没动"）
                             result = _tool_error(action.tool, e)
                             ev.fields["status"] = "error"
                             ev.fields["error"] = f"{type(e).__name__}: {e}"
                         else:
                             # 后钩子可以**改写**结果（脱敏这类）。赋值回去是必须的——
                             # 后面的 trace / 界面 / cap_result 都读这个 result。
+                            # 钩子手里没有 apply_change：改文件这件事结构性做不到（P0 决策 A）。
                             result = run_post(post_hooks, action, result)
                     else:
                         result = f"工具不存在：未知工具 {action.tool}。"
                         ev.fields["status"] = "error"
                 ev.fields["result"] = result  # 全文（S8 决策 3）——trace 是审计账，不截断
+                # diff 必须在这里落账：事件在 timed 块退出时就写盘了，放到块外 trace 里永远没有它
+                ev.fields["diff"] = diff
 
-            # 工具结束：状态 / 耗时 / 结果 / 改动一起递出去（界面靠它把「它改了什么」显示出来）。
-            # take_diff() 无条件清一次——不清的话，下一次调用的 diff 会串到这一条上。
-            diff = take_diff()
+            # 工具结束：状态 / 耗时 / 结果 / 改动一起递出去（界面靠它把「它改了什么」显示出来）
             if on_tool_result:
                 on_tool_result({
                     "name": action.tool,

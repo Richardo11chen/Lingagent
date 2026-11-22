@@ -49,11 +49,11 @@ def test_full_pair_structure():  # 完整配对：1 assistant[N calls] → N too
 
 
 def test_edit_file_replaces_unique_text(tmp_path):  # 精确替换成功：其余内容保留
-    from agent_harness.tools import edit_file
+    from agent_harness.tools import apply_change, edit_file
     f = tmp_path / "a.py"
     f.write_text("# 注释保留\ndef add(a, b):\n    return a - b\n", encoding="utf-8")
-    out = edit_file(str(f), old="return a - b", new="return a + b")
-    assert "已编辑" in out
+    out = apply_change(edit_file(str(f), old="return a - b", new="return a + b"))
+    assert "已编辑" in out.content
     content = f.read_text(encoding="utf-8")
     assert "return a + b" in content
     assert "# 注释保留" in content  # 注释没丢（对比 write_file 覆盖）

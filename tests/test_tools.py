@@ -1,12 +1,16 @@
 """工具层单测：run_shell 的超时兜底 + 输出处理（合并 / 编码 / stdin）。"""
 
+import ast
 import os
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
+from agent_harness import tools as tools_mod
 from agent_harness.tools import (
+    apply_change,
     edit_file,
     read_file,
     run_shell,
@@ -192,32 +196,49 @@ def test_tool_detail_covers_every_interesting_arg():  # 派活也要看得见，
     assert tool_detail(None) == ""
 
 
-def test_write_file_records_a_diff(tmp_path):  # 覆盖前先留旧内容，界面才有"改了什么"可显示
-    from agent_harness.tools import take_diff, write_file
-
+def test_write_file_returns_intent_and_apply_records_the_diff(tmp_path):  # 工具只表态，落盘在 apply
     p = tmp_path / "a.txt"
-    write_file(str(p), "one\n")
-    assert "+one" in take_diff()  # 新文件 = 全是新增
 
-    write_file(str(p), "one\ntwo\n")
-    diff = take_diff()
-    assert "a.txt" in diff and "+two" in diff
-    assert take_diff() == ""  # 取走即清空——否则会串到下一个工具上
+    change = write_file(str(p), "one\n")
+    assert not p.exists()  # 关键：返回意图时文件还没动
+    assert change.old is None  # 新建：磁盘上没有旧内容
+
+    first = apply_change(change)
+    assert p.read_text(encoding="utf-8") == "one\n"
+    assert "+one" in first.diff  # 新文件 = 全是新增
+
+    second = apply_change(write_file(str(p), "one\ntwo\n"))
+    assert "a.txt" in second.diff and "+two" in second.diff
+    # 两份 diff 各自独立：没有可共享的旁路状态，也就没有"串到下一条"这回事
+    assert first.diff != second.diff
 
 
 def test_edit_file_records_only_the_change(tmp_path):  # 替换型改动的 diff 不该带上整份文件
-    from agent_harness.tools import edit_file, take_diff, write_file
-
     p = tmp_path / "a.txt"
-    write_file(str(p), "alpha\nbeta\ngamma\n")
-    take_diff()
+    apply_change(write_file(str(p), "alpha\nbeta\ngamma\n"))
 
-    edit_file(str(p), "beta", "BETA")
-    diff = take_diff()
-    assert "+BETA" in diff and "-beta" in diff
+    r = apply_change(edit_file(str(p), "beta", "BETA"))
+    assert "+BETA" in r.diff and "-beta" in r.diff
     # 只有被改的那一行带 +/-；alpha / gamma 最多作为上下文行出现（n=3 会带进去）
-    changed = [x for x in diff.splitlines() if x[:1] in "+-" and x[:3] not in ("+++", "---")]
+    changed = [x for x in r.diff.splitlines() if x[:1] in "+-" and x[:3] not in ("+++", "---")]
     assert changed == ["-beta", "+BETA"]
+
+
+def test_only_apply_change_touches_the_disk():
+    """写盘只有一个出口（P0 的全部意义）。
+
+    不守住这条，新增一个"自己写盘"的工具就等于又把 diff 弄丢了一次——
+    而这次不会有 ContextVar 可以怪，只会静静地少一行显示。
+    """
+    tree = ast.parse(Path(tools_mod.__file__).read_text(encoding="utf-8"))
+    sites = {
+        fn.name
+        for fn in tree.body if isinstance(fn, ast.FunctionDef)
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name) and node.func.id == "_write_text"
+    }
+    assert sites == {"apply_change"}, f"写盘出口不止 apply_change：{sites}"
 
 
 def test_task_snapshot_shape(tmp_path, monkeypatch):  # 给界面用的结构化快照（不是给模型读的那段文字）
@@ -275,7 +296,7 @@ def test_task_log_names_do_not_collide_across_processes(tmp_path, monkeypatch):
 def test_write_file_writes_lf_even_on_windows(tmp_path):
     """Windows 上写出 CRLF 是这次实跑踩出来的坑：模型给的多行 old 永远匹配不上。"""
     p = tmp_path / "a.js"
-    write_file(str(p), "line1\nline2\n")
+    apply_change(write_file(str(p), "line1\nline2\n"))
     assert b"\r\n" not in p.read_bytes()
 
 
@@ -284,9 +305,9 @@ def test_edit_file_matches_multiline_across_line_endings(tmp_path):
     p = tmp_path / "a.js"
     p.write_bytes(b"line1\r\nline2\r\nline3\r\n")  # 模拟别的编辑器留下的老文件
 
-    out = edit_file(str(p), "line1\nline2", "x")
+    out = apply_change(edit_file(str(p), "line1\nline2", "x"))
 
-    assert "已编辑" in out
+    assert "已编辑" in out.content
     assert p.read_bytes() == b"x\nline3\n"
 
 
@@ -314,7 +335,7 @@ def test_edit_file_hints_the_nearest_line(tmp_path):
 
 def test_write_file_creates_missing_directories(tmp_path):
     p = tmp_path / "scripts" / "serve.mjs"
-    write_file(str(p), "console.log(1)\n")
+    apply_change(write_file(str(p), "console.log(1)\n"))
     assert p.exists()
 
 
