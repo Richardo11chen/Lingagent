@@ -152,23 +152,29 @@ uv run lingan -web               # 只起后端（http://127.0.0.1:8000）
 
 **heredoc 追加测试会写两遍。** 用 `cat >> file <<EOF` 追加时，内容有时会写进两份，产生重复定义（ruff `F811` 能抓到，但人不一定看）。**追加完立刻 `grep -c "def test_xxx"` 数一下。** 这个坑踩过三次，两次导致了"测试从没跑过"的假绿。
 
-**`git push` 的代理。** `~/.gitconfig` 里给 github.com 钉了 `127.0.0.1:7897`（Clash 默认端口），是 URL 级配置，优先级高于 `-c http.proxy=`。会话代理端口每次启动都变，所以：
+**`git push` 的代理：用 7897，别用 `$HTTPS_PROXY`。** `~/.gitconfig` 里给 github.com 钉了
+`127.0.0.1:7897`（Clash），是 URL 级配置，优先级高于 `-c http.proxy=`。
+
+而**宿主会话注入的 `$HTTPS_PROXY`（形如 `127.0.0.1:6xxxx`）对 github 建不通隧道**——
+2026-11-22 用它推，得到 `CONNECT tunnel failed, response 502`，换成 7897 一次就过。
+那个端口只对 PyPI 之类的域名有效，别拿它推 github：
 
 ```bash
-git -c "http.https://github.com.proxy=$HTTPS_PROXY" push origin main
+git -c "http.https://github.com.proxy=http://127.0.0.1:7897" push origin main
 ```
 
 不要改用户的 `.gitconfig`。
 
-**推送"成功"后可能报"命令被安全策略拦截"。** 这是误报（遇到过四次），推送实际已成功。**不要重试**，用 API 核实：
+**推送"成功"后可能报"命令被安全策略拦截"。** 这是误报（遇到过五次），推送实际已成功：
+它会同时打出 `exit=0` 和 git 自己的 `xxx..yyy main -> main`。**不要重试**，看那行 ref 或去 API 核实：
 
 ```bash
 curl -s https://api.github.com/repos/Richardo11chen/Lingagent/commits/main
 ```
 
-**GitHub API 偶发 504 或空 body。** 别当成"没数据"，重试一次。
-
-**PyPI 的 JSON 有 CDN 缓存。** 发布成功后查 `https://pypi.org/pypi/lingagent/json` 可能还返回旧版本，查具体版本端点 `/pypi/lingagent/0.1.6/json` 才准。
+**PyPI 的 JSON 有 CDN 缓存。** 发布成功后查 `https://pypi.org/pypi/lingagent/json` 可能还返回旧版本，
+查具体版本端点 `/pypi/lingagent/0.2.0/json` 才准。同理 `uvx --from lingagent==x.y.z` 会撞上 uv 的
+本地索引缓存 → 报"no version found"；Simple 索引（`/simple/lingagent/`）里已经有的话，加 `--refresh` 就好。
 
 **CI 矩阵里的 `.python-version`。** 仓库根有 `.python-version = 3.14`，`uv sync` 会照它建 venv。所以 workflow 里必须写 `env: UV_PYTHON: ${{ matrix.python-version }}`，否则 3.11 那个 job 实际跑的是 3.14，矩阵是摆设。
 
@@ -265,15 +271,15 @@ curl -s https://api.github.com/repos/Richardo11chen/Lingagent/commits/main
 ## 9. 发布流程
 
 ```bash
-uv run python scripts/release.py 0.1.7 --no-publish   # 跑测试 → 构建前端 → bump → 打包
+uv run python scripts/release.py 0.2.1 --no-publish   # 跑测试 → 构建前端 → bump → 打包
 git add -A && git commit
-git -c "http.https://github.com.proxy=$HTTPS_PROXY" push origin main
+git -c "http.https://github.com.proxy=http://127.0.0.1:7897" push origin main
 # 等 CI 四个组合绿
-git tag -a v0.1.7 -m "…" && git -c "http.https://github.com.proxy=$HTTPS_PROXY" push origin v0.1.7
+git tag -a v0.2.1 -m "…" && git -c "http.https://github.com.proxy=http://127.0.0.1:7897" push origin v0.2.1
 # tag 触发 publish job，用 trusted publishing 发到 PyPI
 ```
 
-验证：`curl -s https://pypi.org/pypi/lingagent/0.1.7/json`（注意缓存，看具体版本端点）。
+验证：`curl -s https://pypi.org/pypi/lingagent/0.2.1/json`（注意缓存，看具体版本端点）。
 
 ## 10. 别做的事
 
