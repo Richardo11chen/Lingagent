@@ -1,11 +1,11 @@
-from pathlib import Path
-from contextvars import ContextVar
-from dataclasses import dataclass
 import atexit
 import difflib
 import os
+import signal
 import subprocess
 import time
+from contextvars import ContextVar
+from pathlib import Path
 
 from .shell import detect as _shell
 
@@ -117,6 +117,7 @@ def run_shell(command: str, timeout: float = SHELL_TIMEOUT, background: bool = F
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
+        **_popen_group(),  # 独立进程组：超时才能把孙进程一起收
     )
     try:
         out, _ = proc.communicate(timeout=timeout)
@@ -140,19 +141,40 @@ def run_shell(command: str, timeout: float = SHELL_TIMEOUT, background: bool = F
         return msg
 
 
+def _popen_group() -> dict:
+    """让这次 spawn 自己当进程组组长——超时收尸时才可能 killpg 整棵树。
+
+    POSIX 上不给这个参数，子进程就和 lingan 同组；而 `proc.kill()` 只杀 shell，
+    `npm run build` 起的 node、pytest 起的 worker 全都活下来继续占端口/CPU。
+    Windows 那边靠 `taskkill /T` 按父子关系收，不需要这个。
+    """
+    return {} if os.name == "nt" else {"start_new_session": True}
+
+
 def _kill_tree(proc) -> None:
     """杀整棵进程树。
 
     Windows 上 `proc.kill()` 只杀 shell，孙进程还攥着管道——`communicate` 会一直等到它
     自己跑完，等于没超时。`taskkill /T` 才是连子孙一起收。
+
+    POSIX 上同理，做法是杀**进程组**：配合 Popen 时的 `start_new_session`，
+    整个 shell 树在自己那一个组里，一个 `killpg` 全收。直接 SIGKILL 不先 SIGTERM——
+    超时意味着已经等够了，再给一轮"体面退出"只会多等一次。
     """
     if os.name == "nt":
         subprocess.run(
             ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
             capture_output=True, text=True,
         )
-    else:
-        proc.kill()
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        # 组没了 / 拿不到组：至少把 shell 本身收掉，别因为这一步把整个超时逻辑挂掉
+        try:
+            proc.kill()
+        except OSError:
+            pass
 
 
 def _run_background(command: str) -> str:
@@ -347,9 +369,30 @@ def _write_text(p: Path, text: str) -> None:
     p.write_text(text, encoding="utf-8", newline="\n")
 
 
+MAX_READ_BYTES = 8_000_000  # 8MB：再大就不是"一个源文件"了，整读会顶到内存
+
+
 def read_file(path: str, offset: int = 1, limit: int | None = None) -> str:
-    """读取文件内容。offset/limit 按行切（1 起始），不给就是全文。"""
-    text = _read_text(Path(path))
+    """读取文件内容。offset/limit 按行切（1 起始），不给就是全文。
+
+    上下文那头有 `cap_result` 兜着（32k 截断 + 全文落盘），所以这里的闸是给**内存**的：
+    `read_bytes()` 会把整个文件读进来，再解码成 str 又是 1.5~2 倍——一个 500MB 的日志
+    足以让进程被 OOM 杀掉，而那看起来像"工具莫名消失"。
+
+    不做流式按行读：那一小段代码要处理跨块的多字节字符和总行数统计，而这个场景
+    shell 本来就能做（`sed -n '100,200p'` 天生流式）。提示比实现更有用。
+    """
+    p = Path(path)
+    if p.is_file():
+        size = p.stat().st_size
+        if size > MAX_READ_BYTES:
+            mb = size / 1024 / 1024
+            return (
+                f"文件太大（{mb:.0f}MB，上限 8MB），没有读——整读会把内存吃光。\n"
+                f"要看其中一段，用 run_shell：sed -n '1,200p' \"{path}\""
+                "（或 rg 先定位关键词，再取那几行）。"
+            )
+    text = _read_text(p)
     if offset <= 1 and limit is None:
         return text
     lines = text.splitlines(keepends=True)

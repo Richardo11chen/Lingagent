@@ -9,17 +9,19 @@ import json
 import os
 import threading
 from functools import partial
+from urllib.parse import urlparse
 
 import uvicorn
 from fastapi import WebSocket, WebSocketDisconnect
 
+from . import webapp
+from .approval import SessionAllow
 from .assembly import (
     WORKSPACE,
     build_system_prompt,
     list_visible_sessions,
     load_settings_and_llm,
 )
-from .approval import SessionAllow
 from .compact import estimate_tokens
 from .llm import Msg
 from .session import (
@@ -31,11 +33,10 @@ from .session import (
     save_session_model,
     trace_path,
 )
+from .settings import load_settings
 from .tools import task_snapshot, task_stop, tool_detail
-from .trace import Tracer, TRACE_FIELD_CHARS, ellipsis_note, load_trace, mark_viewed
+from .trace import TRACE_FIELD_CHARS, Tracer, ellipsis_note, load_trace, mark_viewed
 from .turn import Session, TurnCallbacks, describe_failure
-
-from . import webapp
 from .webapp import PROTOCOL, _turn_ended, _turn_started, app, health  # noqa: F401  (对外沿用 server.app / server.health / server.PROTOCOL)
 
 # 工具结果过 WS 的上限：结果与 diff 都是给眼睛看的，不必几十万字符一起推。
@@ -63,8 +64,48 @@ def list_tasks() -> list[dict]:
     return sorted((s for s in snaps if s), key=lambda s: s["started"])
 
 
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def origin_allowed(origin: str | None, extra: tuple[str, ...] = ()) -> bool:
+    """浏览器发起的 WebSocket 一定带 `Origin`，而且**页面无法伪造它**（由浏览器按实际来源填）。
+
+    所以"只接受本机来源"就足以挡住任意网页连 `ws://127.0.0.1:8000/ws`——
+    那些页面的 Origin 是 `https://evil.com`，连不上。这也是 WS 唯一的守门手段：
+    它不受同源策略和 CORS 约束，服务端不验 Origin 就等于对全网开放。
+
+    三种放行/拒绝的边界：
+    - **没有 Origin**（curl / 脚本 / 测试客户端）→ 放行。既然它已经能在本机执行代码，
+      多这道门没有意义；挡住它只会让调试变难。
+    - **`Origin: null`** → 拒绝。sandbox iframe、`file://` 页面的 Origin 就是字符串 "null"，
+      那正是最需要挡的来源。
+    - **端口不校验**：前端 dev server 是 5173、生产同端口是 8000，都可能；而端口不提供
+      额外安全性——攻击者换不了 Origin 里的 hostname。
+    """
+    if not origin:
+        return True
+    if origin == "null":
+        return False
+    try:
+        parsed = urlparse(origin)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    if (parsed.hostname or "").lower() in _LOCAL_HOSTS:
+        return True
+    # 显式放行的来源（从局域网/手机访问时写进 [server] extra_origins）
+    return any(origin.rstrip("/") == e.rstrip("/") for e in extra)
+
+
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
+    # 先验来源再握手：没通过就连协议都不建立。settings 这里单独读一次（很便宜），
+    # 因为完整的 load_settings_and_llm 要建客户端，而它得在 accept 之后才能推提示。
+    cfg = load_settings()
+    if not origin_allowed(ws.headers.get("origin"), tuple(cfg.extra_origins)):
+        await ws.close(code=1008)  # policy violation：别 accept 再关，直接不建立
+        return
     await ws.accept()
     loop = asyncio.get_running_loop()
     session_id = new_session_id(WORKSPACE)

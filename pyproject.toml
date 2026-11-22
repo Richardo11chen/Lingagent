@@ -1,6 +1,6 @@
 [project]
 name = "lingagent"
-version = "0.1.5"
+version = "0.1.6"
 description = "A coding-agent harness: LLM decides, the harness dispatches tools, guards and logs"
 readme = "README.md"
 license = "MIT"
@@ -14,7 +14,9 @@ classifiers = [
     "Operating System :: OS Independent",
     "Topic :: Software Development :: Libraries",
 ]
-requires-python = ">=3.14"
+# 3.11 是真实下限：代码只用到 tomllib（3.11 起进标准库）和 `X | Y` 标注（3.10 起）。
+# 3.14 是本机开发版本，不是技术约束——CI 矩阵两头都跑，这句声明才有证据。
+requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
@@ -46,7 +48,23 @@ module-name = "agent_harness"
 dev = [
     "pytest>=9.1.1",
     "pytest-timeout>=2.4.0",
+    "ruff>=0.17.6",
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+# 起步只上"能抓到真问题、几乎不误报"的那几组：
+#   E/F/W = pycodestyle + pyflakes（未用导入、未定义名、重定义）
+#   I     = import 排序；UP = pyupgrade（3.11 起该用 collections.abc.Callable 等）
+#   B     = bugbear（循环里闭包抓变量、except 里 raise 不带 from…）
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# 工具描述是整段中文 prompt（本身就是数据），按 120 列硬断会把它拆碎
+"src/agent_harness/schema.py" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,7 +1,7 @@
 """配置维：规则文件自动加载——声明式约束的机制化（不靠模型自觉读）。"""
 from pathlib import Path
 
-RULE_FILES = ("AGENTS.md",)    
+RULE_FILES = ("AGENTS.md",)
 
 def load_rules(workspace: Path) -> str:
     # 逐个读存在的规则文件 → 拼成一段文本；都没有 → 返回空串

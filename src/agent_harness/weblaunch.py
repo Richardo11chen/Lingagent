@@ -15,9 +15,9 @@ import subprocess
 import sys
 import time
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 FRONTEND_PORT = 5173  # Vite 默认端口（web/ 未改配置）
 

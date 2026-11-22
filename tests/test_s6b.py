@@ -858,3 +858,44 @@ def test_ensure_web_warns_when_its_own_backend_vanished(monkeypatch, tmp_path):
 
     assert run.started == [] and spawned == []  # 仍然不去抢别人的端口
     assert "4242" in (run.warning or "") and "--stop-web" in (run.warning or "")
+
+
+# ---- Origin 校验：WS 不受同源策略约束，服务端不验就等于对全网开放 ----
+
+
+def test_origin_rules():
+    assert server.origin_allowed("http://localhost:5173")
+    assert server.origin_allowed("http://127.0.0.1:8000")
+    assert server.origin_allowed("http://[::1]:8000")
+    assert server.origin_allowed("https://localhost")  # 端口不校验：dev server 是 5173
+
+    assert not server.origin_allowed("https://evil.com")
+    assert not server.origin_allowed("null")  # sandbox iframe / file:// 的 Origin 就是 "null"
+    assert not server.origin_allowed("chrome-extension://abc")
+
+    assert server.origin_allowed(None)  # curl / 脚本 / 测试客户端不带 Origin
+    assert server.origin_allowed("http://192.168.1.5:8000", ("http://192.168.1.5:8000",))
+    assert not server.origin_allowed("http://192.168.1.6:8000", ("http://192.168.1.5:8000",))
+
+
+def test_ws_refuses_a_foreign_origin(monkeypatch):
+    """恶意页面自己连上来就能发 user 消息、还能自己批审批——所以要在握手前就拒掉。"""
+    from starlette.websockets import WebSocketDisconnect
+
+    monkeypatch.setattr(server, "load_settings", lambda: Settings())
+    c = TestClient(server.app)
+
+    with pytest.raises(WebSocketDisconnect):
+        with c.websocket_connect("/ws", headers={"origin": "https://evil.com"}) as ws:
+            ws.receive_json()
+
+
+def test_ws_still_accepts_no_origin(monkeypatch):
+    """没有 Origin 的客户端（脚本/测试）照旧能用——挡住它只会让调试变难。"""
+    monkeypatch.setattr(server, "load_settings", lambda: Settings())
+    monkeypatch.setattr(
+        server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings())
+    )
+    c = TestClient(server.app)
+    with c.websocket_connect("/ws") as ws:
+        assert ws.receive_json()["type"] == "session"

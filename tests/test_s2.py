@@ -3,7 +3,6 @@
 from agent_harness.llm import Action, ScriptLLM
 from agent_harness.loop import agent_loop
 from agent_harness.sensors import run_sensors
-from agent_harness.tools import write_file
 
 
 def test_1():  # sensors 判红绿：退出码 0 绿、非 0 红（假命令构造，不依赖真实测试状态）

@@ -28,7 +28,7 @@ class RouteLLM:
 
 
 def _recs(p):
-    return [json.loads(l) for l in p.read_text(encoding="utf-8").strip().splitlines()]
+    return [json.loads(line) for line in p.read_text(encoding="utf-8").strip().splitlines()]
 
 
 def _spawn(llm, tools, **kw):
@@ -81,7 +81,9 @@ def test_child_inherits_hooks(tmp_path):
         "父任务": [Action(tool="spawn_subagent", args={"subtask": "子任务"})],
         "子任务": [Action(tool="probe", args={})],
     })
-    block = lambda a: deny("子 agent 也拦") if a.tool == "probe" else None
+    def block(a):  # 具名函数而不是 lambda：trace 里记录的是策略名，"<lambda>" 没法辨认是谁拦的
+        return deny("子 agent 也拦") if a.tool == "probe" else None
+
     agent_loop(
         "父任务", llm,
         {**tools, "spawn_subagent": _spawn(llm, tools, tracer=Tracer(p), pre_hooks=[block])},
@@ -89,7 +91,7 @@ def test_child_inherits_hooks(tmp_path):
     )
     assert ran == []  # 治理同一套：子 agent 的工具也被拦
     hook = next(r for r in _recs(p) if r["kind"] == "hook" and r.get("sub") == 1)
-    assert hook["verdict"] == "deny" and hook["by"] == "<lambda>"
+    assert hook["verdict"] == "deny" and hook["by"] == "block"
 
 
 def test_child_inherits_approver():

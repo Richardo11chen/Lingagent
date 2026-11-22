@@ -25,21 +25,32 @@ jobs:
       fail-fast: false # 一个平台红了，另一个也要跑完——才知道是平台问题还是都有问题
       matrix:
         os: [windows-latest, ubuntu-latest]
+        # 两头都守：3.11 是声明的最低版本（不测就等于没声明），3.14 是开发版本。
+        python-version: ["3.11", "3.14"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    env:
+      # 必须显式指定。仓库里有 `.python-version = 3.14`，`uv sync` 会照它建 venv——
+      # 不写这句，3.11 那个矩阵位实际跑的仍是 3.14，矩阵就变成摆设了（看起来测了，其实没测）。
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: ${{ matrix.python-version }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v3
 
       - name: 装依赖（含 dev 组）
         run: uv sync
+
+      # 只在一个组合上跑：静态检查与解释器版本无关，四份都跑等于白等
+      - name: 静态检查
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.14'
+        run: uv run ruff check src tests
 
       - name: 跑测试
         run: uv run pytest -q -p no:cacheprovider

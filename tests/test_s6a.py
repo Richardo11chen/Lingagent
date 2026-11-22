@@ -44,7 +44,7 @@ def test_approval_suspends_live(monkeypatch):  # 流式中途审批：Live 让�
     assert ans == "deny"
     assert events == ["stop", "start"]  # 让位→答→重开
     assert tui._blocks == []            # 旧块已被 stop 的最后一帧印掉——不重画
-    assert any("驳回" in l for l in lines)  # 答完补一行决定记录（屏幕侧留痕）
+    assert any("驳回" in line for line in lines)  # 答完补一行决定记录（屏幕侧留痕）
 
 
 def test_choose_session_paginates(monkeypatch, tmp_path):  # 超过一页：n 翻到第 2 页，选到第 2 页的会话
@@ -73,8 +73,7 @@ def test_choose_session_paginates(monkeypatch, tmp_path):  # 超过一页：n �
 
 
 def test_choose_session_non_tty(monkeypatch, tmp_path):  # 非终端 → 跳过会话选择，直接新会话
-    from agent_harness import cli
-    from agent_harness import session
+    from agent_harness import cli, session
 
     monkeypatch.setattr(session, "SESSION_ROOT", tmp_path / "sessions")  # 存档隔离，别写进用户目录
     monkeypatch.setattr(tui, "interactive", lambda: False)
@@ -346,7 +345,8 @@ def test_cli_repl_runs_one_turn_through_the_shared_orchestrator(monkeypatch, tmp
     """
     import sys
 
-    from agent_harness import cli, session as session_mod
+    from agent_harness import cli
+    from agent_harness import session as session_mod
     from agent_harness.llm import Action, ScriptLLM
     from agent_harness.settings import Settings
 

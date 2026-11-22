@@ -52,7 +52,7 @@ def test_load_trace_skips_bad_lines(tmp_path):  # 读回：坏行跳过；文件
 
 
 def _recs(p):
-    return [json.loads(l) for l in p.read_text(encoding="utf-8").strip().splitlines()]
+    return [json.loads(line) for line in p.read_text(encoding="utf-8").strip().splitlines()]
 
 
 def test_trace_event_detail_renders_raw():  # 钻取明细：全文原样输出，方括号不会被当 markup 解析

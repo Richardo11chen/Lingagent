@@ -75,3 +75,32 @@ def test_edit_file_rejects_ambiguous(tmp_path):  # old 多次出现（不唯一�
     out = edit_file(str(f), old="pass", new="continue")
     assert "编辑失败" in out and "2 次" in out and "第 1、2 行" in out
     assert f.read_text(encoding="utf-8") == "pass\npass\n"  # 文件没动
+
+
+def test_long_message_keeps_head_and_tail():
+    """用户粘 200k 日志：留头尾并标出省略多少，别让模型以为看到了全文。"""
+    from agent_harness.compact import MAX_MESSAGE_CHARS, cap_long_messages
+    from agent_harness.llm import Msg
+
+    text = "头" * 1000 + "中" * 200_000 + "尾" * 1000
+    out, capped = cap_long_messages([Msg("user", text)])
+
+    assert capped == 1
+    kept = out[0].content
+    assert len(kept) < MAX_MESSAGE_CHARS
+    assert kept.startswith("头") and kept.endswith("尾")  # 两头都在
+    assert "中间省略" in kept and str(len(text)) in kept  # 说清省略了多少
+    assert text.endswith(out[0].content[-10:])  # 原消息没被改（投影）
+
+
+def test_cap_skips_tool_results_and_short_messages():
+    """工具结果已被 cap_result 限到 32k；短消息一根毫毛都不动。"""
+    from agent_harness.compact import cap_long_messages
+    from agent_harness.llm import Msg
+
+    tool_msg = Msg("tool", "x" * 200_000, tool_name="read_file", tool_call_id="t1")
+    short = Msg("user", "你好")
+    out, capped = cap_long_messages([tool_msg, short])
+
+    assert capped == 0
+    assert out[0].content == tool_msg.content and out[1].content == "你好"

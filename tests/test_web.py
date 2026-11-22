@@ -12,7 +12,6 @@ from agent_harness.websearch.base import Hit
 from agent_harness.websearch.fetch import SSRFBlocked, assert_public, html_to_text
 from agent_harness.websearch.providers import Brave, DeepSeek, SearXNG, Tavily
 
-
 # ---- 内置抓取器 ----
 
 
@@ -172,37 +171,6 @@ def test_fetch_truncates_long_text(monkeypatch):
     )
     out = make_tools(_Provider(), fetch_limit=10)["fetch_url"]("https://example.com")
     assert "只给前 10" in out
-
-
-# ---- 摘要预算：按条数均分 + 句子边界 ----
-
-
-def _long(n: int) -> str:
-    return "这是一句足够长的话。" * n
-
-
-def test_snippet_budget_is_split_across_hits():
-    """固定每条 300 在 2 条时浪费、在 8 条时挤爆；均分让两头都合理。"""
-    hits = [Hit(f"T{i}", f"https://e/{i}", _long(30)) for i in range(2)]
-    out = make_tools(_Stub(hits), snippet_budget=1500)["web_search"]("q", 2)
-    assert "每条最多 750 字符" in out
-
-
-def test_snippet_clips_on_sentence_boundary():
-    """不要在词/句子中间砍断——那半句话会被模型当成事实。"""
-    from agent_harness.websearch import _clip
-
-    text = "第一句话说完了。第二句话很长很长很长很长很长很长很长很长很长"
-    clipped = _clip(text, 12)
-    assert clipped.endswith("。…")  # 停在句号，不是硬切
-    assert len(clipped) <= 13
-
-
-def test_snippet_squashes_markdown_noise():
-    from agent_harness.websearch import _squash
-
-    raw = "## 标题\n\n![图](x.png) 正文 [链接](http://a) 继续  还有\t空格"
-    assert _squash(raw) == "标题 正文 链接 继续 还有 空格"
 
 
 # ---- 摘要预算：按条数均分 + 句子边界 ----

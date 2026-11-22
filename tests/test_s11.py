@@ -142,7 +142,7 @@ def test_syntax_stripping_keeps_the_real_command():  # 剥语法词不能把真�
 # ---- A+：人写的允许规则（前缀语义）+ 会话内记忆 ----
 
 def test_allow_rules_are_prefix_matches():  # `git *` = 以 git 开头的任何命令；写全了就是只这一条
-    from agent_harness.guardrail import classify_command, matches_allow
+    from agent_harness.guardrail import matches_allow
 
     allow = ["git *", "docker ps"]
     assert matches_allow("git status", allow) == "git *"
@@ -252,4 +252,35 @@ def test_loop_puts_the_hint_into_the_approval_reason(tmp_path):
     assert "工作区外" in seen["reason"]
 
 
+# ---- 只读命令引用凭据：不自动放行（shell 不受路径围栏约束）----
 
+
+def test_read_only_but_touching_credentials_asks():
+    """只读清单里有 cat/head/tail，而 shell 不受路径围栏约束——
+    不拦的话，`cat ~/.ssh/id_rsa` 会自动执行，一句提示词注入就能把私钥送出去。"""
+    for cmd in (
+        "cat ~/.ssh/id_rsa",
+        "head -5 /home/u/.ssh/id_ed25519",
+        "cat ~/.aws/credentials",
+        "type C:////Users////u////.ssh////id_rsa",
+        "cat ~/.npmrc",
+        "cat ~/.kube/config",
+        "grep -rn Host ~/.config/gh/hosts.yml",
+    ):
+        assert risk(cmd) == "mutating", cmd
+
+
+def test_secret_check_does_not_cry_wolf_on_lookalikes():
+    """误伤一次，审批卡上的这句话就再没人信了。"""
+    assert risk("cat README.md") == "read_only"
+    assert risk("cat src/id_rsa_notes.md") == "read_only"  # 文件名带后缀，不是私钥
+    assert risk("ls ~/.ssh") == "read_only"  # 只是列目录，没进到文件
+    assert risk("rg credentials src/") == "read_only"
+
+
+def test_allow_rule_cannot_unlock_secrets():
+    """`allow = ["cat *"]` 是为了少按回车，不是为了让人一眼看住私钥。"""
+    from agent_harness.guardrail import classify_command
+
+    r = classify_command("cat ~/.ssh/id_rsa", allow=["cat *"])
+    assert r.risk == "mutating"

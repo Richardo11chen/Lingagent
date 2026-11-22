@@ -7,7 +7,7 @@ import asyncio
 import shutil
 import sys
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
@@ -16,14 +16,14 @@ from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.styles import Style
-from wcwidth import wcswidth
 from rich import box
 from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
-from rich.text import Text
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
+from wcwidth import wcswidth
 
 from .tools import tool_detail
 from .trace import TRACE_FIELD_CHARS, ellipsis_note
@@ -258,7 +258,9 @@ def ask() -> str:
     except KeyboardInterrupt:
         now = time.monotonic()
         if now - _ctrl_c_at <= CTRL_C_WINDOW:
-            raise EOFError  # 第二次：走 main 的收工路径——干净退出，不是错误
+            # 第二次：走 main 的收工路径——干净退出，不是错误。
+            # `from None` 是刻意的：这是控制流，不该在 traceback 里挂上一个 Ctrl+C。
+            raise EOFError from None
         _ctrl_c_at = now
         console.print("[dim]再按一次 Ctrl+C 退出（或 Ctrl+D）[/]")
         return ""  # 第一次：当作清空当前输入，回到提示行
@@ -453,17 +455,27 @@ def show_trace(recs: list[dict], session_id: str) -> None:
                 detail = f"失败 · {r['error']}"
             else:
                 detail = f"工具调用 ×{r.get('n_actions', '?')}"
-            table.add_row(str(i), ts, "● 模型", f"step {r.get('step')} · {detail}", _fmt_ms(r.get("duration_ms")))
+            table.add_row(
+                str(i), ts, "● 模型",
+                f"step {r.get('step')} · {detail}", _fmt_ms(r.get("duration_ms")),
+            )
         elif kind == "tool":
-            status = {"ok": "成功", "denied": "驳回", "blocked": "拦截", "error": "错误"}.get(r.get("status"), str(r.get("status")))
+            labels = {"ok": "成功", "denied": "驳回", "blocked": "拦截", "error": "错误"}
+            status = labels.get(r.get("status"), str(r.get("status")))
             args = r.get("args") or {}
             detail = tool_detail(args)
             if r.get("error"):
                 detail = f"{detail} {r['error']}".strip()
-            table.add_row(str(i), ts, f"⚙  {r.get('tool')}", f"{status} · {detail[:50]}", _fmt_ms(r.get("duration_ms")))
+            table.add_row(
+                str(i), ts, f"⚙  {r.get('tool')}",
+                f"{status} · {detail[:50]}", _fmt_ms(r.get("duration_ms")),
+            )
         elif kind == "approval":
             decision = {"approved": "已批准", "denied": "已驳回"}.get(r.get("decision"), str(r.get("decision")))
-            table.add_row(str(i), ts, "⚠  审批", f"{decision} · {str(r.get('command', ''))[:40]}", _fmt_ms(r.get("duration_ms")))
+            table.add_row(
+                str(i), ts, "⚠  审批",
+                f"{decision} · {str(r.get('command', ''))[:40]}", _fmt_ms(r.get("duration_ms")),
+            )
         elif kind == "hook":
             verdict = "拦下" if r.get("verdict") == "deny" else "放行"
             reason = f" · {r.get('reason', '')}" if r.get("reason") else ""

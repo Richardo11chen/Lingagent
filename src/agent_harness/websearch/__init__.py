@@ -11,8 +11,7 @@
 import os
 import re
 
-from .base import Hit, NotSupported, SearchError, SearchProvider  # noqa: F401  (对外导出)
-from .base import raise_for
+from .base import Hit, NotSupported, SearchError, SearchProvider, raise_for  # noqa: F401  (对外导出)
 from .fetch import assert_public, fetch_text
 from .providers import make as _make_provider
 

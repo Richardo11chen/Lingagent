@@ -5,16 +5,22 @@ API 状态机强制 tool 消息按 id 关联）；接口升级为传结构（mes
 build_context 拼 str 退役给展示层。
 """
 
-from dataclasses import dataclass, field
-from typing import Protocol
 import json
 import os
 import time
+from dataclasses import dataclass, field
+from typing import Protocol
 
 from openai import APIConnectionError, APIStatusError, OpenAI
 
+from .compact import (
+    cap_long_messages,
+    estimate_tokens,
+    microcompact,
+    microcompact_if_needed,
+    snip,
+)
 from .messages import Msg  # 重新导出——兼容从 llm 导入 Msg 的既有代码
-from .compact import estimate_tokens, microcompact, microcompact_if_needed, snip
 
 REQUEST_TIMEOUT = 120  # 秒：一次流式请求的硬上限（SDK 默认 600 秒——卡住十分钟太久）
 
@@ -285,6 +291,13 @@ class DeepSeekLLM:
         system_prompt: str | None = None,
     ) -> tuple[str, list[Action], str]:
         # 在调用 API 前进行上下文压缩（投影——不改 history）
+        # 先修单条：一条 200k 的粘贴就能把预算吃光，而且它不该等到"总量超阈值"才处理
+        before_list = messages
+        messages, capped = cap_long_messages(messages)
+        # 只在"刚发来的这条"被截时说一句：历史里的长消息每轮都会再被截一次，
+        # 每次都提示就等于每轮都刷屏，而人早就知道了。
+        if capped and messages[-1].content is not before_list[-1].content:
+            self._notice(f"这条消息过长（{len(before_list[-1].content or '')} 字符），已保留头尾", reason="cap")
         before_chars = estimate_tokens(messages)
         messages = microcompact_if_needed(messages, self._compact_threshold, keep_last=self._keep_last)
         after_chars = estimate_tokens(messages)

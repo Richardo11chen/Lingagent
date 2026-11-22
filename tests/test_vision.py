@@ -5,8 +5,6 @@
 
 from types import SimpleNamespace
 
-import pytest
-
 from agent_harness import vision
 from agent_harness.settings import Settings
 

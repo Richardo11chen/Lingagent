@@ -11,17 +11,16 @@ import time
 from pathlib import Path
 
 from . import tui
+from .approval import SessionAllow
 from .assembly import (
     WORKSPACE,
     build_system_prompt,
     list_visible_sessions,
     load_settings_and_llm,
 )
-from .approval import SessionAllow
 from .compact import estimate_tokens
-from .shell import detect as detect_shell
+from .llm import Msg
 from .session import (
-    list_sessions,
     list_trace_files,
     load_session,
     load_session_model,
@@ -31,10 +30,11 @@ from .session import (
     save_session_model,
     trace_path,
 )
-from .llm import Msg, DeepSeekLLM
+from .shell import detect as detect_shell
 from .trace import Tracer, days_since_viewed, load_trace, mark_viewed
 from .turn import Session, TurnCallbacks, describe_failure
 from .weblaunch import WebRun, clear_state, ensure_web, release_lock, stop_run, wait_until_idle
+
 
 def choose_session(workspace: Path, default_profile: str = "") -> tuple[str, list[Msg]]:
     """列历史会话让用户选（分页，每页 10 条）；返回 (session_id, history)。
@@ -321,9 +321,11 @@ def main() -> None:
                         on_child_tool=tui.child_tool,
                         on_child_tool_result=tui.child_tool_result,
                     ),
-                    should_stop=lambda: soft.requested,
+                    # 绑默认参数：lambda 捕获的是**变量**，而 soft 每轮都会被重新赋值。
+                    # 今天 run_turn 是同步调用所以撞不上，但这属于"哪天有人把 should_stop
+                    # 存起来延后调用"就会静默取到最后一个 soft 的坑。
+                    should_stop=lambda s=soft: s.requested,
                 )
-                reply = result.reply
                 # 探针的分母用这一轮**实际**用的提示词（run_turn 读的那份，不是再读一次）。
                 # 那个 lambda 捕获的是变量本身，所以重新赋值它就跟着变。
                 base_prompt = result.system_prompt

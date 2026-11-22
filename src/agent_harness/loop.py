@@ -1,15 +1,15 @@
 """主循环：组织上下文 → 调模型 → 解析动作 → 分发执行 → 回灌结果 → 停机判断。"""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Callable
-from .llm import LLM, Action
-from .messages import Msg
+
 from .guardrail import classify_command
+from .hooks import run_post, run_pre
+from .llm import LLM
+from .messages import Msg
 from .schema import TOOL_SCHEMAS
 from .tools import cap_result, take_diff
 from .trace import Tracer
-from .hooks import run_post, run_pre
 
 MAX_STEPS = 40
 Tool = Callable[..., str]
@@ -157,7 +157,9 @@ def agent_loop(
                             ev.fields["status"] = "error"
                             ev.fields["error"] = f"{type(e).__name__}: {e}"
                         else:
-                            run_post(post_hooks, action, result)  # 后钩子：只观察（仅在真执行后）
+                            # 后钩子可以**改写**结果（脱敏这类）。赋值回去是必须的——
+                            # 后面的 trace / 界面 / cap_result 都读这个 result。
+                            result = run_post(post_hooks, action, result)
                     else:
                         result = f"工具不存在：未知工具 {action.tool}。"
                         ev.fields["status"] = "error"

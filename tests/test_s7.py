@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from agent_harness.settings import Settings, load_settings
+from agent_harness.settings import load_settings
 
 
 def test_defaults_when_no_file(tmp_path):  # 无配置文件 → 全默认（单个 default profile）

@@ -4,8 +4,15 @@ import os
 import sys
 import time
 
+import pytest
+
 from agent_harness.tools import (
-    edit_file, read_file, run_shell, task_output, task_stop, write_file,
+    edit_file,
+    read_file,
+    run_shell,
+    task_output,
+    task_stop,
+    write_file,
 )
 
 
@@ -209,7 +216,7 @@ def test_edit_file_records_only_the_change(tmp_path):  # 替换型改动的 diff
     diff = take_diff()
     assert "+BETA" in diff and "-beta" in diff
     # 只有被改的那一行带 +/-；alpha / gamma 最多作为上下文行出现（n=3 会带进去）
-    changed = [l for l in diff.splitlines() if l[:1] in "+-" and l[:3] not in ("+++", "---")]
+    changed = [x for x in diff.splitlines() if x[:1] in "+-" and x[:3] not in ("+++", "---")]
     assert changed == ["-beta", "+BETA"]
 
 
@@ -326,3 +333,36 @@ def test_shell_marks_empty_output():
     """「跑成功但没输出」和「根本没执行」长得一样，至少标出来。"""
     out = run_shell("true")
     assert "退出码 0" in out and "没有产生任何输出" in out
+
+
+@pytest.mark.skipif(os.name == "nt", reason="进程组语义只在 POSIX 上；Windows 走 taskkill /T")
+def test_timeout_kills_the_whole_tree_not_just_the_shell(tmp_path):
+    """超时要把孙进程一起收掉。
+
+    `npm run build` 会起一堆 node、`pytest` 会起 worker——它们都是 shell 的孙子。
+    只杀 shell 的话，这些进程会活下来继续占端口和 CPU，而模块报告"命令已被终止"，
+    人只会觉得"为什么端口还被占着"。
+    """
+    marker = tmp_path / "child.pid"
+    # 先起一个后台 sleep 并记下它的 pid（= 孙进程），再让前台卡住等超时
+    out = run_shell(f"sleep 60 & echo $! > '{marker}'; sleep 60", timeout=1)
+    assert "超时" in out
+
+    pid = int(marker.read_text().strip())
+    time.sleep(0.5)
+    with pytest.raises(OSError):
+        os.kill(pid, 0)  # 信号 0 只探测存在性；进程没了就是 ProcessLookupError
+
+
+def test_read_file_refuses_oversized_files(tmp_path):
+    """整读一个 500MB 日志会被 OOM 杀掉，而那看起来像"工具莫名消失"。"""
+    from agent_harness.tools import MAX_READ_BYTES
+
+    big = tmp_path / "huge.log"
+    with big.open("wb") as f:
+        f.truncate(MAX_READ_BYTES + 1)  # 稀疏文件，不真占磁盘
+
+    out = read_file(str(big))
+
+    assert "太大" in out and "sed -n" in out  # 拒绝的同时给一条出路
+    assert "echo" not in out  # 没读内容

@@ -1,6 +1,6 @@
 """S4c 单测：规则文件加载（配置维——声明式约束的机制化）。"""
 
-from agent_harness.config import RULE_FILES, load_rules
+from agent_harness.config import load_rules
 
 
 def test_loads_existing_rule_file(tmp_path):  # 有文件：内容拼上且带来源标题

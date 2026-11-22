@@ -11,7 +11,6 @@
 
 import os
 import sys
-from pathlib import Path
 
 from .settings import CONFIG_PATH
 

@@ -75,6 +75,9 @@ class Settings:
     snip_keep_groups: int = 3
     server_host: str = "127.0.0.1"
     server_port: int = 8000
+    # 网页端只接受本机来源的浏览器连接（防"任意网页连 ws://127.0.0.1"）。
+    # 要从局域网/手机访问时，把你的访问地址写进来，如 ["http://192.168.1.5:8000"]。
+    extra_origins: list[str] = field(default_factory=list)
     web_autostart: bool = True  # 进 TUI 时自动把网页端（后端 + 前端 dev server）拉起来
     # 退 TUI 时收掉这次自己拉起的进程（端口上原有的不动）。False = 网页端活得比 TUI 久
     web_stop_on_exit: bool = True
@@ -118,7 +121,7 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as e:  # 语法错（漏引号等）——给一行干净报错，别甩 traceback
-        raise SystemExit(f"配置文件语法错误：{path}\n{e}")
+        raise SystemExit(f"配置文件语法错误：{path}\n{e}") from e
 
     # 模型 profiles：新格式 [models.*]；老格式 [model] 单个节自动兼容
     if "models" in data:
@@ -140,6 +143,10 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
     sv = data.get("server", {})
     s.server_host = str(sv.get("host", s.server_host))
     s.server_port = int(sv.get("port", s.server_port))
+    extra = sv.get("extra_origins", s.extra_origins)
+    if isinstance(extra, str):  # 允许写单条
+        extra = [extra]
+    s.extra_origins = [str(x) for x in extra]
 
     wb = data.get("web", {})
     s.web_autostart = bool(wb.get("autostart", s.web_autostart))

@@ -6,7 +6,7 @@
 它只把 `ask` 注入进来——问答长什么样是界面的事，记忆和判定留在这里，只有一份。
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 from .guardrail import command_head
 

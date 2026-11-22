@@ -67,6 +67,41 @@ def microcompact_if_needed(
     return microcompact(messages, keep_last)
 
 
+# 单条消息的上限：用户粘的日志、模型写的大段正文都可能比整个工具预算还大。
+# 50k 字符 ≈ 一整份中等长度的源码——再长的东西，人也不会指望模型逐字读完。
+MAX_MESSAGE_CHARS = 50_000
+_HEAD = 30_000
+_TAIL = 10_000
+
+
+def cap_long_messages(
+    messages: list[Msg], limit: int = MAX_MESSAGE_CHARS
+) -> tuple[list[Msg], int]:
+    """把超长消息留头留尾，中间标出省略了多少——返回 (新列表, 被截条数)。
+
+    为什么在**发送前**做，而不是进 history 时：用户粘进来的是他手上的证据，删掉就
+    真没了。投影式处理（不动原 Msg）和 `microcompact` 同一套语义，翻历史仍看得到全文。
+
+    tool 消息跳过：它们已经被 `cap_result` 限到 32k，再截一遍没有意义。
+    只截正文，不碰 `tool_calls`——那玩意儿一改配对就断，换来的是 400。
+    """
+    out: list[Msg] = []
+    capped = 0
+    for m in messages:
+        text = m.content or ""
+        if m.role == "tool" or len(text) <= limit:
+            out.append(m)
+            continue
+        kept = (
+            text[:_HEAD]
+            + f"\n…[中间省略 {len(text) - _HEAD - _TAIL} 字符，原文共 {len(text)}]…\n"
+            + text[-_TAIL:]
+        )
+        out.append(replace(m, content=kept))
+        capped += 1
+    return out, capped
+
+
 def snip(messages: list[Msg], keep_groups: int = 3) -> list[Msg]:
     """激进档（reactive 用）：保首条 user + 最近 keep_groups 组，中间整段省略。
 

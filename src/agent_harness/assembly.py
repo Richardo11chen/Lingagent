@@ -4,13 +4,11 @@ from pathlib import Path
 
 from .config import load_rules
 from .guardrail import safe_tool
-from .hooks import forbid_env_writes
+from .hooks import forbid_env_writes, redact_secrets
 from .sensors import run_tests
 from .subagent import make_spawn_tool
 from .tools import edit_file, read_file, run_shell, task_output, task_stop, write_file
 
-# 写法原则：规则用自然语言写，别用「电报体」（"读用 X；改用 Y"）。
-# 提示词的腔调会原样传染给回话——电报体喂进去，模型就用电报体答回来。
 # 只留能改变具体动作的规则；工具细节交给 schema，项目规矩交给 AGENTS.md（拼在下面）。
 SYSTEM_PROMPT = (
     "你是 Lingagent，一个 coding agent，工作目录是项目根。\n\n"
@@ -40,7 +38,7 @@ WORKSPACE = Path.cwd()  # 工作目录 = 项目根
 
 # 策略名单（S9）：加策略只往这里塞函数——loop 一个字不动
 PRE_HOOKS = [forbid_env_writes]
-POST_HOOKS: list = []  # 后钩子（观察类）——v1 空名单
+POST_HOOKS = [redact_secrets]  # 能改写结果：密钥打码后再进 trace / 界面 / 上下文
 
 tools = {
     "read_file": safe_tool(read_file, WORKSPACE),

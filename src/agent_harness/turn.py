@@ -11,9 +11,9 @@ agent_loop」。这段**顺序**写错了不会报错——比如先建工具表
 - 异常原样抛——入口要区分「用户中断」和「跑失败了」，吞掉就丢了这个信息。
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from .assembly import POST_HOOKS, PRE_HOOKS, build_session_tools, build_system_prompt
 from .loop import agent_loop

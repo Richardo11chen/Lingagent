@@ -45,8 +45,11 @@ keep_last = 5               # 微压缩保留最近 N 条工具结果
 snip_keep_groups = 3        # reactive 丢中间时保留最近 K 组
 
 [server]
-host = "127.0.0.1"
+host = "127.0.0.1"          # 改成 0.0.0.0 = 局域网可访问；那时务必配 extra_origins
 port = 8000
+# 网页端只接受本机来源的浏览器连接（WebSocket 不受同源策略约束，服务端必须自己验 Origin）。
+# 要从别的机器/手机访问，把你的访问地址写进来——不写就连不上，这是故意的。
+# extra_origins = ["http://192.168.1.5:8000"]
 
 [web]
 autostart = true            # 进 TUI 时自动拉起网页端（后端 + 前端 dev server）——已在跑的不重复拉

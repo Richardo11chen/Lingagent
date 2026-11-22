@@ -61,7 +61,7 @@ def test_relative_path_follows_the_given_workspace(tmp_path, monkeypatch):  # �
 
 
 def test_safe_tool_blocks_outside_workspace(tmp_path):  # safe_tool：界外拦截返回越界语，界内正常执行
-    from agent_harness.guardrail import in_workspace, safe_tool
+    from agent_harness.guardrail import safe_tool
     safe_write = safe_tool(write_file, tmp_path)
     blocked = safe_write(path=str(tmp_path / ".." / "evil.txt"), content="hack")
     assert "越界拦截" in blocked
