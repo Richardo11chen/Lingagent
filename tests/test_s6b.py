@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from agent_harness import assembly, server
+from agent_harness import runtime as runtime_mod
 from agent_harness.llm import Action
 from agent_harness.settings import Settings
 
@@ -56,8 +57,8 @@ def _no_save(workspace, session_id, msgs):  # 测试不落盘
 
 def test_ws_streaming_and_done(monkeypatch, tmp_path):  # 基本流：session → chunk → done
     monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings()))
-    monkeypatch.setattr(server, "save_messages", _no_save)
-    monkeypatch.setattr(server, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
+    monkeypatch.setattr(runtime_mod, "save_messages", _no_save)
+    monkeypatch.setattr(runtime_mod, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
     c = TestClient(server.app)
     with connect(c) as ws:
         assert ws.receive_json()["type"] == "session"
@@ -78,8 +79,8 @@ def test_ws_streaming_and_done(monkeypatch, tmp_path):  # 基本流：session �
 
 def test_ws_approval_approved(monkeypatch, tmp_path):  # 批准路径：命令真执行（run_shell 被调）
     monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings()))
-    monkeypatch.setattr(server, "save_messages", _no_save)
-    monkeypatch.setattr(server, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
+    monkeypatch.setattr(runtime_mod, "save_messages", _no_save)
+    monkeypatch.setattr(runtime_mod, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
     ran = {}
 
     def fake_run_shell(command: str) -> str:
@@ -129,8 +130,8 @@ def test_ws_remember_survives_to_the_next_turn(monkeypatch, tmp_path):
         server, "load_settings_and_llm",
         lambda sp, m=None, **kw: (ShellEachTurn(), Settings()),
     )
-    monkeypatch.setattr(server, "save_messages", _no_save)
-    monkeypatch.setattr(server, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
+    monkeypatch.setattr(runtime_mod, "save_messages", _no_save)
+    monkeypatch.setattr(runtime_mod, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
     monkeypatch.setitem(assembly.tools, "run_shell", lambda command: "退出码 0")
 
     c = TestClient(server.app)
@@ -438,8 +439,8 @@ def test_busy_is_one_while_a_web_turn_runs(monkeypatch, tmp_path):
     monkeypatch.setattr(
         server, "load_settings_and_llm", lambda sp, m=None, **kw: (SlowLLM(), Settings())
     )
-    monkeypatch.setattr(server, "save_messages", _no_save)
-    monkeypatch.setattr(server, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
+    monkeypatch.setattr(runtime_mod, "save_messages", _no_save)
+    monkeypatch.setattr(runtime_mod, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
     c = TestClient(server.app)
     with connect(c) as ws:
         ws.receive_json()  # session
@@ -454,6 +455,47 @@ def test_busy_is_one_while_a_web_turn_runs(monkeypatch, tmp_path):
         while ws.receive_json()["type"] != "assistant_done":
             pass
     assert c.get("/health").json()["busy"] == 0  # 跑完了
+
+
+def test_commands_while_running_say_the_same_thing(monkeypatch, tmp_path):
+    """跑着的时候再下指令 / 开新会话：都要**说出口**，而且说的是同一句话。
+
+    以前网页端收到新指令是静默 continue（用户以为消息丢了），开新会话那条却会提示——
+    同一个文件里两个答案。现在判定在 SessionRuntime 里，措辞也只有一份。
+    """
+    gate = threading.Event()
+
+    class SlowLLM(FakeLLM):
+        def __call__(self, *a, **kw):
+            gate.wait(5)
+            return ("好了", [], "")
+
+    monkeypatch.setattr(
+        server, "load_settings_and_llm", lambda sp, m=None, **kw: (SlowLLM(), Settings())
+    )
+    monkeypatch.setattr(runtime_mod, "save_messages", _no_save)
+    monkeypatch.setattr(runtime_mod, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
+    c = TestClient(server.app)
+    try:
+        with connect(c) as ws:
+            ws.receive_json()  # session
+            ws.receive_json()  # status
+            ws.send_json({"type": "user", "text": "第一句"})
+            for _ in range(100):  # 等这一轮真的跑起来
+                if c.get("/health").json()["busy"] == 1:
+                    break
+                time.sleep(0.02)
+
+            ws.send_json({"type": "user", "text": "第二句"})
+            assert ws.receive_json() == {"type": "notice", "text": runtime_mod.BUSY_MESSAGE}
+
+            ws.send_json({"type": "new_session"})
+            assert ws.receive_json() == {"type": "notice", "text": runtime_mod.BUSY_MESSAGE}
+
+            gate.set()
+            assert ws.receive_json()["type"] == "assistant_done"  # 第一句照常跑完
+    finally:
+        gate.set()
 
 
 def test_parse_netstat_picks_only_listening_rows():
@@ -489,8 +531,8 @@ def test_ws_hook_denied_event(monkeypatch, tmp_path):  # 策略拦下 → WS 推
             return ("", [Action(tool="write_file", args={"path": ".env", "content": "x"})], "")
 
     monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None, **kw: (EnvLLM(), Settings()))
-    monkeypatch.setattr(server, "save_messages", _no_save)
-    monkeypatch.setattr(server, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
+    monkeypatch.setattr(runtime_mod, "save_messages", _no_save)
+    monkeypatch.setattr(runtime_mod, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
     c = TestClient(server.app)
     with connect(c) as ws:
         ws.receive_json()  # session
@@ -510,7 +552,7 @@ def test_ws_trace_request(monkeypatch, tmp_path):  # 轨迹时间线：trace_req
     monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings()))
     tf = tmp_path / "t.trace.jsonl"
     tf.write_text('{"kind": "model", "step": 1, "n_actions": 0}\n', encoding="utf-8")
-    monkeypatch.setattr(server, "trace_path", lambda w, s: tf)
+    monkeypatch.setattr(runtime_mod, "trace_path", lambda w, s: tf)
     c = TestClient(server.app)
     with connect(c) as ws:
         assert ws.receive_json()["type"] == "session"
@@ -574,7 +616,7 @@ def test_ws_lists_and_switches_models(monkeypatch):
     monkeypatch.setattr(
         server, "load_settings_and_llm", lambda sp, m=None, **kw: (ModelLLM(), Settings())
     )
-    monkeypatch.setattr(server, "save_session_model", lambda w, s, n: None)
+    monkeypatch.setattr(runtime_mod, "save_session_model", lambda w, s, n: None)
     c = TestClient(server.app)
     with connect(c) as ws:
         ws.receive_json()  # session
@@ -597,10 +639,12 @@ def test_ws_lists_sessions_for_the_picker(monkeypatch):
     monkeypatch.setattr(
         server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings())
     )
-    monkeypatch.setattr(server, "prune_empty_sessions", lambda w: 0)
+    monkeypatch.setattr(runtime_mod, "prune_empty_sessions", lambda w: 0)
     monkeypatch.setattr(
-        server, "list_visible_sessions",
-        lambda: [{"id": "s1", "first_user_msg": "旧会话"}],
+        server, "choices",  # server 里是 `from .runtime import choices`，得打这一份
+        lambda w, default_profile="": [
+            runtime_mod.SessionChoice(id="s1", mtime=0.0, model="m", preview="旧会话"),
+        ],
     )
     c = TestClient(server.app)
     with connect(c) as ws:
@@ -638,9 +682,9 @@ def test_resume_renders_tool_detail_and_body(monkeypatch):
     from agent_harness.messages import Msg
 
     monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings()))
-    monkeypatch.setattr(server, "load_session_model", lambda w, sid: None)
+    monkeypatch.setattr(runtime_mod, "load_session_model", lambda w, sid: None)
     monkeypatch.setattr(
-        server,
+        runtime_mod,
         "load_session",
         lambda w, sid: [
             Msg(role="user", content="跑一下测试"),

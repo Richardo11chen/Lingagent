@@ -51,11 +51,14 @@ def test_approval_suspends_live(monkeypatch):  # 流式中途审批：Live 让�
 def test_choose_session_paginates(monkeypatch, tmp_path):  # 超过一页：n 翻到第 2 页，选到第 2 页的会话
     from agent_harness import cli
     from agent_harness import session as session_mod
+    from agent_harness.runtime import SessionChoice
 
     monkeypatch.setattr(session_mod, "SESSION_ROOT", tmp_path / "_archives")
-    fake = [{"id": f"s{i:02d}", "mtime": 0.0, "first_user_msg": f"会话{i}"} for i in range(25)]
-    monkeypatch.setattr(cli, "list_visible_sessions", lambda: fake)
-    monkeypatch.setattr(cli, "load_session", lambda w, sid: [])
+    fake = [
+        SessionChoice(id=f"s{i:02d}", mtime=0.0, model="m", preview=f"会话{i}")
+        for i in range(25)
+    ]
+    monkeypatch.setattr(cli, "choices", lambda w, p="": fake)
     monkeypatch.setattr(tui, "interactive", lambda: True)
     shown = []
     monkeypatch.setattr(
@@ -65,12 +68,11 @@ def test_choose_session_paginates(monkeypatch, tmp_path):  # 超过一页：n �
     inputs = iter(["n", "1"])  # 翻到第 2 页 → 选第 1 个
     monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
 
-    sid, history = cli.choose_session(tmp_path)
+    sid = cli.choose_session(tmp_path)
     assert sid == "s10"                        # 第 2 页第 1 个 = 总第 11 个
     assert [p for p, _, _ in shown] == [1, 2]  # 渲染了两页
     assert shown[1][1] == 3                    # 25 个 → 共 3 页
     assert shown[1][2] == "会话10"
-    assert history == []
 
 
 def test_choose_session_non_tty(monkeypatch, tmp_path):  # 非终端 → 跳过会话选择，直接新会话
@@ -78,9 +80,7 @@ def test_choose_session_non_tty(monkeypatch, tmp_path):  # 非终端 → 跳过�
 
     monkeypatch.setattr(session, "SESSION_ROOT", tmp_path / "sessions")  # 存档隔离，别写进用户目录
     monkeypatch.setattr(tui, "interactive", lambda: False)
-    sid, history = cli.choose_session(tmp_path)
-    assert history == []
-    assert sid  # 新会话 id 已生成（占位文件落在隔离的 SESSION_ROOT）
+    assert cli.choose_session(tmp_path) is None  # None = 开新会话（id 由 runtime 生成）
 
 
 def test_pipe_exhausted_exits_cleanly(tmp_path):
@@ -320,11 +320,13 @@ def test_session_picker_shows_the_model_that_will_be_used(monkeypatch, tmp_path)
     """没记过模型的会话（新建就用默认）要显示「默认」，不能是一根横杠。"""
     from agent_harness import cli
     from agent_harness import session as session_mod
+    from agent_harness.runtime import SessionChoice
 
     monkeypatch.setattr(session_mod, "SESSION_ROOT", tmp_path / "_archives")
-    fake = [{"id": "s1", "mtime": 0.0, "first_user_msg": "旧会话"}]
-    monkeypatch.setattr(cli, "list_visible_sessions", lambda: fake)
-    monkeypatch.setattr(cli, "load_session", lambda w, sid: [])
+    monkeypatch.setattr(
+        cli, "choices",
+        lambda w, p="": [SessionChoice(id="s1", mtime=0.0, model="deepseek-flash（默认）", preview="旧会话")],
+    )
     monkeypatch.setattr(tui, "interactive", lambda: True)
     monkeypatch.setattr("builtins.input", lambda prompt="": "0")  # 直接开新会话
     shown: list[str] = []
@@ -333,9 +335,15 @@ def test_session_picker_shows_the_model_that_will_be_used(monkeypatch, tmp_path)
     cli.choose_session(tmp_path, "deepseek-flash")
     assert shown == ["deepseek-flash（默认）"]
 
-    monkeypatch.setattr(cli, "load_session_model", lambda w, sid: "MiniMax-M3")
-    cli.choose_session(tmp_path, "deepseek-flash")
-    assert shown[-1] == "MiniMax-M3"  # 记过的会话用记录值，不加"默认"
+    # 记过的会话显示记录值，不加"默认"——这条规则在 runtime.choices 里，单独测它
+    from agent_harness import runtime as runtime_mod
+
+    monkeypatch.setattr(runtime_mod, "list_sessions", lambda w: [
+        {"id": "s1", "mtime": 0.0, "first_user_msg": "旧会话"},
+    ])
+    monkeypatch.setattr(runtime_mod, "load_session_model", lambda w, sid: "MiniMax-M3")
+    picked = runtime_mod.choices(tmp_path, "deepseek-flash")
+    assert picked[0].model == "MiniMax-M3"
 
 
 def test_cli_repl_runs_one_turn_through_the_shared_orchestrator(monkeypatch, tmp_path):
@@ -379,14 +387,17 @@ def test_cli_repl_runs_one_turn_through_the_shared_orchestrator(monkeypatch, tmp
         cli, "load_settings_and_llm",
         lambda *a, **k: (FakeLLM([Action("no_such_tool", {})]), Settings()),
     )
-    monkeypatch.setattr(cli, "list_visible_sessions", lambda: [])
-    monkeypatch.setattr(cli, "load_session_model", lambda w, s: None)
-    monkeypatch.setattr(cli, "save_session_model", lambda w, s, p: None)
-    monkeypatch.setattr(cli, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
-    monkeypatch.setattr(cli, "save_messages", lambda w, s, msgs: saved.append(list(msgs)))
-    monkeypatch.setattr(cli, "prune_empty_sessions", lambda w: 0)
+    # 会话状态迁移全在 runtime 里：落盘 / 轨迹 / 模型记忆都打它那边的桩
+    from agent_harness import runtime as runtime_mod
+
+    monkeypatch.setattr(cli, "choices", lambda w, p="": [])
+    monkeypatch.setattr(runtime_mod, "load_session_model", lambda w, s: None)
+    monkeypatch.setattr(runtime_mod, "save_session_model", lambda w, s, p: None)
+    monkeypatch.setattr(runtime_mod, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
+    monkeypatch.setattr(runtime_mod, "save_messages", lambda w, s, msgs: saved.append(list(msgs)))
+    monkeypatch.setattr(runtime_mod, "prune_empty_sessions", lambda w: 0)
+    monkeypatch.setattr(runtime_mod, "list_trace_files", lambda w: [])
     monkeypatch.setattr(cli, "days_since_viewed", lambda: None)
-    monkeypatch.setattr(cli, "list_trace_files", lambda w: [])
     monkeypatch.setattr(tui, "interactive", lambda: False)
     monkeypatch.setattr(tui, "ask", lambda: next(prompts, "exit"))
     for name in ("begin_stream", "end_stream", "stream_chunk", "reasoning_chunk",
@@ -394,13 +405,18 @@ def test_cli_repl_runs_one_turn_through_the_shared_orchestrator(monkeypatch, tmp
                  "show_history", "show_web_hint", "show_note"):
         monkeypatch.setattr(tui, name, lambda *a, **k: None)
 
-    # 规则文件每轮重读：启动时 cli 读一次，之后每轮由 run_turn 读（只有那一处读）
-    reads, turn_reads = [], []
+    # 规则文件每轮重读：启动时 cli 读一次（建 llm 用）、runtime 读一次（探针初始分母），
+    # 之后每轮由 run_turn 读——缓存提示词就等于凭空多一条"改了规则要重启"的隐性规矩
+    reads, rt_reads, turn_reads = [], [], []
     real_prompt = cli.build_system_prompt
     import agent_harness.turn as turn_mod
     real_turn_prompt = turn_mod.build_system_prompt
+    real_runtime_prompt = runtime_mod.build_system_prompt
     monkeypatch.setattr(
         cli, "build_system_prompt", lambda: (reads.append(1), real_prompt())[1]
+    )
+    monkeypatch.setattr(
+        runtime_mod, "build_system_prompt", lambda: (rt_reads.append(1), real_runtime_prompt())[1]
     )
     monkeypatch.setattr(
         turn_mod, "build_system_prompt", lambda: (turn_reads.append(1), real_turn_prompt())[1]
@@ -408,7 +424,8 @@ def test_cli_repl_runs_one_turn_through_the_shared_orchestrator(monkeypatch, tmp
 
     cli.main()
 
-    assert len(reads) == 1      # 启动那次（给探针一个初始值）
+    assert len(reads) == 1       # 启动那次（建 llm 用的提示词）
+    assert len(rt_reads) == 1    # 启动那次（探针的分母要有个初始值）
     assert len(turn_reads) == 1  # 这一轮实际用的那份
     assert len(calls) == 1                      # 走的是共用编排
     # 终端这次把两条能力都接上了：工具结果（diff / 耗时 / 失败原因）与停止信号

@@ -40,13 +40,14 @@ uv run lingan -web               # 只起后端（http://127.0.0.1:8000）
 
 **`turn.py` 是抽得最好的部分，别推倒重来。** 它是一段直线：给定 goal 和一组回调，跑完返回。所以两个界面都能用。
 
-出问题的是**会话管理**（新建/切换模型/存档/回放），`cli.py` 和 `server.py` 各写了一遍——见 §8 待做 P1。
+`turn.py` 只做"一轮"，会话的生命周期在上面一层：`runtime.SessionRuntime`（新建 / 切换模型 / 存档 / 回放 / "能不能跑"）。两个界面都不许自己写这些——见 §5.11。
 
 ## 4. 模块地图（只列容易找错的）
 
 | 文件 | 职责 | 注意 |
 |---|---|---|
 | `assembly.py` | 装配：system prompt / 工作区 / 工具注册表 | `WORKSPACE` 的**唯一**构造点 |
+| `runtime.py` | 会话运行时：新建 / 切换模型 / 存档 / 回放 / 跑一轮 | 两个界面只调它，见 §5.11 |
 | `guardrail.py` | 命令风险分级 + 路径围栏 | 三条防线在这里排位 |
 | `hooks.py` | 策略挂载点 + 内置策略 | 前钩子能拦、后钩子能改 |
 | `compact.py` | 投影式压缩 | 不改 history，只改发给 API 的副本 |
@@ -122,6 +123,19 @@ uv run lingan -web               # 只起后端（http://127.0.0.1:8000）
 
 同理，**后钩子拿不到 `apply_change`**：改文件这件事对它是结构性做不到的（决策见 §8 P0）。
 
+### 5.11 会话状态迁移只走 `SessionRuntime`
+
+新建 / 恢复 / 切模型 / 落盘 / 轨迹，只在 `runtime.py` 里有实现。`cli.py` 和 `server.py`
+**不许 import `Session`（`.session` 存档模块）**——`tests/test_runtime.py` 用 AST 盯着。
+
+这条不是洁癖：同一份编排抄两遍之后，网页端收到新指令时静默丢弃、终端却提示"这一轮还在跑"，
+同一个文件里两个答案，而且没有任何测试会红。现在"能不能"由 `_claim()` 一处回答，
+"这句话怎么说"只有 `BUSY_MESSAGE` 一个常量。
+
+顺带一句边界：`llm` 和 `approver` 是**连接级**的（由 UI 造、传给 runtime，切会话不重建）；
+`session_id` / `history` / `tracer` / 该用哪个 profile 是**会话级**的。画错了，表现是
+"切会话把模型也重置了"。
+
 ## 6. 这个环境里的坑（会重复踩）
 
 **heredoc 追加测试会写两遍。** 用 `cat >> file <<EOF` 追加时，内容有时会写进两份，产生重复定义（ruff `F811` 能抓到，但人不一定看）。**追加完立刻 `grep -c "def test_xxx"` 数一下。** 这个坑踩过三次，两次导致了"测试从没跑过"的假绿。
@@ -149,9 +163,8 @@ curl -s https://api.github.com/repos/Richardo11chen/Lingagent/commits/main
 ## 7. 当前状态
 
 - 已发布：`0.1.6`（PyPI，`Requires-Python: >=3.11`）
-- 已提交未发布：`a742db7`（WS token + 工作区实体化）
-- 工作区未提交：P0（diff 意图化）+ HANDOFF 本身
-- 测试：327 passed + 1 skipped（skipped 是仅 POSIX 有效的进程树测试）
+- 已提交未发布：`a742db7`（WS token + 工作区实体化）、`5b2da04`（P0 diff 意图化）、本条（P1 会话运行时）
+- 测试：337 passed + 1 skipped（skipped 是仅 POSIX 有效的进程树测试）
 - CI：`.github/workflows/publish.yml`，4 个 test job（windows/ubuntu × 3.11/3.14）+ 1 个 publish
 
 ## 8. 待做项
@@ -180,17 +193,25 @@ curl -s https://api.github.com/repos/Richardo11chen/Lingagent/commits/main
 
 **已知边界**：`run_shell` 的改动统计不到（`echo x > f` 不产生 diff）。shell 不透明，这一点无法根治，文档里说明即可。
 
-### P1：会话管理去重（"两个店员，没有店长"）
+### P1 ✅ 已完成：会话管理去重（"两个店员，没有店长"）
 
-`cli.py` 和 `server.py` 各有一份会话编排（新建 / 切换模型 / 存档 / 回放），已经开始分叉：网页端收到新指令时**静默 `continue`**，而新建会话那条分支却会提示"这一轮还在跑"——同一个文件里两个答案。
+**原来的问题**：`cli.py` 和 `server.py` 各有一份会话编排（新建 / 切换模型 / 存档 / 回放），已经开始分叉——网页端收到新指令时**静默 `continue`**，而新建会话那条分支却会提示"这一轮还在跑"：同一个文件里两个答案。
 
-**做法**：抽 `SessionRuntime`，收掉这些编排；两个 UI 只调它。**决策写在这里，UI 只负责呈现结果**（包括"拒绝了，因为正在跑"）。
+**现在的形状**：`runtime.SessionRuntime` 收掉了这些编排，两个 UI 只调它。
 
-**边界要划清**：`llm` 和 `approver` 是**连接级**的（`server.py` 里有注释："它们是'你'的东西，不是会话的"），`session_id` / `history` / trace 是会话级。画错了重构完会发现"切会话把模型也重置了"。
+- `run(goal, callbacks, should_stop)` —— 跑一轮 + **成功才落盘**（`history[old_len:]` 也搬进来了）
+- `new_session()` / `resume(sid)` / `switch_model(name)` —— 会话级命令，跑着的时候都抛 `SessionBusy`
+- `restore_model(explicit?)` —— "打开会话用哪个模型"（含"原模型已不在配置里"这句提示）
+- `usage()` / `trace_records()` / `record_auto()` —— 两个界面原来各算一遍的东西
+- 模块级 `choices()` / `prune()` / `clean_trace()` / `trace_age_days()` —— 会话列表与打扫
 
-**验收**：全仓库搜「还在跑」，只能出现在一处。
+**"能不能跑"只有一处**：`_claim()` 是个非阻塞锁的上下文管理器。做成"先问再跑"不行——问和跑之间有空隙，网页端两条消息挨着到达时正好撞这个，两边各自问一次就双双通过。
 
-**加固**：加一条架构测试——`cli.py` / `server.py` 不许直接 import `session`，只能走 `SessionRuntime`。用测试守架构，比写文档可靠。
+**顺手修的一处**：`switch_model` 原来在跑着的时候也允许，会把一轮拆成"前半段用 A、后半段用 B"，账还记成 B。现在和其他会话级命令一样被拒。
+
+**验收**（都做到）：全仓库搜「还在跑」只剩 `BUSY_MESSAGE` 一处；`cli.py` / `server.py` 不再 import `.session`（`tests/test_runtime.py` 用 AST 盯）；网页端再下指令会**说出口**，不再静默丢。
+
+**已知边界**：`SessionRuntime` 持有 `_lock`，所以"一轮"的最小粒度是整个 turn。真要做"打断当前轮并立刻开新会话"得等 P2 的 mailbox。
 
 ### P2：actor 化（"连店面也改成一个柜台"）
 

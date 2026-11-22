@@ -119,13 +119,6 @@ def build_system_prompt() -> str:
     return SYSTEM_PROMPT + "\n\n" + load_rules(WORKSPACE.root)
 
 
-def list_visible_sessions() -> list[dict]:
-    """列可展示的历史会话（跳过没聊过的空会话占位）——CLI 与 Web 共用。"""
-    from .session import list_sessions
-
-    return [s for s in list_sessions(WORKSPACE.root) if s["first_user_msg"]]
-
-
 class SwitchableLLM:
     """可运行时切换的模型门面（对主循环透明——接口与 LLM 一致）。
 

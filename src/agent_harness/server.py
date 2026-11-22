@@ -9,34 +9,24 @@ import json
 import os
 import secrets
 import threading
-from functools import partial
 
 import uvicorn
 from fastapi import WebSocket, WebSocketDisconnect
 
 from . import webapp
 from .approval import SessionAllow
-from .assembly import (
-    WORKSPACE,
-    build_system_prompt,
-    list_visible_sessions,
-    load_settings_and_llm,
-)
-from .compact import estimate_tokens
-from .llm import Msg
-from .session import (
-    load_session,
-    load_session_model,
-    new_session_id,
-    prune_empty_sessions,
-    save_messages,
-    save_session_model,
-    trace_path,
+from .assembly import WORKSPACE, build_system_prompt, load_settings_and_llm
+from .runtime import (
+    BUSY_MESSAGE,
+    SessionBusy,
+    SessionRuntime,
+    choices,
+    prune,
 )
 from .settings import load_settings
 from .tools import task_snapshot, task_stop, tool_detail
-from .trace import TRACE_FIELD_CHARS, Tracer, ellipsis_note, load_trace, mark_viewed
-from .turn import Session, TurnCallbacks, describe_failure
+from .trace import TRACE_FIELD_CHARS, ellipsis_note
+from .turn import TurnCallbacks, describe_failure
 from .webapp import (  # noqa: F401  (对外沿用 server.app / server.origin_allowed 等)
     PROTOCOL,
     SESSION_TOKEN,
@@ -92,8 +82,6 @@ async def ws_endpoint(ws: WebSocket):
         return
     await ws.accept()
     loop = asyncio.get_running_loop()
-    session_id = new_session_id(WORKSPACE.root)
-    history: list[Msg] = []
 
     def send(payload: dict) -> None:
         """线程 → 事件循环 → WS（run_user 与模型适配器共用）。"""
@@ -104,11 +92,7 @@ async def ws_endpoint(ws: WebSocket):
         on_notice=lambda text: send({"type": "notice", "text": text}),
     )
     approval: dict = {}  # 审批等待槽：{"event": Event, "result": bool, "remember": bool}
-    # 当前这一轮的 tracer（每轮重建：resume 会换 session_id，也就换了文件）。
-    # 用一格列表而不是普通变量，是因为 approver 活在 ws 生命周期里、比某一轮长。
-    tracer_now: list = [Tracer()]
     stop_event = threading.Event()  # 本轮「别继续了」——网页停止按钮置位，loop 每步看一眼
-    user_task: asyncio.Task | None = None
 
     def _ask(command: str, reason: str) -> str:
         """网页怎么问：推卡片，等 Event。返回 decision（approve / always / deny）。
@@ -131,7 +115,7 @@ async def ws_endpoint(ws: WebSocket):
 
     def _on_auto(command: str, reason: str) -> None:
         send({"type": "notice", "text": f"自动批准 · {reason}"})
-        tracer_now[0].emit("auto", command=command, reason=reason)
+        runtime.record_auto(command, reason)  # 记到「这一轮」的账上（runtime 里那份随会话走）
 
     # 建在连接级（不是每轮）：它记着「本会话不再问哪些程序」和自动批准开关，
     # 每轮重建等于每轮失忆——那正好是这份记忆存在的意义。
@@ -141,26 +125,25 @@ async def ws_endpoint(ws: WebSocket):
         on_reused=lambda head: send({"type": "notice", "text": f"本会话已允许 {head}，直接执行"}),
         on_auto=_on_auto,
     )
-    # 会话级装配建一次（模型 / 审批 / 工作区 / 历史）：每轮只递 goal 和回调。
-    session = Session(
+    # 会话级装配（id / 历史 / 轨迹 / 该用哪个模型）全在 runtime 里：连接级的东西
+    # （llm、approver）传进去，切会话不重建——它们是"你"的，不是会话的。
+    runtime = SessionRuntime(
         llm=llm, settings=settings, approver=approver,
-        workspace=WORKSPACE.root, history=history,
+        workspace=WORKSPACE.root, session_id=None,  # 新连接 = 新会话
     )
 
     def status_payload() -> dict:
         """顶栏要的那点状态：审批模式 + 上下文用量。
 
-        分子算法与 TUI 完全一致（系统提示 + 历史字符当量），分母是压缩阈值——
-        两边各算一套的话，迟早出现"显示 60% 但已经开始压缩"。
+        用量算法与 TUI 完全一致（同一个 runtime）：两边各算一套的话，迟早出现
+        "显示 60% 但已经开始压缩"。
         """
-        return {
-            "type": "status",
-            "auto": approver.auto,
-            "used": estimate_tokens(history) + len(build_system_prompt()),
-            "limit": settings.compact_threshold,
-        }
+        used, limit = runtime.usage()
+        return {"type": "status", "auto": approver.auto, "used": used, "limit": limit}
 
-    await ws.send_json({"type": "session", "id": session_id, "history_n": len(history), "model": llm.current})
+    await ws.send_json(
+        {"type": "session", "id": runtime.session_id, "history_n": 0, "model": llm.current}
+    )
     await ws.send_json(status_payload())
 
     def _report_round_failure(task: asyncio.Task) -> None:
@@ -174,7 +157,7 @@ async def ws_endpoint(ws: WebSocket):
         if exc is not None:
             send({"type": "error", "text": f"本轮失败：{type(exc).__name__}: {exc}"})
 
-    async def run_user(goal: str) -> None:
+    async def run_user(goal: str, stop: threading.Event) -> None:
         """跑一轮 agent（旁路线程）——回调经事件循环推回 WS。"""
 
         def on_text(chunk: str) -> None:
@@ -224,46 +207,40 @@ async def ws_endpoint(ws: WebSocket):
                 "removed": removed,
             })
 
-        old_len = len(history)
-        # 每轮现取——resume 换 id 后自动跟到新文件；关掉 trace 就不写盘
-        tracer = Tracer(trace_path(WORKSPACE.root, session_id)) if settings.trace_enabled else Tracer()
-        tracer_now[0] = tracer  # approver 活在连接级，自动批准要记到「这一轮」的账上
-
-        run = partial(
-            session.run,
-            goal,
-            tracer=tracer,  # 每轮换：resume 之后轨迹要跟到新文件
-            callbacks=TurnCallbacks(
-                on_text=on_text,
-                on_reasoning=on_reasoning,
-                on_tool=on_tool,
-                on_tool_result=on_tool_result,
-                on_hook=on_hook,
-                on_notice=lambda text: send({"type": "notice", "text": text}),
-                # 子 agent 的工具活动用 notice 带出来：前端不用改也能看见"它在干活"。
-                # 正文增量不转发——碎片太多，会把主流刷满；结论本来就会回给父 agent。
-                on_child_tool=on_child_tool,
-            ),
-            should_stop=stop_event.is_set,
-        )
         try:
-            result = await asyncio.to_thread(run)
+            result = await asyncio.to_thread(
+                runtime.run,
+                goal,
+                callbacks=TurnCallbacks(
+                    on_text=on_text,
+                    on_reasoning=on_reasoning,
+                    on_tool=on_tool,
+                    on_tool_result=on_tool_result,
+                    on_hook=on_hook,
+                    on_notice=lambda text: send({"type": "notice", "text": text}),
+                    # 子 agent 的工具活动用 notice 带出来：前端不用改也能看见"它在干活"。
+                    # 正文增量不转发——碎片太多，会把主流刷满；结论本来就会回给父 agent。
+                    on_child_tool=on_child_tool,
+                ),
+                should_stop=stop.is_set,
+            )
+        except SessionBusy as e:  # 上一轮还没跑完：run 里的占位是唯一判定，这里只负责说出口
+            send({"type": "notice", "text": str(e)})
+            return
         except Exception as e:  # 网络断了 / 模型报错 / 参数解析炸了——推给前端，别让界面一直转圈
             send({"type": "error", "text": describe_failure(e)})
             return
-        # 历史已由 Session 原地更新（外面那个 history 引用同步可见）
-        save_messages(WORKSPACE.root, session_id, session.history[old_len:])
         await ws.send_json({"type": "assistant_done", "text": result.reply})
         await ws.send_json(status_payload())  # 这一轮的上下文用量
 
-    async def run_user_counted(goal: str) -> None:
+    async def run_user_counted(goal: str, stop: threading.Event) -> None:
         """给 run_user 套个计数器：/health 的 busy 就是它。
 
         TUI 退出前会问 busy——网页上还有一轮在跑，就先等它跑完再关（否则那半轮被拦腰砍断）。
         """
         _turn_started()
         try:
-            await run_user(goal)
+            await run_user(goal, stop)
         finally:
             _turn_ended()
 
@@ -272,11 +249,17 @@ async def ws_endpoint(ws: WebSocket):
             msg = await ws.receive_json()
             mtype = msg.get("type")
             if mtype == "user":
-                if user_task and not user_task.done():
-                    continue  # 上一轮还在跑——忽略
-                stop_event.clear()  # 新一轮：把上一轮的「停」清掉
-                user_task = asyncio.create_task(run_user_counted(str(msg.get("text", ""))))
-                user_task.add_done_callback(_report_round_failure)
+                if runtime.busy:
+                    # 判定在 runtime（run 里的占位还会再挡一次，防两条消息挤在同一个 tick）；
+                    # 这里只负责把话说出口——以前是静默丢掉，用户以为发送失败了
+                    await ws.send_json({"type": "notice", "text": BUSY_MESSAGE})
+                    continue
+                # 每轮一面新旗：上一轮按下的「停」不该影响这一轮
+                stop_event = threading.Event()
+                task = asyncio.create_task(
+                    run_user_counted(str(msg.get("text", "")), stop_event)
+                )
+                task.add_done_callback(_report_round_failure)
             elif mtype == "interrupt":
                 # 停止本轮：置位给 loop 的检查点；若正卡在审批上，顺手驳回把它放出来
                 stop_event.set()
@@ -291,17 +274,17 @@ async def ws_endpoint(ws: WebSocket):
                     approval["remember"] = bool(msg.get("remember"))
                     ev.set()
             elif mtype == "new_session":  # 开一个新会话（前端「＋ 新会话」）
-                if user_task and not user_task.done():
-                    await ws.send_json({"type": "notice", "text": "这一轮还在跑——等它结束再开新会话。"})
-                else:
-                    # 只换 id 和 history：连接、模型、审批记忆都留着（它们是"你"的东西，不是会话的）
-                    session_id = new_session_id(WORKSPACE.root)
-                    history.clear()
-                    await ws.send_json(
-                        {"type": "session", "id": session_id, "history_n": 0, "model": llm.current}
-                    )
-                    await ws.send_json({"type": "history", "messages": []})
-                    await ws.send_json(status_payload())
+                try:
+                    view = runtime.new_session()
+                except SessionBusy as e:
+                    await ws.send_json({"type": "notice", "text": str(e)})
+                    continue
+                # 只换 id / 历史 / 轨迹：连接、模型、审批记忆都留着
+                await ws.send_json(
+                    {"type": "session", "id": view.id, "history_n": 0, "model": view.model}
+                )
+                await ws.send_json({"type": "history", "messages": []})
+                await ws.send_json(status_payload())
             elif mtype == "set_auto":  # 网页版「自动批准」开关（= TUI 的 Shift+Tab）
                 approver.auto = bool(msg.get("on"))
                 await ws.send_json(status_payload())
@@ -312,24 +295,25 @@ async def ws_endpoint(ws: WebSocket):
             elif mtype == "switch_model":  # 运行时切换模型（会话级——落盘）
                 name = str(msg.get("name", ""))
                 try:
-                    model = llm.switch(name)
-                    save_session_model(WORKSPACE.root, session_id, name)  # 记在会话上
-                    await ws.send_json({"type": "model_switched", "model": model})
+                    model = runtime.switch_model(name)
                 except KeyError:
                     await ws.send_json(
                         {"type": "model_switched", "model": "", "error": f"未知 profile：{name}"}
                     )
+                except SessionBusy as e:  # 跑着的时候不让换：否则一轮里前后用的是两个模型
+                    await ws.send_json({"type": "notice", "text": str(e)})
+                else:
+                    await ws.send_json({"type": "model_switched", "model": model})
             elif mtype == "trace_request":  # S8：轨迹时间线（只读投影——决策 4）
-                recs = load_trace(trace_path(WORKSPACE.root, session_id))
-                mark_viewed()
+                recs = runtime.trace_records()
                 await ws.send_json(
                     {"type": "trace", "list": [_slim(r) for r in recs[-1000:]], "total": len(recs)}
                 )
             elif mtype == "sessions_request":  # 列历史会话（前端启动时问）
-                prune_empty_sessions(WORKSPACE.root)  # 顺手打扫（浏览器每刷新一次就留一个空占位）
+                prune(WORKSPACE.root)  # 顺手打扫（浏览器每刷新一次就留一个空占位）
                 items = [
-                    {"id": s["id"], "preview": s["first_user_msg"]}
-                    for s in list_visible_sessions()  # 全量下发——前端弹层可滚动
+                    {"id": c.id, "preview": c.preview}
+                    for c in choices(WORKSPACE.root)  # 全量下发——前端弹层可滚动
                 ]
                 await ws.send_json({"type": "sessions", "list": items})
             elif mtype == "tasks_request":  # 后台任务列表（底部抽屉用）——只读快照
@@ -340,46 +324,49 @@ async def ws_endpoint(ws: WebSocket):
                 await ws.send_json({"type": "tasks", "list": list_tasks()})
             elif mtype == "resume":  # 恢复某个会话
                 sid = str(msg.get("id", ""))
-                if sid and (user_task is None or user_task.done()):
-                    history[:] = load_session(WORKSPACE.root, sid)
-                    session_id = sid
-                    saved = load_session_model(WORKSPACE.root, sid)  # 会话级模型：跟着会话走
-                    if saved and saved in settings.models and saved != llm.current_profile:
-                        llm.switch(saved)
-                    await ws.send_json(
-                        {"type": "session", "id": session_id, "history_n": len(history),
-                         "resumed": True, "model": llm.current}
-                    )
-                    # 把历史渲染给前端（user/assistant 正文；tool 给名字 + 参数 + 输出）。
-                    # 工具参数不落库——它在 assistant 的 tool_calls 里，按 tool_call_id 拼回来，
-                    # 否则刷新后工具行只剩名字、点开没参数（2026-10-24 用户报的）。
-                    args_by_call: dict = {}
-                    for m in history:
-                        if m.role == "assistant" and m.tool_calls:
-                            for tc in m.tool_calls:
-                                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
-                                try:
-                                    args_by_call[tc.get("id")] = json.loads(fn.get("arguments") or "{}")
-                                except (ValueError, TypeError):
-                                    args_by_call[tc.get("id")] = {}
-                    rendered = []
-                    for m in history:
-                        if m.role == "user":
-                            rendered.append({"kind": "user", "text": m.content})
-                        elif m.role == "assistant" and (m.content or "").strip():
-                            rendered.append({"kind": "assistant", "text": m.content})
-                        elif m.role == "tool":
-                            body = m.content or ""
-                            if len(body) > TOOL_RESULT_CHARS:
-                                body = body[:TOOL_RESULT_CHARS] + ellipsis_note(len(body))
-                            rendered.append({
-                                "kind": "tool",
-                                "name": m.tool_name or "工具结果",
-                                "detail": tool_detail(args_by_call.get(m.tool_call_id)),
-                                "body": body,
-                            })
-                    await ws.send_json({"type": "history", "messages": rendered})
-                    await ws.send_json(status_payload())  # 换会话后用量跟着变
+                if not sid:
+                    continue
+                try:
+                    view = runtime.resume(sid)
+                except SessionBusy as e:
+                    await ws.send_json({"type": "notice", "text": str(e)})
+                    continue
+                if view.notice:  # 比如"原用模型已不在配置里"——别静默回退
+                    await ws.send_json({"type": "notice", "text": view.notice})
+                await ws.send_json(
+                    {"type": "session", "id": view.id, "history_n": view.history_n,
+                     "resumed": True, "model": view.model}
+                )
+                # 把历史渲染给前端（user/assistant 正文；tool 给名字 + 参数 + 输出）。
+                # 工具参数不落库——它在 assistant 的 tool_calls 里，按 tool_call_id 拼回来，
+                # 否则刷新后工具行只剩名字、点开没参数（2026-10-24 用户报的）。
+                args_by_call: dict = {}
+                for m in view.history:
+                    if m.role == "assistant" and m.tool_calls:
+                        for tc in m.tool_calls:
+                            fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                            try:
+                                args_by_call[tc.get("id")] = json.loads(fn.get("arguments") or "{}")
+                            except (ValueError, TypeError):
+                                args_by_call[tc.get("id")] = {}
+                rendered = []
+                for m in view.history:
+                    if m.role == "user":
+                        rendered.append({"kind": "user", "text": m.content})
+                    elif m.role == "assistant" and (m.content or "").strip():
+                        rendered.append({"kind": "assistant", "text": m.content})
+                    elif m.role == "tool":
+                        body = m.content or ""
+                        if len(body) > TOOL_RESULT_CHARS:
+                            body = body[:TOOL_RESULT_CHARS] + ellipsis_note(len(body))
+                        rendered.append({
+                            "kind": "tool",
+                            "name": m.tool_name or "工具结果",
+                            "detail": tool_detail(args_by_call.get(m.tool_call_id)),
+                            "body": body,
+                        })
+                await ws.send_json({"type": "history", "messages": rendered})
+                await ws.send_json(status_payload())  # 换会话后用量跟着变
     except WebSocketDisconnect:
         pass
     finally:

@@ -12,41 +12,25 @@ from pathlib import Path
 
 from . import tui
 from .approval import SessionAllow
-from .assembly import (
-    WORKSPACE,
-    build_system_prompt,
-    list_visible_sessions,
-    load_settings_and_llm,
-)
-from .compact import estimate_tokens
-from .llm import Msg
-from .session import (
-    list_trace_files,
-    load_session,
-    load_session_model,
-    new_session_id,
-    prune_empty_sessions,
-    save_messages,
-    save_session_model,
-    trace_path,
-)
+from .assembly import WORKSPACE, build_system_prompt, load_settings_and_llm
+from .runtime import SessionRuntime, choices, clean_trace, prune, trace_age_days
 from .shell import detect as detect_shell
-from .trace import Tracer, days_since_viewed, load_trace, mark_viewed
-from .turn import Session, TurnCallbacks, describe_failure
+from .trace import days_since_viewed
+from .turn import TurnCallbacks, describe_failure
 from .weblaunch import WebRun, clear_state, ensure_web, release_lock, stop_run, wait_until_idle
 
 
-def choose_session(workspace: Path, default_profile: str = "") -> tuple[str, list[Msg]]:
-    """列历史会话让用户选（分页，每页 10 条）；返回 (session_id, history)。
+def choose_session(workspace: Path, default_profile: str = "") -> str | None:
+    """列历史会话让用户选（分页，每页 10 条）；返回 session_id，None = 开新会话。
 
-    default_profile：没记过模型的会话会显示成「xxx（默认）」——它打开时确实会用这个，
-    写一根横杠等于让人以为「不知道用什么」，而其实答案明确。
+    只回答问题，不问"怎么建"——新建/恢复的差异全在 `SessionRuntime` 里，
+    这里多写一行，两个入口就又分叉一次。
     """
     if not tui.interactive():
-        return new_session_id(workspace), []          # 非终端（管道喂任务）：选择没意义，直接新会话
-    sessions = list_visible_sessions()
+        return None  # 非终端（管道喂任务）：选择没意义，直接新会话
+    sessions = choices(workspace, default_profile)
     if not sessions:
-        return new_session_id(workspace), []          # 首次：开新会话
+        return None  # 首次：开新会话
 
     per_page = 10
     page = 1
@@ -56,27 +40,25 @@ def choose_session(workspace: Path, default_profile: str = "") -> tuple[str, lis
         chunk = sessions[(page - 1) * per_page: page * per_page]
         rows = [
             {
-                "time": time.strftime("%m-%d %H:%M", time.localtime(s["mtime"])),
-                "model": load_session_model(workspace, s["id"])
-                or (f"{default_profile}（默认）" if default_profile else "-"),
-                "preview": (s["first_user_msg"] or "(空会话)").replace("\n", " ")[:40],
+                "time": time.strftime("%m-%d %H:%M", time.localtime(s.mtime)),
+                "model": s.model,
+                "preview": s.preview[:40],
             }
             for s in chunk
         ]
         tui.show_sessions(rows, page, total_pages, len(sessions))
         try:
             choice = input("选择> ").strip().lower()
-        except EOFError:                               # 终端读尽（Ctrl+Z 回车）——开新会话
-            return new_session_id(workspace), []
+        except EOFError:  # 终端读尽（Ctrl+Z 回车）——开新会话
+            return None
         if choice in ("0", ""):
-            return new_session_id(workspace), []       # 新会话
+            return None  # 新会话
         if choice == "n" and page < total_pages:
             page += 1
         elif choice == "p" and page > 1:
             page -= 1
         elif choice.isdigit() and 1 <= int(choice) <= len(chunk):
-            s = chunk[int(choice) - 1]
-            return s["id"], load_session(workspace, s["id"])
+            return chunk[int(choice) - 1].id
         else:
             tui.show_note("没这个选项——按提示来", "warn")
 
@@ -118,12 +100,8 @@ def _trace_nudge(settings) -> None:
         return
     days = days_since_viewed()
     if days is None:  # 从没看过：拿最早的轨迹文件当基准，别对新项目唠叨
-        files = list_trace_files(WORKSPACE.root)
-        if not files:
-            return
-        try:
-            days = (time.time() - min(f.stat().st_mtime for f in files)) / 86400
-        except OSError:
+        days = trace_age_days(WORKSPACE.root)
+        if days is None:
             return
     if days >= NUDGE_DAYS:
         tui.show_note(
@@ -200,10 +178,7 @@ def main() -> None:
         return
 
     if args.clean_trace is not None:  # 清理不该要求 API key
-        from .session import SESSION_ROOT
-        from .trace import clean_traces
-
-        n, freed = clean_traces(SESSION_ROOT, older_than_days=args.clean_trace)
+        n, freed = clean_trace(args.clean_trace)
         print(f"清掉 {n} 个轨迹文件，释放 {freed / 1048576:.1f} MB")
         return
 
@@ -223,8 +198,9 @@ def main() -> None:
 
     def _on_auto(command: str, reason: str) -> None:
         tui.show_auto(reason)
-        # 自动批准也要留账：屏幕上那行会滚走，trace 才是事后能查的地方
-        tracer.emit("auto", command=command, reason=reason)
+        # 自动批准也要留账：屏幕上那行会滚走，trace 才是事后能查的地方。
+        # runtime 在下面才建——晚绑定是安全的：这个回调只在一轮跑起来之后才会被调。
+        runtime.record_auto(command, reason)
 
     approver = SessionAllow(
         _ask,
@@ -239,35 +215,25 @@ def main() -> None:
     if settings.web_autostart and tui.interactive():  # 管道/脚本模式不拉网页端
         web = ensure_web(settings.server_port, WORKSPACE.root)
 
-    prune_empty_sessions(WORKSPACE.root)  # 打扫：清掉「开了没聊」的空占位（不阻塞——顺手的事）
-    session_id, history = choose_session(WORKSPACE.root, settings.default_model)
-
-    # 底部显示上下文占比：分母是压缩阈值（同一个数，模型撞上去就会被压），
-    # 分子是「系统提示 + 历史」的字符当量。history 每轮会被替换成新列表，
-    # 闭包读的是那个变量本身，所以下一轮的数字自动是新的。
-    tui.set_context_probe(
-        lambda: (estimate_tokens(history) + len(base_prompt), settings.compact_threshold)
+    prune(WORKSPACE.root)  # 打扫：清掉「开了没聊」的空占位（不阻塞——顺手的事）
+    # 会话级装配（id / 历史 / 轨迹 / 该用哪个模型）全交给 runtime：
+    # choose_session 只回答"选哪个"，怎么打开是它的事
+    runtime = SessionRuntime(
+        llm=llm, settings=settings, approver=approver, workspace=WORKSPACE.root,
+        session_id=choose_session(WORKSPACE.root, settings.default_model),  # None = 新会话
     )
-    # 会话级模型（用户定）：打开哪个会话用它上次用的模型；--model 显式指定优先
-    saved = load_session_model(WORKSPACE.root, session_id)
-    if saved and saved not in settings.models:
-        tui.show_note(f"会话原用模型 {saved} 已不在配置里，回退默认", "warn")
-    target = args.model or (saved if saved in settings.models else None)
-    if target and target != llm.current_profile:
-        llm.switch(target)
-    if args.model:  # 显式指定 → 落账（这个会话从此认它）
-        save_session_model(WORKSPACE.root, session_id, llm.current_profile)
-    # S8：轨迹与 session 同目录同 id；关掉 [trace] enabled 就给空对象（不写盘）
-    tracer = Tracer(trace_path(WORKSPACE.root, session_id)) if settings.trace_enabled else Tracer()
-    # 会话级装配建一次：模型、审批、轨迹、工作区、历史。每轮只把 goal 和回调递进去。
-    session = Session(
-        llm=llm, settings=settings, approver=approver,
-        workspace=WORKSPACE.root, tracer=tracer, history=history,
-    )
+    # --model 显式指定压过会话记忆，并落账到这个会话上（用户这次就是冲着它来的）
+    notice = runtime.restore_model(explicit=args.model)
+    if notice:
+        tui.show_note(notice, "warn")
 
-    tui.show_banner(session_id, len(history), llm.current, detect_shell().name)
-    if history:
-        tui.show_history(history)  # 恢复的会话：把历史渲染出来
+    # 底部显示上下文占比：分子是「系统提示 + 历史」的字符当量，分母是压缩阈值。
+    # runtime 每轮跑完自己更新提示词那份缓存——这里不再手动喂它。
+    tui.set_context_probe(runtime.usage)
+
+    tui.show_banner(runtime.session_id, len(runtime.history), llm.current, detect_shell().name)
+    if runtime.history:
+        tui.show_history(runtime.history)  # 恢复的会话：把历史渲染出来
     tui.show_web_hint(web.started, web.warning, web.reaped, web.ui_port)  # 放历史之后，不用往上翻
     _trace_nudge(settings)
     try:
@@ -279,11 +245,10 @@ def main() -> None:
             if goal in ("exit", "quit"):
                 break
             if goal == "/trace" or goal.startswith("/trace "):  # S8：轨迹时间线（只读投影）
-                recs = load_trace(trace_path(WORKSPACE.root, session_id))
-                mark_viewed()  # 体温计：这个功能还有人在用吗
+                recs = runtime.trace_records()
                 arg = goal[len("/trace"):].strip()
                 if not arg:
-                    tui.show_trace(recs, session_id)      # 总览
+                    tui.show_trace(recs, runtime.session_id)      # 总览
                 elif arg.isdigit() and 1 <= int(arg) <= len(recs):
                     tui.show_trace_event(recs[int(arg) - 1], int(arg))  # 钻取单条全文
                 else:
@@ -294,8 +259,7 @@ def main() -> None:
                 pick = tui.ask().strip()
                 if pick.isdigit() and 1 <= int(pick) <= len(llm.profiles):
                     name = llm.profiles[int(pick) - 1]
-                    tui.show_note(f"已切换到 {llm.switch(name)}")
-                    save_session_model(WORKSPACE.root, session_id, name)  # 记在会话上，下次打开还认
+                    tui.show_note(f"已切换到 {runtime.switch_model(name)}")
                 elif pick:  # 空输入 = 取消（面板上写了）；打了别的东西 = 说清楚，别静默吞
                     tui.show_note("没这个序号——按提示来", "warn")
                 continue
@@ -303,12 +267,12 @@ def main() -> None:
                 continue
             tui.show_user(goal)
             tui.begin_stream()
-            old_len = len(history)
             soft = SoftStop()
             # 只在跑这一轮时装软中断：输入行那边 prompt_toolkit 自己管 Ctrl+C，别抢
             prev_sigint = signal.signal(signal.SIGINT, soft)
             try:
-                result = session.run(
+                # 落盘也在 runtime.run 里：跑成功才存这一轮新增的消息
+                runtime.run(
                     goal,
                     callbacks=TurnCallbacks(
                         on_text=tui.stream_chunk,
@@ -326,9 +290,6 @@ def main() -> None:
                     # 存起来延后调用"就会静默取到最后一个 soft 的坑。
                     should_stop=lambda s=soft: s.requested,
                 )
-                # 探针的分母用这一轮**实际**用的提示词（run_turn 读的那份，不是再读一次）。
-                # 那个 lambda 捕获的是变量本身，所以重新赋值它就跟着变。
-                base_prompt = result.system_prompt
             except KeyboardInterrupt:  # 第二次 Ctrl+C：硬中断，这一轮不落盘
                 tui.end_stream()
                 tui.show_note("已中断本轮（这一轮的历史未落盘）", "warn")
@@ -341,7 +302,6 @@ def main() -> None:
             finally:
                 signal.signal(signal.SIGINT, prev_sigint)
             tui.end_stream()
-            save_messages(WORKSPACE.root, session_id, history[old_len:])
     finally:
         # 关 TUI 就连带收掉网页端：留着它们会变成孤儿，下次启动按端口判断会复用旧代码
         # （2026-10-24 就是这么卡住的：新按钮点了没反应，8000 上还是上个世纪的进程）。
