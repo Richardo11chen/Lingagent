@@ -16,7 +16,7 @@ from .assembly import WORKSPACE, build_system_prompt, load_settings_and_llm
 from .runtime import SessionRuntime, choices, clean_trace, prune, trace_age_days
 from .shell import detect as detect_shell
 from .trace import days_since_viewed
-from .turn import TurnCallbacks, describe_failure
+from .turn import describe_failure
 from .weblaunch import WebRun, clear_state, ensure_web, release_lock, stop_run, wait_until_idle
 
 
@@ -136,6 +136,46 @@ def _let_web_finish(settings) -> None:
         tui.console.print("[dim]不等了，直接关[/]")
 
 
+def render_event(ev: dict) -> None:
+    """事件 → 画面。**只画，不判断**：要不要停、能不能跑、下一轮何时开始，全在 runtime。
+
+    这是"UI 只渲染"的落点：这个函数里没有一个 if 决定"该不该做"，只有"这条画成什么样"。
+    """
+    kind = ev["type"]
+    if kind == "assistant_chunk":
+        tui.stream_chunk(ev["text"])
+    elif kind == "reasoning":
+        tui.reasoning_chunk(ev["text"])
+    elif kind == "tool":
+        tui.show_tool(ev["name"], ev["detail"])
+    elif kind == "tool_result":
+        tui.show_tool_result(ev)
+    elif kind == "hook":
+        tui.show_hook(ev["by"], ev["reason"])
+    elif kind == "notice":
+        tui.show_notice(ev["text"])
+    elif kind == "child_text":
+        tui.child_text(ev["text"])
+    elif kind == "child_tool":
+        tui.child_tool(ev["name"], ev["detail"])
+    elif kind == "child_tool_result":
+        tui.child_tool_result(ev)
+    elif kind == "error":
+        tui.show_note(ev["text"], "error")
+    elif kind == "rejected":
+        tui.show_note(ev["text"], "warn")
+    elif kind == "model_switched":
+        if ev.get("error"):
+            tui.show_note(ev["error"], "warn")
+        else:
+            tui.show_note(f"已切换到 {ev['model']}")
+    elif kind == "session":
+        if ev["notice"]:
+            tui.show_note(ev["notice"], "warn")
+    # assistant_done / status / turn_started / turn_ended 不用画：
+    # 正文是流式来的，用量探针自己读 runtime.usage()
+
+
 def main() -> None:
     import argparse
 
@@ -240,6 +280,12 @@ def main() -> None:
         tui.show_history(runtime.history)  # 恢复的会话：把历史渲染出来
     tui.show_web_hint(web.started, web.warning, web.reaped, web.ui_port)  # 放历史之后，不用往上翻
     _trace_nudge(settings)
+
+    # 事件 → 画面。**只画，不判断**：要不要停、能不能跑、下一轮什么时候开始，全在 runtime。
+    # 终端这一侧是同步的：`run_blocking` 在主线程跑一轮，事件就在这条线程上回调过来，
+    # 所以不需要队列——而且必须是主线程，因为审批框（prompt_toolkit）只认它。
+    runtime.on_event(render_event)
+
     try:
         while True:
             try:
@@ -263,7 +309,7 @@ def main() -> None:
                 pick = tui.ask().strip()
                 if pick.isdigit() and 1 <= int(pick) <= len(llm.profiles):
                     name = llm.profiles[int(pick) - 1]
-                    tui.show_note(f"已切换到 {runtime.switch_model(name)}")
+                    runtime.submit({"type": "switch_model", "name": name})  # 结果是事件
                 elif pick:  # 空输入 = 取消（面板上写了）；打了别的东西 = 说清楚，别静默吞
                     tui.show_note("没这个序号——按提示来", "warn")
                 continue
@@ -275,34 +321,14 @@ def main() -> None:
             # 只在跑这一轮时装软中断：输入行那边 prompt_toolkit 自己管 Ctrl+C，别抢
             prev_sigint = signal.signal(signal.SIGINT, soft)
             try:
-                # 落盘也在 runtime.run 里：跑成功才存这一轮新增的消息。
-                # 停的旗子也在那边——这里不再传 should_stop。
-                runtime.run(
-                    goal,
-                    callbacks=TurnCallbacks(
-                        on_text=tui.stream_chunk,
-                        on_tool=tui.show_tool,
-                        on_tool_result=tui.show_tool_result,
-                        on_reasoning=tui.reasoning_chunk,
-                        on_hook=tui.show_hook,
-                        on_notice=tui.show_notice,
-                        on_child_text=tui.child_text,
-                        on_child_tool=tui.child_tool,
-                        on_child_tool_result=tui.child_tool_result,
-                    ),
-                )
+                runtime.run_blocking(goal)  # 阻塞到这一轮结束；过程由 render_event 画
             except KeyboardInterrupt:  # 第二次 Ctrl+C：硬中断，这一轮不落盘
-                tui.end_stream()
                 tui.show_note("已中断本轮（这一轮的历史未落盘）", "warn")
-                continue
-            except Exception as e:  # 网络断了 / 模型报错 / 参数解析炸了——报一句，保住会话
-                # history 是被 agent_loop 换成新列表的（history + [...]），失败时原列表没被改写
-                tui.end_stream()
+            except Exception as e:  # 渲染层自己炸了（该不该发生都得让 REPL 活着）
                 tui.show_note(describe_failure(e), "error")
-                continue
             finally:
                 signal.signal(signal.SIGINT, prev_sigint)
-            tui.end_stream()
+                tui.end_stream()
     finally:
         # 关 TUI 就连带收掉网页端：留着它们会变成孤儿，下次启动按端口判断会复用旧代码
         # （2026-10-24 就是这么卡住的：新按钮点了没反应，8000 上还是上个世纪的进程）。

@@ -229,8 +229,106 @@ def test_pending_approval_is_released_when_nobody_can_answer(tmp_path):
     assert rt.deny_pending_approval() is None  # 再放一次不炸
 
 
-# ---- 回放 / 模型记忆 ----
+# ---- 事件：一轮的过程不再靠回调，也不再靠返回值 ----
 
+
+def test_a_turn_reports_itself_as_events(tmp_path):
+    """一轮的过程全走事件。UI 不再提供回调，也就不会"只接了一半"。"""
+    rt = _rt(tmp_path)
+    seen: list[dict] = []
+    rt.on_event(seen.append)
+
+    rt.run_blocking("干活")
+
+    kinds = [e["type"] for e in seen]
+    assert kinds[0] == "turn_started"
+    assert kinds[-1] == "status"  # 跑完推一次用量
+    assert "assistant_done" in kinds
+    assert [e["text"] for e in seen if e["type"] == "assistant_done"] == ["做完了"]
+
+
+def test_failed_turn_ends_with_an_error_event(tmp_path):
+    """失败也要收尾：界面的转圈靠 turn_ended 停下，原因靠 error 说清楚。"""
+
+    class Boom(FakeLLM):
+        def __call__(self, *a, **k):
+            raise RuntimeError("网络断了")
+
+    rt = _rt(tmp_path, llm=Boom())
+    seen: list[dict] = []
+    rt.on_event(seen.append)
+
+    rt.run_blocking("干活")
+
+    kinds = [e["type"] for e in seen]
+    assert kinds[-1] == "error" and "网络断了" in seen[-1]["text"]
+    assert "turn_ended" in kinds  # 异常路径也要发，否则界面一直转
+
+
+def test_submit_reports_rejection_instead_of_raising(tmp_path):
+    """`submit` 永不抛：拒也是一条事件。UI 里因此不需要 try/except SessionBusy。"""
+    release = threading.Event()
+
+    class Slow(FakeLLM):
+        def __call__(self, *a, **k):
+            release.wait(5)
+            return ("好了", [], "")
+
+    rt = _rt(tmp_path, llm=Slow())
+    seen: list[dict] = []
+    rt.on_event(seen.append)
+    try:
+        rt.submit({"type": "user", "text": "第一句"})
+        for _ in range(500):
+            if rt.busy:
+                break
+            time.sleep(0.01)
+
+        rt.submit({"type": "user", "text": "第二句"})  # 这一句不抛，只发事件
+        for _ in range(200):
+            if any(e["type"] == "rejected" for e in seen):
+                break
+            time.sleep(0.01)
+
+        rejected = [e for e in seen if e["type"] == "rejected"]
+        assert rejected and rejected[0]["text"] == runtime_mod.BUSY_MESSAGE
+    finally:
+        release.set()
+
+
+def test_switch_model_through_submit_answers_with_an_event(tmp_path, monkeypatch):
+    """同步命令也走事件：UI 拿不到返回值，也就不可能"顺手读一下"。"""
+    saved: list = []
+    monkeypatch.setattr(runtime_mod, "save_session_model", lambda w, s, p: saved.append(p))
+    rt = _rt(tmp_path)
+    seen: list[dict] = []
+    rt.on_event(seen.append)
+
+    rt.submit({"type": "switch_model", "name": "two"})
+
+    assert seen == [{"type": "model_switched", "model": "two"}]
+    assert saved == ["two"]  # 落账也在 runtime 里
+
+
+# ---- 架构：界面不许自己驱动会话 ----
+
+
+@pytest.mark.parametrize("module", ["cli", "server"])
+def test_ui_does_not_drive_the_session_itself(module):
+    """界面只能投递命令 / 跑一轮，不能自己迁移会话状态。
+
+    `new_session` / `resume` / `switch_model` / `run` 只该由 runtime 内部或 `submit` 触发；
+    界面直接调，判定就又漏回 UI 了（`if runtime.busy` 就是这么冒出来的）。
+    """
+    path = Path(runtime_mod.__file__).with_name(f"{module}.py")
+    src = path.read_text(encoding="utf-8")
+
+    for call in ("runtime.new_session(", "runtime.resume(", "runtime.switch_model(", "runtime.run("):
+        assert call not in src, f"{module}.py 直接调了 {call}"
+    assert "runtime.submit(" in src or "runtime.run_blocking(" in src
+
+
+# ---- 回放 / 模型记忆 ----
 
 def test_resume_brings_back_its_history_and_model(tmp_path, monkeypatch):
     from agent_harness.llm import Msg

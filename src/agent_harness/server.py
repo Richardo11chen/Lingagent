@@ -16,7 +16,6 @@ from . import webapp
 from .approval import SessionAllow
 from .assembly import WORKSPACE, build_system_prompt, load_settings_and_llm
 from .runtime import (
-    SessionBusy,
     SessionRuntime,
     choices,
     prune,
@@ -24,7 +23,6 @@ from .runtime import (
 from .settings import load_settings
 from .tools import task_snapshot, task_stop, tool_detail
 from .trace import TRACE_FIELD_CHARS, ellipsis_note
-from .turn import TurnCallbacks, describe_failure
 from .webapp import (  # noqa: F401  (对外沿用 server.app / server.origin_allowed 等)
     PROTOCOL,
     SESSION_TOKEN,
@@ -50,6 +48,43 @@ def _slim(rec: dict) -> dict:
         else:
             out[k] = v
     return out
+
+
+def _render_history(history: list) -> list[dict]:
+    """把恢复出来的历史渲染成前端画得出来的形状（user/assistant 正文；tool 给名字 + 参数 + 输出）。
+
+    工具参数不落库——它在 assistant 的 `tool_calls` 里，按 `tool_call_id` 拼回来，
+    否则刷新后工具行只剩名字、点开没参数（2026-10-24 用户报的）。
+
+    这是**渲染**，所以留在这一层：runtime 只把历史原样交出来，终端那边画成字符、
+    这边画成 JSON，一件事两种画法。
+    """
+    args_by_call: dict = {}
+    for m in history:
+        if m.role == "assistant" and m.tool_calls:
+            for tc in m.tool_calls:
+                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                try:
+                    args_by_call[tc.get("id")] = json.loads(fn.get("arguments") or "{}")
+                except (ValueError, TypeError):
+                    args_by_call[tc.get("id")] = {}
+    rendered = []
+    for m in history:
+        if m.role == "user":
+            rendered.append({"kind": "user", "text": m.content})
+        elif m.role == "assistant" and (m.content or "").strip():
+            rendered.append({"kind": "assistant", "text": m.content})
+        elif m.role == "tool":
+            body = m.content or ""
+            if len(body) > TOOL_RESULT_CHARS:
+                body = body[:TOOL_RESULT_CHARS] + ellipsis_note(len(body))
+            rendered.append({
+                "kind": "tool",
+                "name": m.tool_name or "工具结果",
+                "detail": tool_detail(args_by_call.get(m.tool_call_id)),
+                "body": body,
+            })
+    return rendered
 
 
 def list_tasks() -> list[dict]:
@@ -137,151 +172,78 @@ async def ws_endpoint(ws: WebSocket):
     )
     await ws.send_json(status_payload())
 
-    def _report_round_failure(task: asyncio.Task) -> None:
-        """兜底：run_user 里任何没被接住的异常，都要变成前端看得见的一句话。
+    def render(ev: dict) -> None:
+        """事件 → WS 报文。**只做形状转换，不做判断**——这是"UI 只渲染"的落点。
 
-        否则前端只在等 assistant_done，界面就永远转圈——排查时毫无线索。
+        策略性的事（要不要拒、能不能跑、下一轮什么时候开始）已经在 runtime 里定了；
+        这里连"该不该做"都不该决定，只决定"这条数据画成什么样"。
         """
-        if task.cancelled():
-            return
-        exc = task.exception()
-        if exc is not None:
-            send({"type": "error", "text": f"本轮失败：{type(exc).__name__}: {exc}"})
-
-    async def run_user(goal: str) -> None:
-        """跑一轮 agent（旁路线程）——回调经事件循环推回 WS。"""
-
-        def on_text(chunk: str) -> None:
-            send({"type": "assistant_chunk", "text": chunk})
-
-        def on_tool(name: str, args: dict) -> None:
-            detail = tool_detail(args)
-            send({"type": "tool", "name": name, "detail": detail[:50]})  # 与 TUI 同一个截断长度
-
-        def on_reasoning(chunk: str) -> None:
-            send({"type": "reasoning", "text": chunk})
-
-        def on_hook(by: str, reason: str) -> None:
-            send({"type": "hook", "by": by, "reason": reason})
-
-        def on_child_tool(name: str, args: dict) -> None:
-            """子 agent 开始跑工具：一行 notice。前端不用改，也能看见它在干活。"""
-            detail = tool_detail(args)[:40]
-            send({"type": "notice", "text": f"⤷ {name}{'：' + detail if detail else ''}"})
-
-        def on_tool_result(payload: dict) -> None:
-            """工具结束：把状态、耗时、输出和改动推给前端。
-
-            这一条是本轮之前缺的——只有「工具开始」的话，前端看到"它开始改 src/tools.py"
-            之后就断了，输出和 diff 都无处显示。
-            """
-            text = str(payload.get("result") or "")
+        kind = ev["type"]
+        if kind == "turn_started":  # /health 的 busy：TUI 退出前靠它判断"还有一轮在跑"
+            _turn_started()
+        elif kind == "turn_ended":
+            _turn_ended()
+        elif kind == "session":
+            payload = {
+                "type": "session",
+                "id": ev["id"],
+                "history_n": ev["history_n"],
+                "model": ev["model"],
+            }
+            if ev["resumed"]:
+                payload["resumed"] = True
+            send(payload)
+            if ev["notice"]:  # 比如"原用模型已不在配置里"——别静默回退
+                send({"type": "notice", "text": ev["notice"]})
+            # 换会话了就把历史推给前端重画（新会话是空表，等于让前端清屏）
+            send({"type": "history", "messages": _render_history(ev["history"])})
+        elif kind == "status":
+            send({
+                "type": "status", "auto": ev["auto"],
+                "used": ev["used"], "limit": ev["limit"],
+            })
+        elif kind == "tool":
+            send({"type": "tool", "name": ev["name"], "detail": ev["detail"][:50]})  # 与 TUI 同一截断
+        elif kind == "tool_result":
+            text = ev["result"]
             if len(text) > TOOL_RESULT_CHARS:
                 text = text[:TOOL_RESULT_CHARS] + ellipsis_note(len(text))
-            diff = str(payload.get("diff") or "")
+            diff = ev["diff"]
             if len(diff) > TOOL_DIFF_CHARS:
                 diff = diff[:TOOL_DIFF_CHARS] + f"\n…（diff 共 {len(diff)} 字符，已截断）"
-            added = removed = 0
-            for line in diff.splitlines():
-                if line.startswith("+") and not line.startswith("+++"):
-                    added += 1
-                elif line.startswith("-") and not line.startswith("---"):
-                    removed += 1
             send({
                 "type": "tool_result",
-                "name": payload.get("name", ""),
-                "status": payload.get("status", ""),
-                "ms": payload.get("ms", 0),
+                "name": ev["name"],
+                "status": ev["status"],
+                "ms": ev["ms"],
                 "result": text,
                 "diff": diff,
-                "added": added,
-                "removed": removed,
+                "added": ev["added"],
+                "removed": ev["removed"],
             })
-
-        try:
-            result = await asyncio.to_thread(
-                runtime.run,
-                goal,
-                callbacks=TurnCallbacks(
-                    on_text=on_text,
-                    on_reasoning=on_reasoning,
-                    on_tool=on_tool,
-                    on_tool_result=on_tool_result,
-                    on_hook=on_hook,
-                    on_notice=lambda text: send({"type": "notice", "text": text}),
-                    # 子 agent 的工具活动用 notice 带出来：前端不用改也能看见"它在干活"。
-                    # 正文增量不转发——碎片太多，会把主流刷满；结论本来就会回给父 agent。
-                    on_child_tool=on_child_tool,
-                ),
-            )
-        except SessionBusy as e:  # 上一轮还没跑完：run 里的占位是唯一判定，这里只负责说出口
-            send({"type": "notice", "text": str(e)})
+        elif kind == "child_tool":
+            # 子 agent 的工具活动用一行 notice 带出来：前端不用改也能看见"它在干活"。
+            # 正文增量（child_text）和子工具结果故意不转发——碎片太多，会把主流刷满。
+            detail = ev["detail"][:40]
+            send({"type": "notice", "text": f"⤷ {ev['name']}{'：' + detail if detail else ''}"})
+        elif kind in ("child_text", "child_tool_result"):
             return
-        except Exception as e:  # 网络断了 / 模型报错 / 参数解析炸了——推给前端，别让界面一直转圈
-            send({"type": "error", "text": describe_failure(e)})
-            return
-        await ws.send_json({"type": "assistant_done", "text": result.reply})
-        await ws.send_json(status_payload())  # 这一轮的上下文用量
+        elif kind == "rejected":  # 跑着的时候又来了命令：说出口，别让用户以为丢了
+            send({"type": "notice", "text": ev["text"]})
+        else:  # assistant_chunk / reasoning / hook / notice / error / assistant_done / model_switched
+            send(ev)
 
-    async def run_user_counted(goal: str) -> None:
-        """给 run_user 套个计数器：/health 的 busy 就是它。
-
-        TUI 退出前会问 busy——网页上还有一轮在跑，就先等它跑完再关（否则那半轮被拦腰砍断）。
-        """
-        _turn_started()
-        try:
-            await run_user(goal)
-        finally:
-            _turn_ended()
+    runtime.on_event(render)
 
     try:
         while True:  # 常驻收消息——审批答复也走这里（不能被 agent 执行阻塞）
             msg = await ws.receive_json()
             mtype = msg.get("type")
-            if mtype == "user":
-                # 不再预检 busy：拒还是跑由 runtime 的占位决定（投进去再说），
-                # 被拒会以 SessionBusy 冒回来，在这里变成一句提示。
-                task = asyncio.create_task(run_user_counted(str(msg.get("text", ""))))
-                task.add_done_callback(_report_round_failure)
-            elif mtype == "interrupt":
-                # 停止本轮：置位给 loop 的检查点；若正卡在审批上，顺手驳回把它放出来
-                runtime.stop()
-                runtime.deny_pending_approval()
-            elif mtype == "approval_response":
-                runtime.answer_approval(
-                    bool(msg.get("approved")), bool(msg.get("remember"))
-                )
-            elif mtype == "new_session":  # 开一个新会话（前端「＋ 新会话」）
-                try:
-                    view = runtime.new_session()
-                except SessionBusy as e:
-                    await ws.send_json({"type": "notice", "text": str(e)})
-                    continue
-                # 只换 id / 历史 / 轨迹：连接、模型、审批记忆都留着
-                await ws.send_json(
-                    {"type": "session", "id": view.id, "history_n": 0, "model": view.model}
-                )
-                await ws.send_json({"type": "history", "messages": []})
-                await ws.send_json(status_payload())
-            elif mtype == "set_auto":  # 网页版「自动批准」开关（= TUI 的 Shift+Tab）
-                approver.auto = bool(msg.get("on"))
-                await ws.send_json(status_payload())
-            elif mtype == "models_request":  # 列可选模型（/model）
+            # 下面五条是"查数据"，不动会话状态，直接答
+            if mtype == "models_request":  # 列可选模型（/model 面板）
                 await ws.send_json(
                     {"type": "models", "list": llm.profiles, "current": llm.current_profile}
                 )
-            elif mtype == "switch_model":  # 运行时切换模型（会话级——落盘）
-                name = str(msg.get("name", ""))
-                try:
-                    model = runtime.switch_model(name)
-                except KeyError:
-                    await ws.send_json(
-                        {"type": "model_switched", "model": "", "error": f"未知 profile：{name}"}
-                    )
-                except SessionBusy as e:  # 跑着的时候不让换：否则一轮里前后用的是两个模型
-                    await ws.send_json({"type": "notice", "text": str(e)})
-                else:
-                    await ws.send_json({"type": "model_switched", "model": model})
             elif mtype == "trace_request":  # S8：轨迹时间线（只读投影——决策 4）
                 recs = runtime.trace_records()
                 await ws.send_json(
@@ -296,55 +258,14 @@ async def ws_endpoint(ws: WebSocket):
                 await ws.send_json({"type": "sessions", "list": items})
             elif mtype == "tasks_request":  # 后台任务列表（底部抽屉用）——只读快照
                 await ws.send_json({"type": "tasks", "list": list_tasks()})
-            elif mtype == "task_stop_request":  # 人在界面上按「停止」
+            elif mtype == "task_stop_request":  # 人在界面上按「停止」（进程级，不属于会话）
                 tid = str(msg.get("id", ""))
                 await asyncio.to_thread(task_stop, tid)
                 await ws.send_json({"type": "tasks", "list": list_tasks()})
-            elif mtype == "resume":  # 恢复某个会话
-                sid = str(msg.get("id", ""))
-                if not sid:
-                    continue
-                try:
-                    view = runtime.resume(sid)
-                except SessionBusy as e:
-                    await ws.send_json({"type": "notice", "text": str(e)})
-                    continue
-                if view.notice:  # 比如"原用模型已不在配置里"——别静默回退
-                    await ws.send_json({"type": "notice", "text": view.notice})
-                await ws.send_json(
-                    {"type": "session", "id": view.id, "history_n": view.history_n,
-                     "resumed": True, "model": view.model}
-                )
-                # 把历史渲染给前端（user/assistant 正文；tool 给名字 + 参数 + 输出）。
-                # 工具参数不落库——它在 assistant 的 tool_calls 里，按 tool_call_id 拼回来，
-                # 否则刷新后工具行只剩名字、点开没参数（2026-10-24 用户报的）。
-                args_by_call: dict = {}
-                for m in view.history:
-                    if m.role == "assistant" and m.tool_calls:
-                        for tc in m.tool_calls:
-                            fn = tc.get("function", {}) if isinstance(tc, dict) else {}
-                            try:
-                                args_by_call[tc.get("id")] = json.loads(fn.get("arguments") or "{}")
-                            except (ValueError, TypeError):
-                                args_by_call[tc.get("id")] = {}
-                rendered = []
-                for m in view.history:
-                    if m.role == "user":
-                        rendered.append({"kind": "user", "text": m.content})
-                    elif m.role == "assistant" and (m.content or "").strip():
-                        rendered.append({"kind": "assistant", "text": m.content})
-                    elif m.role == "tool":
-                        body = m.content or ""
-                        if len(body) > TOOL_RESULT_CHARS:
-                            body = body[:TOOL_RESULT_CHARS] + ellipsis_note(len(body))
-                        rendered.append({
-                            "kind": "tool",
-                            "name": m.tool_name or "工具结果",
-                            "detail": tool_detail(args_by_call.get(m.tool_call_id)),
-                            "body": body,
-                        })
-                await ws.send_json({"type": "history", "messages": rendered})
-                await ws.send_json(status_payload())  # 换会话后用量跟着变
+            else:
+                # 会改状态 / 会跑一轮的命令：**只有一个入口**。判定、措辞、拒绝都在 runtime，
+                # 这里连 try/except 都不需要——出错会以 error 事件回来。
+                runtime.submit(msg)
     except WebSocketDisconnect:
         pass
     finally:

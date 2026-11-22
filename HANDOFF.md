@@ -47,7 +47,7 @@ uv run lingan -web               # 只起后端（http://127.0.0.1:8000）
 | 文件 | 职责 | 注意 |
 |---|---|---|
 | `assembly.py` | 装配：system prompt / 工作区 / 工具注册表 | `WORKSPACE` 的**唯一**构造点 |
-| `runtime.py` | 会话运行时：新建 / 切换模型 / 存档 / 回放 / 跑一轮 | 两个界面只调它，见 §5.11 |
+| `runtime.py` | 会话运行时：`submit` 进 / `on_event` 出，两个界面只调它 | 见 §5.11 / §5.12 |
 | `guardrail.py` | 命令风险分级 + 路径围栏 | 三条防线在这里排位 |
 | `hooks.py` | 策略挂载点 + 内置策略 | 前钩子能拦、后钩子能改 |
 | `compact.py` | 投影式压缩 | 不改 history，只改发给 API 的副本 |
@@ -137,6 +137,17 @@ uv run lingan -web               # 只起后端（http://127.0.0.1:8000）
 `session_id` / `history` / `tracer` / 该用哪个 profile 是**会话级**的。画错了，表现是
 "切会话把模型也重置了"。
 
+### 5.12 界面只投命令、只画事件
+
+`runtime.submit(command)` 进、`runtime.on_event(fn)` 出（终端另有同步的 `run_blocking`，
+原因见 §8 P2）。界面里**不许**：自己判断"能不能跑"、自己迁移会话状态、自己拼一句拒绝的话。
+`tests/test_runtime.py` 用 AST 盯着这一条。
+
+写第三段渲染时记住两件事：
+1. **渲染器抛异常 = 那一轮失败**（`_emit` 不吞）。这是刻意的——宁可炸，不要"屏幕上什么都没发生"。
+2. **事件在"发事件那条线程"上回调**。终端靠"跑一轮就在主线程"保证安全，网页靠
+   `run_coroutine_threadsafe`。这条没有类型能替你守。
+
 ## 6. 这个环境里的坑（会重复踩）
 
 **heredoc 追加测试会写两遍。** 用 `cat >> file <<EOF` 追加时，内容有时会写进两份，产生重复定义（ruff `F811` 能抓到，但人不一定看）。**追加完立刻 `grep -c "def test_xxx"` 数一下。** 这个坑踩过三次，两次导致了"测试从没跑过"的假绿。
@@ -164,8 +175,8 @@ curl -s https://api.github.com/repos/Richardo11chen/Lingagent/commits/main
 ## 7. 当前状态
 
 - 已发布：`0.1.6`（PyPI，`Requires-Python: >=3.11`）
-- 已提交未发布：`a742db7`（WS token + 工作区实体化）、`5b2da04`（P0 diff 意图化）、本条（P1 会话运行时）
-- 测试：338 passed + 1 skipped（skipped 是仅 POSIX 有效的进程树测试）
+- 已提交未发布：`a742db7`（WS token）、`5b2da04`（P0 diff 意图化）、`58e4a81`（P1 会话运行时）、`548e577`（P2 阶段一：状态归位）、本条（P2 阶段二：事件化）
+- 测试：348 passed + 1 skipped（skipped 是仅 POSIX 有效的进程树测试）
 - CI：`.github/workflows/publish.yml`，4 个 test job（windows/ubuntu × 3.11/3.14）+ 1 个 publish
 
 ## 8. 待做项
@@ -214,37 +225,32 @@ curl -s https://api.github.com/repos/Richardo11chen/Lingagent/commits/main
 
 **已知边界**：`SessionRuntime` 持有 `_lock`，所以"一轮"的最小粒度是整个 turn。真要做"打断当前轮并立刻开新会话"得等 P2 的 mailbox。
 
-### P2：actor 化 —— 拆成三段，只有第二段要等条件
+### P2 ✅ 已完成（①搬状态 + ②搬控制流）：actor 化
 
-把 `SessionRuntime` 变成 mailbox + 事件流：UI 投递命令、渲染事件，不再"问能不能做"。
+`SessionRuntime` 现在是"投命令进来、发事件出去"，两个界面都只挂一个渲染函数。
 
-**先拆清楚，三段的风险完全不同：**
+| 段 | 状态 | 说明 |
+|---|---|---|
+| ① 搬状态 | ✅ | `stop` / 审批槽在 runtime；UI 不再有 `stop_event`、`approval` dict |
+| ② 搬控制流 | ✅ | `submit(command)` + `on_event(fn)`；UI 里没有 `try/except SessionBusy`，没有 `if runtime.busy` |
+| ③ 加第三个入口 | 待触发 | 有真入口时只写渲染层 |
 
-| 段 | 做什么 | 碰异步吗 | 现在该做吗 |
-|---|---|---|---|
-| ① 搬状态 | `stop`、审批槽从 UI 搬进 runtime（`runtime.stop()` / 放掉挂起的审批） | 不碰 | **该做**，正收益 |
-| ② 搬控制流 | `submit()` + `on_event()`，UI 只剩两根管子 | 碰 | 等触发条件 |
-| ③ 加第三个入口 | 新 UI 只写渲染层 | 不碰 | 有入口才做 |
+**形状**
 
-①是②的严格前提（actor 得先拥有状态，才谈得上接管控制流），所以现在做不白做。①做完的判据：UI 里只剩渲染状态（流式缓冲、转圈动画），不再有 `stop_event` / `approval` dict。
+- 命令：`user` / `new_session` / `resume` / `switch_model` / `set_auto` / `interrupt` / `approval_response`（`submit` 永不阻塞、永不抛，拒也是一条 `rejected` 事件）
+- 事件：`turn_started` / `turn_ended` / `assistant_chunk` / `reasoning` / `tool` / `tool_result` / `hook` / `notice` / `child_*` / `error` / `rejected` / `assistant_done` / `session` / `status` / `model_switched`
+- 只读的查询（`models_request` / `trace_request` / `sessions_request` / `tasks_*`）仍是直接答——它们不动会话状态，不该为了形状统一塞进命令流
 
-**②的触发条件**：**只有一条硬的**——同一进程内出现第二个能拿到同一个 `SessionRuntime` 的驱动源。可操作判据：数"同时持有这个对象引用的地方"，现在是 1（cli 一个、server 一个，各在自己进程里）。>1 才是触发。
+**两个入口的差别只有一行**：网页 `submit()`（丢给线程，不能占住事件循环）；终端 `run_blocking()`（主线程跑完）。后者是**必须**的：审批框用的是 prompt_toolkit，只认主线程，跑在 worker 线程里会炸。反过来网页不能用 `run_blocking`——一阻塞就收不到停止按钮和审批答复。
 
-两条软信号（做了会顺手，但不单独构成理由）：
+**没做单循环 mailbox**，这是有意的：审批是阻塞等待，单循环 actor 里"跑一轮"会卡在 `_ask`，而答复就排在同一个 mailbox 里没人取——**死锁到超时**。现在的做法是"每命令一个任务 + `_claim` 拒绝"，顺序保证和以前一样（`_claim` 或锁），但不会死锁。真要做单循环，得先把 `agent_loop` 改成协程。
 
-- 需要把同一轮的过程实时广播给多个订阅者。**这条可以用 listener 列表解决**（runtime 里存一串回调，10 行），不必换控制流。
-- 又在某个 UI 里写下「如果正在跑……」。这是"判定正在漏回 UI"的早期症状，值得记一笔，但还没到重构的地步。
+**架构守卫**（`tests/test_runtime.py`）：`cli.py` / `server.py` 里不许出现 `runtime.new_session(` / `.resume(` / `.switch_model(` / `.run(`——界面只能 `submit`（网页）或 `run_blocking`（终端）。
 
-**明确不构成触发**（这几条最容易误判）：
-
-- **面板变多**。面板是读侧，调的是 `usage()` / `trace_records()` / 事件回调，弄不坏会话状态。要的是"更窄的写侧接口"，40 行的门面就够，不需要换控制流。
-- **跨进程同步**（TUI 和网页共享一个会话）。那是"单一权威 + 会话锁"的事；而且按"同一会话不许并发跑两轮"（§5.9）这条原则，正确形态是**单写者**，不是多写者广播。
-- **想要能力裁剪**（UI 不能调 `run()`）。把 runtime 私有、只交给 UI 一个门面对象即可；不写 `__getattr__` 透传就是运行时事实，不用等 actor。
-
-**②的真实成本比听起来高**：审批是**阻塞等待**（`_ask` 里 `ev.wait()`）。今天它能工作，是因为"跑一轮"在 `to_thread` 的线程、收 `approval_response` 在事件循环线程。单循环 actor 里，跑一轮会阻塞在 `_ask`，而答复就排在同一个 mailbox 里没人取——**直接死锁到超时**。所以②必须同时把 actor 做成 async（`agent_loop` 变协程，从 `loop.py` 往下大改），或把"等审批"改成状态机。
-
-**②引入的新风险**：顺序从"语言保证"降级成"约定"（`done` 必须排在最后一条 `tool_result` 之后——P0 那个 diff 错配就是顺序错误的现成例子）；dispatcher 为了不死几乎必然 `except: continue`，而这个项目刚因为"静默"改过一次；连接断了以后队列里的事件谁清。这些 bug 的表现都是"偶尔卡住"，最难 debug。
-_这些风险不会报错，只会让程序"偶尔卡住"——所以②动手前必须先把验收测试写出来，不能靠跑一遍看看。_
+**已知边界**：
+- 渲染器抛异常 = 这一轮失败（`_emit` 不吞）。宁可炸，不要"屏幕上什么都没发生"。
+- 事件是同步分发的：`on_event` 注册的函数在**发事件那条线程**上被调用。终端靠"跑一轮就在主线程"来保证安全，网页靠 `run_coroutine_threadsafe`。**这条约束没有类型能替你守，写第三段渲染时要记住。**
+- `run_shell` 的改动仍然统计不到（shell 不透明）。
 
 ### P3：知道但不急的小口子
 

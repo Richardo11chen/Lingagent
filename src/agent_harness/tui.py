@@ -517,8 +517,8 @@ def show_trace_event(rec: dict, idx: int) -> None:
     console.print(Panel(body, title="轨迹明细", title_align="left", border_style="dim"))
 
 
-def show_tool(name: str, args: dict | None = None) -> None:
-    detail = tool_detail(args)
+def show_tool(name: str, detail: str = "") -> None:
+    """工具开始。detail 由 runtime 拼好（它是唯一知道"怎么描述一个动作"的地方）。"""
     if len(detail) > 50:
         detail = detail[:50] + "…"
     _stream_line(Text(f"⚙  {name}{': ' + detail if detail else ''}", style="dim"))
@@ -532,9 +532,8 @@ def child_text(chunk: str) -> None:
     _refresh()
 
 
-def child_tool(name: str, args: dict | None = None) -> None:
+def child_tool(name: str, detail: str = "") -> None:
     """子 agent 开始跑一个工具：先把手上的文字封行，再压栈（转圈跟着往下沉一层）。"""
-    detail = tool_detail(args)
     if len(detail) > 40:
         detail = detail[:40] + "…"
     _flush_child()

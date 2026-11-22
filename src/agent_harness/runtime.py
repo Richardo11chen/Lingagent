@@ -19,6 +19,7 @@
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -37,8 +38,9 @@ from .session import (
     save_session_model,
     trace_path,
 )
+from .tools import tool_detail
 from .trace import Tracer, clean_traces, load_trace, mark_viewed
-from .turn import Session, TurnCallbacks, TurnResult
+from .turn import Session, TurnCallbacks, TurnResult, describe_failure
 
 # 「开着会话时又来了个命令」的唯一说法。UI 原样显示，不要自己改写——
 # 两处各写一句，很快会一处说"稍后重试"、另一处说"请等待"，而它们是同一条规则。
@@ -170,6 +172,8 @@ class SessionRuntime:
         # 当前待答的审批（同一时刻最多一条：一轮只跑一个）
         self._slot: ApprovalSlot | None = None
         self._slot_lock = threading.Lock()
+        # 事件出口。UI 只往这里挂渲染函数，不再从方法返回值里拿东西。
+        self._listeners: list[Callable[[dict], None]] = []
         # 上下文用量的分母要用「这一轮真的发出去的那份提示词」，所以缓存一份；
         # 每轮跑完用 TurnResult.system_prompt 更新（谁读提示词只能有一处）。
         self._system_prompt = build_system_prompt()
@@ -284,6 +288,162 @@ class SessionRuntime:
         """自动批准也留账。屏幕上那行会滚走，trace 才是事后能查的地方。"""
         self.tracer.emit("auto", command=command, reason=reason)
 
+    # ---- 事件出口：UI 只往这里挂渲染函数 ----
+
+    def on_event(self, fn: Callable[[dict], None]) -> None:
+        """注册渲染函数。多个订阅者按注册序调用。
+
+        渲染器抛异常**不吞**：那是 UI 的 bug，应该以 error 事件的形式露出水面，
+        而不是让一轮悄悄跑完、屏幕上什么都没发生。这个项目在"静默"上吃过一次亏。
+        """
+        self._listeners.append(fn)
+
+    def _emit(self, kind: str, **fields) -> None:
+        if not self._listeners:
+            return
+        event = {"type": kind, **fields}
+        for fn in list(self._listeners):
+            fn(event)
+
+    def _emit_status(self) -> None:
+        used, limit = self.usage()
+        self._emit(
+            "status",
+            auto=bool(getattr(self.approver, "auto", False)),
+            used=used,
+            limit=limit,
+        )
+
+    def _emit_session(self, view: SessionView, *, resumed: bool = False) -> None:
+        self._emit(
+            "session",
+            id=view.id,
+            model=view.model,
+            profile=view.profile,
+            history_n=view.history_n,
+            history=view.history,  # 原样给：怎么画是 UI 的事（消息对象不是 JSON，别直接推给浏览器）
+            resumed=resumed,
+            notice=view.notice,
+        )
+
+    # ---- 命令入口 ----
+
+    def submit(self, command: dict) -> None:
+        """投递一条命令：**永不阻塞、永不抛**。结果全走事件，包括被拒和出错。
+
+        为什么不是"调方法、拿返回值"：那样 UI 必须接异常、必须知道"现在能不能"，
+        判定就又漏回界面了——`if runtime.busy` 就是这么冒出来的。
+        """
+        kind = str(command.get("type", ""))
+        if kind == "user":
+            # 一轮要跑几十秒，不能占着调用方的线程（网页那边占的是事件循环）
+            threading.Thread(
+                target=self._run_and_report,
+                args=(str(command.get("text", "")),),
+                daemon=True,
+            ).start()
+            return
+        try:
+            self._handle(kind, command)
+        except SessionBusy as e:
+            self._emit("rejected", text=str(e))
+        except Exception as e:  # 命令处理炸了也得让 UI 看见，不许静默
+            self._emit("error", text=describe_failure(e))
+
+    def run_blocking(self, goal: str) -> None:
+        """跑一轮并等它跑完——`submit` 的同步孪生兄弟。
+
+        终端为什么需要它：审批要弹在终端上，而 prompt_toolkit 只认主线程。跑在
+        worker 线程里的话，弹出来的框要么炸要么错乱。所以终端由主线程一直跑到结束，
+        过程的渲染就同步回调（`on_event` 会在这条线程上被调用）——不需要队列。
+
+        网页不能用它：那边一阻塞就是卡住事件循环（收不到停止按钮、也收不到审批答复）。
+        """
+        self._run_and_report(goal)
+
+    def _run_and_report(self, goal: str) -> None:
+        """跑一轮并把结果发成事件。这是"一轮"唯一的起点，两个入口都走它。"""
+        try:
+            result = self.run(goal)
+        except SessionBusy as e:
+            self._emit("rejected", text=str(e))
+            return
+        except Exception as e:
+            self._emit("error", text=describe_failure(e))
+            return
+        self._emit("assistant_done", text=result.reply)
+        self._emit_status()
+
+    def _handle(self, kind: str, command: dict) -> None:
+        """同步命令（都是毫秒级的：切会话、切模型、开关、作答）。"""
+        if kind == "new_session":
+            self._emit_session(self.new_session())
+            self._emit_status()  # 换了会话，用量归零
+        elif kind == "resume":
+            self._emit_session(self.resume(str(command.get("id", ""))), resumed=True)
+            self._emit_status()
+        elif kind == "switch_model":
+            name = str(command.get("name", ""))
+            try:
+                model = self.switch_model(name)
+            except KeyError:
+                self._emit("model_switched", model="", error=f"未知 profile：{name}")
+                return
+            self._emit("model_switched", model=model)
+        elif kind == "set_auto":  # 网页的开关 / 终端的 Shift+Tab，走同一条路
+            self.approver.auto = bool(command.get("on"))
+            self._emit_status()
+        elif kind == "interrupt":
+            self.stop()
+            self.deny_pending_approval()
+        elif kind == "approval_response":
+            self.answer_approval(
+                bool(command.get("approved")), bool(command.get("remember"))
+            )
+        else:
+            self._emit("error", text=f"未知命令：{kind}")
+
+    def _turn_callbacks(self) -> TurnCallbacks:
+        """一轮的过程 → 事件。UI 不再提供回调，也就不可能"只接了一半"。"""
+        return TurnCallbacks(
+            on_text=lambda text: self._emit("assistant_chunk", text=text),
+            on_reasoning=lambda text: self._emit("reasoning", text=text),
+            on_tool=lambda name, args: self._emit(
+                "tool", name=name, detail=tool_detail(args)
+            ),
+            on_tool_result=self._on_tool_result,
+            on_hook=lambda by, reason: self._emit("hook", by=by, reason=reason),
+            on_notice=lambda text: self._emit("notice", text=text),
+            # 子 agent 的正文增量：终端会缩进显示，网页故意不转发（碎片太多）
+            on_child_text=lambda text: self._emit("child_text", text=text),
+            on_child_tool=lambda name, args: self._emit(
+                "child_tool", name=name, detail=tool_detail(args)
+            ),
+            on_child_tool_result=lambda payload: self._emit(
+                "child_tool_result", **payload
+            ),
+        )
+
+    def _on_tool_result(self, payload: dict) -> None:
+        """工具结束：顺带把 diff 的行数算出来——两个界面都要这个数，算法只该有一份。"""
+        diff = str(payload.get("diff") or "")
+        added = removed = 0
+        for line in diff.splitlines():
+            if line.startswith("+") and not line.startswith("+++"):
+                added += 1
+            elif line.startswith("-") and not line.startswith("---"):
+                removed += 1
+        self._emit(
+            "tool_result",
+            name=payload.get("name", ""),
+            status=payload.get("status", ""),
+            ms=payload.get("ms", 0),
+            result=str(payload.get("result") or ""),
+            diff=diff,
+            added=added,
+            removed=removed,
+        )
+
     # ---- 停 / 审批：这两样原来攥在 UI 手里 ----
 
     def stop(self) -> None:
@@ -325,26 +485,33 @@ class SessionRuntime:
 
     # ---- 一轮 ----
 
-    def run(self, goal: str, *, callbacks: TurnCallbacks | None = None) -> TurnResult:
+    def run(self, goal: str) -> TurnResult:
         """跑一轮，成功后把这一轮新增的消息落盘；失败原样抛出去（这一轮不记）。
 
         落盘放在这里而不是各界面：现在的写法是"跑完 → 手动切 history[old_len:] → 存"，
         两边都写过一遍，而且都依赖于"跑失败时 history 没被改写"这个约定。
         约定只该由懂它的人守——这就是这里。
 
-        `should_stop` 不再由调用方传：停的旗子在 `stop()` 那边，每轮开头清一次——
-        上一轮按下的停不该掐掉下一轮。
+        过程输出走 `on_event`，不走返回值——返回值只给"这一轮说了什么"。
+        `should_stop` 也不由调用方传：停的旗子在 `stop()` 那边，每轮开头清一次。
         """
         with self._claim():
             self._stop.clear()
-            old_len = len(self.session.history)
-            result = self.session.run(
-                goal, callbacks=callbacks, should_stop=self._stop.is_set
-            )
-            self._system_prompt = result.system_prompt
-            # 只有跑到这里才落盘：中途抛异常时 history 未被替换，"这一轮不记"是刻意的
-            save_messages(self.workspace, self.session_id, self.session.history[old_len:])
-            return result
+            self._emit("turn_started")
+            try:
+                old_len = len(self.session.history)
+                result = self.session.run(
+                    goal,
+                    callbacks=self._turn_callbacks(),
+                    should_stop=self._stop.is_set,
+                )
+                self._system_prompt = result.system_prompt
+                # 只有跑到这里才落盘：中途抛异常时 history 未被替换，"这一轮不记"是刻意的
+                save_messages(self.workspace, self.session_id, self.session.history[old_len:])
+                return result
+            finally:
+                # 失败也要发：界面的转圈靠它停下。/health 的 busy 也是数这一对
+                self._emit("turn_ended")
 
     # ---- 内部 ----
 

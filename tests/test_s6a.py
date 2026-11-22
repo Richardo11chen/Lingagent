@@ -428,9 +428,9 @@ def test_cli_repl_runs_one_turn_through_the_shared_orchestrator(monkeypatch, tmp
     assert len(rt_reads) == 1    # 启动那次（探针的分母要有个初始值）
     assert len(turn_reads) == 1  # 这一轮实际用的那份
     assert len(calls) == 1                      # 走的是共用编排
-    # 终端这次把两条能力都接上了：工具结果（diff / 耗时 / 失败原因）与停止信号
+    # 回调不再由终端提供——runtime 统一把一轮的过程发成事件，界面只挂渲染函数
+    assert calls[0]["callbacks"].on_tool_result is not None
     assert calls[0]["should_stop"] is not None
-    assert calls[0]["callbacks"].on_tool_result is tui.show_tool_result
     assert len(saved) == 1                      # 一轮落一次盘
     # 假模型没有 tool_call_id，工具结果按 user 消息回灌（loop 的两条路径之一）——
     # 这里只关心「结果真的回到了 history 里」
@@ -482,7 +482,7 @@ def test_tool_spinner_tracks_what_is_running(monkeypatch):
     from agent_harness import tui
 
     tui._run_stack.clear()
-    tui.show_tool("run_shell", {"command": "npm test"})
+    tui.show_tool("run_shell", "npm test")
 
     line = tui._running_line()
     assert line is not None
@@ -491,7 +491,7 @@ def test_tool_spinner_tracks_what_is_running(monkeypatch):
     assert line.plain.rstrip().endswith("s")  # 带已跑秒数
 
     # 子 agent 的工具压在上面：显示的是最里面那个
-    tui.child_tool("read_file", {"path": "a.py"})
+    tui.child_tool("read_file", "a.py")
     assert "read_file" in tui._running_line().plain
 
     tui.child_tool_result({"status": "ok"})
