@@ -15,9 +15,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .assembly import POST_HOOKS, PRE_HOOKS, build_session_tools, build_system_prompt
+from .assembly import POST_HOOKS, PRE_HOOKS, build_session_tools
 from .loop import agent_loop
 from .messages import Msg
+from .prompt import build_system_prompt
 from .trace import Tracer
 
 
@@ -115,7 +116,7 @@ def run_turn(
     「改了规则要重启」的隐性规矩——提示词本来就是当轮请求的一部分。
     """
     cb = callbacks or TurnCallbacks()
-    sp = build_system_prompt() if system_prompt is None else system_prompt
+    sp = build_system_prompt(workspace) if system_prompt is None else system_prompt
 
     # 压缩这类提示：给人看一眼，同时记账。挂在这里 = 两个入口都挂上，谁也漏不了。
     def notice(text: str, **fields) -> None:

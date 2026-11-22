@@ -23,9 +23,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .assembly import build_system_prompt
 from .compact import estimate_tokens
 from .llm import Msg
+from .prompt import build_system_prompt
 from .session import (
     SESSION_ROOT,
     list_sessions,
@@ -176,7 +176,7 @@ class SessionRuntime:
         self._listeners: list[Callable[[dict], None]] = []
         # 上下文用量的分母要用「这一轮真的发出去的那份提示词」，所以缓存一份；
         # 每轮跑完用 TurnResult.system_prompt 更新（谁读提示词只能有一处）。
-        self._system_prompt = build_system_prompt()
+        self._system_prompt = build_system_prompt(self.workspace)
 
         if session_id is None:
             # 新会话：new_session_id 会原子占位建文件，「开了没聊」由 prune 收拾

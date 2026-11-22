@@ -12,7 +12,8 @@ from pathlib import Path
 
 from . import tui
 from .approval import SessionAllow
-from .assembly import WORKSPACE, build_system_prompt, load_settings_and_llm
+from .assembly import WORKSPACE, load_settings_and_llm
+from .prompt import build_system_prompt
 from .runtime import SessionRuntime, choices, clean_trace, prune, trace_age_days
 from .shell import detect as detect_shell
 from .trace import days_since_viewed
@@ -232,7 +233,7 @@ def main() -> None:
         run_server(args.model)
         return
 
-    base_prompt = build_system_prompt()
+    base_prompt = build_system_prompt(WORKSPACE.root)
     llm, settings = load_settings_and_llm(  # 可切换门面（流式）
         base_prompt, args.model, on_notice=tui.show_notice,
     )

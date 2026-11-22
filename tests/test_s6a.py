@@ -413,13 +413,13 @@ def test_cli_repl_runs_one_turn_through_the_shared_orchestrator(monkeypatch, tmp
     real_turn_prompt = turn_mod.build_system_prompt
     real_runtime_prompt = runtime_mod.build_system_prompt
     monkeypatch.setattr(
-        cli, "build_system_prompt", lambda: (reads.append(1), real_prompt())[1]
+        cli, "build_system_prompt", lambda w: (reads.append(1), real_prompt(w))[1]
     )
     monkeypatch.setattr(
-        runtime_mod, "build_system_prompt", lambda: (rt_reads.append(1), real_runtime_prompt())[1]
+        runtime_mod, "build_system_prompt", lambda w: (rt_reads.append(1), real_runtime_prompt(w))[1]
     )
     monkeypatch.setattr(
-        turn_mod, "build_system_prompt", lambda: (turn_reads.append(1), real_turn_prompt())[1]
+        turn_mod, "build_system_prompt", lambda w: (turn_reads.append(1), real_turn_prompt(w))[1]
     )
 
     cli.main()

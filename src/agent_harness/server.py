@@ -14,7 +14,8 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from . import webapp
 from .approval import SessionAllow
-from .assembly import WORKSPACE, build_system_prompt, load_settings_and_llm
+from .assembly import WORKSPACE, load_settings_and_llm
+from .prompt import build_system_prompt
 from .runtime import (
     SessionRuntime,
     choices,
@@ -121,7 +122,7 @@ async def ws_endpoint(ws: WebSocket):
         asyncio.run_coroutine_threadsafe(ws.send_json(payload), loop)
 
     llm, settings = load_settings_and_llm(
-        build_system_prompt(), _CLI_MODEL,
+        build_system_prompt(WORKSPACE.root), _CLI_MODEL,
         on_notice=lambda text: send({"type": "notice", "text": text}),
     )
 

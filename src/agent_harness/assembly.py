@@ -1,39 +1,16 @@
-"""装配层：公共装配（system prompt / 工作目录 / 工具注册表）——CLI 与 Web 服务共用。"""
+"""装配层：公共装配（工作目录 / 工具注册表 / 会话级工具）——CLI 与 Web 服务共用。
+
+提示词不在这里：它是**内容**不是装配，见 `prompt.py`。
+"""
 
 from pathlib import Path
 
-from .config import load_rules
 from .guardrail import safe_tool
 from .hooks import forbid_env_writes, redact_secrets
 from .sensors import run_tests
 from .subagent import make_spawn_tool
 from .tools import edit_file, read_file, run_shell, task_output, task_stop, write_file
 from .workspace import Workspace
-
-# 只留能改变具体动作的规则；工具细节交给 schema，项目规矩交给 AGENTS.md（拼在下面）。
-SYSTEM_PROMPT = (
-    "你是 Lingagent，一个 coding agent，工作目录是项目根。\n\n"
-    "## 优先级\n"
-    "用户当前指令 > AGENTS.md（若存在）> 这份提示词。"
-    "冲突时按这个顺序取舍；只在确实冲突时点一句用了哪条，平时不用解释。\n\n"
-    "## 工具\n"
-    "优先用最窄的工具；具体用法、参数、风险和边界看工具 schema。"
-    "只使用菜单里实际存在的工具，不要调用提示词提到但菜单里没有的工具。"
-    "改完代码必须验证，没验证过不算完成。\n"
-    "两条容易踩的：**read_file 只能读文本**——图片、截图、二进制看不了，别声称看过渲染结果；"
-    "**慢活儿用 background=true**——构建 / 渲染 / 批量转换会跑完，但可能超过 timeout 上限。\n\n"
-    "## 什么时候先问\n"
-    "命令类操作按 run_shell 描述里的风险分级决定要不要先问；"
-    "用户明确要求范围内的文件改动直接做。\n\n"
-    "## 改动边界\n"
-    "跟随项目现有的风格、依赖、模式。不加没必要的依赖。"
-    "不主动 commit / push，除非用户要求。\n\n"
-    "## 怎么说话\n"
-    "直接说结论和判断，不铺垫、不客套。"
-    "简单问题直接答，不用工具。"
-    "有把握说把握，没把握说没把握，别编。"
-    "做完就停，别为了显得卖力多调一个工具；没做完就说清卡在哪。"
-)
 
 WORKSPACE = Workspace(Path.cwd())  # 工作目录 = 项目根（全项目只在这里构造）
 
@@ -112,11 +89,6 @@ def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
             )
         session_tools["view_image"] = make_view_image(settings, llm)
     return session_tools
-
-
-def build_system_prompt() -> str:
-    """基础 prompt + 规则文件（每次装配时拼最新）。"""
-    return SYSTEM_PROMPT + "\n\n" + load_rules(WORKSPACE.root)
 
 
 class SwitchableLLM:
