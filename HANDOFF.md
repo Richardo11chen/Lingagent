@@ -174,9 +174,9 @@ curl -s https://api.github.com/repos/Richardo11chen/Lingagent/commits/main
 
 ## 7. 当前状态
 
-- 已发布：`0.1.6`（PyPI）
-- **`0.2.0` 已打包、待上传**：`dist/lingagent-0.2.0-*`（wheel 装过、`--help` 通）。缺 `UV_PUBLISH_TOKEN`，见 §9
-- 未发布提交（10 个）：P0 diff 意图化 → P1 会话运行时 → P2 阶段一/二 → 提示词精简（430→65 字）→ 子 agent 继承会话工具表 → schema 描述收紧
+- 已发布：**`0.2.0`**（PyPI，`uvx --from lingagent==0.2.0 lingan --help` 验过）
+- 这一版含：P0 diff 意图化 → P1 会话运行时 → P2 阶段一/二 → 提示词精简（430→65 字）→
+  子 agent 继承会话工具表 → schema 描述收紧；行为变化见 §6
 - 测试：349 passed + 1 skipped（skipped 是仅 POSIX 有效的进程树测试）
 - CI：`.github/workflows/publish.yml`，4 个 test job（windows/ubuntu × 3.11/3.14）+ 1 个 publish
 

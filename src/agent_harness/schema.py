@@ -51,7 +51,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "写入文件（⚠️ 覆盖整个文件——未包含的原内容会丢失）。只有新建文件或整体重写时用；修改现有文件优先用 edit_file。",
+            "description": "写入文件（覆盖整个文件——未包含的原内容会丢失）。只有新建文件或整体重写时用；修改现有文件优先用 edit_file。",
             "parameters": {
                 "type": "object",
                 "properties": {
