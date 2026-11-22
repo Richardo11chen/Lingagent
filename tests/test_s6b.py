@@ -967,15 +967,28 @@ def test_ws_rejects_missing_or_wrong_token(monkeypatch):
                 ws.receive_json()
 
 
-def test_token_endpoint_needs_an_allowed_origin(monkeypatch):
-    """这条是 token 的命门：无 Origin 一律拒，否则一条 curl 就把钥匙拿走了。"""
+def test_token_endpoint_allows_same_origin_but_not_other_pages(monkeypatch):
+    """同源页面必须拿得到 token；别人的网页拿不到。
+
+    **这里曾经写反过**：原来断言「无 Origin → 403」，把它当成"curl/脚本"。
+    但浏览器**同源 fetch 不带 Origin**（只有跨源请求才带），于是打包版页面永远拿不到
+    token、WS 必然 403——0.2.0 就这么发出去的，dev 模式（5173 → 8000 跨端口）测不出来。
+
+    "拦脚本"那条从来就不成立：脚本伪造一个 `Origin: http://127.0.0.1:8000` 就能拿到。
+    Origin 的真实价值只在浏览器——它伪造不了这个头。
+    """
     c = TestClient(server.app)
 
-    assert c.get("/api/token").status_code == 403                      # curl / 脚本
+    # 同源页面：浏览器不发 Origin，必须给
+    r = c.get("/api/token")
+    assert r.status_code == 200
+    assert r.json()["token"] == server.SESSION_TOKEN
+    assert "access-control-allow-origin" not in r.headers  # 同源不需要 ACAO
+
+    # 别人的网页：Origin 是浏览器填的，伪造不了 → 拒
     assert c.get("/api/token", headers={"origin": "https://evil.com"}).status_code == 403
 
     r = c.get("/api/token", headers={"origin": "http://localhost:5173"})
     assert r.status_code == 200
-    assert r.json()["token"] == server.SESSION_TOKEN
     # dev server 跨端口要读得到，所以回显 ACAO——但只回显放行的那个来源
     assert r.headers["access-control-allow-origin"] == "http://localhost:5173"

@@ -18,8 +18,9 @@ const WS_URL = DEV_PORT
   ? `ws://${location.hostname || '127.0.0.1'}:${DEV_PORT}/ws`
   : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
 
-// 每次启动后端都会换一个 token，页面得先问一次。同源 fetch（dev 是跨端口，
-// 靠服务端回显 ACAO），非浏览器拿不到——所以这不算"把钥匙挂在门口"。
+// 每次启动后端都会换一个 token，页面得先问一次。同源 fetch 不带 Origin（只有跨源才带），
+// 所以服务端对"没有 Origin"放行、只拒不认识的 Origin——真正拦得住脚本的不是这里，
+// 是浏览器伪造不了 Origin 这一条。
 const TOKEN_URL = DEV_PORT
   ? `http://${location.hostname || '127.0.0.1'}:${DEV_PORT}/api/token`
   : `${location.origin}/api/token`

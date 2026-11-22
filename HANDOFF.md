@@ -172,9 +172,20 @@ git -c "http.https://github.com.proxy=http://127.0.0.1:7897" push origin main
 curl -s https://api.github.com/repos/Richardo11chen/Lingagent/commits/main
 ```
 
+**浏览器同源请求不带 `Origin`。** 2026-11-22 就是这么把 0.2.0 发出去的：`/api/token` 要求
+必须有 Origin（当成"挡 curl"），而打包版页面是同源 `fetch('/api/token')`，浏览器**不发** Origin
+→ 403 → 拿不到 token → `/ws` 403。dev 模式前端在 5173、后端在 8000，跨端口才带 Origin，
+所以手工测试永远是好的。
+
+教训不是"要测浏览器"，是**别把浏览器语义当成可以推理的**：同源不带 Origin、POST 带、
+WS 握手一定带——这三条不能靠"我觉得"。测试里那个 `assert c.get("/api/token").status_code == 403`
+把错误假设写死了，绿得心服口服。
+
+**`uvx` 撞本地索引缓存。** 报"no version found"时先看 Simple 索引（`/simple/lingagent/`），
+里面有了就是缓存旧，加 `--refresh`。
+
 **PyPI 的 JSON 有 CDN 缓存。** 发布成功后查 `https://pypi.org/pypi/lingagent/json` 可能还返回旧版本，
-查具体版本端点 `/pypi/lingagent/0.2.0/json` 才准。同理 `uvx --from lingagent==x.y.z` 会撞上 uv 的
-本地索引缓存 → 报"no version found"；Simple 索引（`/simple/lingagent/`）里已经有的话，加 `--refresh` 就好。
+查具体版本端点 `/pypi/lingagent/0.2.1/json` 才准。
 
 **CI 矩阵里的 `.python-version`。** 仓库根有 `.python-version = 3.14`，`uv sync` 会照它建 venv。所以 workflow 里必须写 `env: UV_PYTHON: ${{ matrix.python-version }}`，否则 3.11 那个 job 实际跑的是 3.14，矩阵是摆设。
 

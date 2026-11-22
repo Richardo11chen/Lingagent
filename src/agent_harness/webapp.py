@@ -92,17 +92,24 @@ def origin_allowed(origin: str | None, extra: tuple[str, ...] = ()) -> bool:
 
 @app.get("/api/token")
 async def api_token(request: Request):
-    """把本次启动的 token 交给**同源页面**。
+    """把本次启动的 token 交给页面（同源，或白名单里的 dev 来源）。
 
-    没有 Origin（curl / 脚本）一律 403：否则局域网里一条 curl 就把钥匙拿走了，
-    token 也就白设了。跨站页面读不到响应体（没有 ACAO 头时浏览器拦住）；
-    dev 模式下前端在 5173、后端在 8000，是跨端口，所以对白名单来源回显 ACAO。
+    **没有 Origin 就放行**——这不是漏洞，是浏览器同源请求的常态：只有跨源请求才带
+    `Origin`，同源 `fetch('/api/token')` 不带。要求必须有 Origin，等于让打包版页面
+    永远拿不到 token、WS 必然 403（0.2.0 就这么发出去的；dev 跨端口测不出来）。
+
+    那"拦脚本"呢？拦不住，也不该假装拦得住：脚本自己加一个
+    `Origin: http://127.0.0.1:8000` 就能拿到。`Origin` 的真实价值只在**浏览器**——
+    它按实际来源填，页面伪造不了。所以这里只拒"不认识的 Origin"。
+
+    跨端口 dev 要读得到，所以对放行的来源回显 ACAO；同源不需要。
     """
     origin = request.headers.get("origin")
-    if not origin or not origin_allowed(origin):
+    if origin and not origin_allowed(origin):
         raise HTTPException(status_code=403, detail="origin not allowed")
     resp = JSONResponse({"token": SESSION_TOKEN})
-    resp.headers["Access-Control-Allow-Origin"] = origin
+    if origin:
+        resp.headers["Access-Control-Allow-Origin"] = origin
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
