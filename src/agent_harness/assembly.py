@@ -8,6 +8,7 @@ from .hooks import forbid_env_writes, redact_secrets
 from .sensors import run_tests
 from .subagent import make_spawn_tool
 from .tools import edit_file, read_file, run_shell, task_output, task_stop, write_file
+from .workspace import Workspace
 
 # 只留能改变具体动作的规则；工具细节交给 schema，项目规矩交给 AGENTS.md（拼在下面）。
 SYSTEM_PROMPT = (
@@ -34,20 +35,29 @@ SYSTEM_PROMPT = (
     "做完就停，别为了显得卖力多调一个工具；没做完就说清卡在哪。"
 )
 
-WORKSPACE = Path.cwd()  # 工作目录 = 项目根
+WORKSPACE = Workspace(Path.cwd())  # 工作目录 = 项目根（全项目只在这里构造）
+
+
+def run_tests_here(path: str = ".") -> str:
+    """`run_tests` 的绑定版：项目根由装配层定死。
+
+    不用 partial——partial 会把 root 留在签名里，而 schema 只暴露 path，
+    契约测试就会报"签名与菜单不符"。
+    """
+    return run_tests(path, root=WORKSPACE.root)
 
 # 策略名单（S9）：加策略只往这里塞函数——loop 一个字不动
 PRE_HOOKS = [forbid_env_writes]
 POST_HOOKS = [redact_secrets]  # 能改写结果：密钥打码后再进 trace / 界面 / 上下文
 
 tools = {
-    "read_file": safe_tool(read_file, WORKSPACE),
-    "write_file": safe_tool(write_file, WORKSPACE),
-    "edit_file": safe_tool(edit_file, WORKSPACE),
+    "read_file": safe_tool(read_file, WORKSPACE.root),
+    "write_file": safe_tool(write_file, WORKSPACE.root),
+    "edit_file": safe_tool(edit_file, WORKSPACE.root),
     "run_shell": run_shell,  # shell 不包——命令危险面归 H 护栏管
     "task_output": task_output,  # 后台任务：看输出
     "task_stop": task_stop,  # 后台任务：停止
-    "run_tests": run_tests,  # pytest 判红绿
+    "run_tests": run_tests_here,  # pytest 判红绿（root 由装配层锁定，不进菜单）
 }
 
 
@@ -77,7 +87,7 @@ def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
         on_hook=on_hook,
         should_stop=should_stop,
         allow_commands=allow_commands,
-        workspace=workspace or WORKSPACE,  # 子 agent 的 shell 也要能提示「引用了工作区外」
+        workspace=workspace or WORKSPACE.root,  # 子 agent 的 shell 也要能提示「引用了工作区外」
         on_child_text=on_child_text,
         on_child_tool=on_child_tool,
         on_child_tool_result=on_child_tool_result,
@@ -106,14 +116,14 @@ def build_session_tools(llm, system_prompt: str, approver=None, tracer=None,
 
 def build_system_prompt() -> str:
     """基础 prompt + 规则文件（每次装配时拼最新）。"""
-    return SYSTEM_PROMPT + "\n\n" + load_rules(WORKSPACE)
+    return SYSTEM_PROMPT + "\n\n" + load_rules(WORKSPACE.root)
 
 
 def list_visible_sessions() -> list[dict]:
     """列可展示的历史会话（跳过没聊过的空会话占位）——CLI 与 Web 共用。"""
     from .session import list_sessions
 
-    return [s for s in list_sessions(WORKSPACE) if s["first_user_msg"]]
+    return [s for s in list_sessions(WORKSPACE.root) if s["first_user_msg"]]
 
 
 class SwitchableLLM:

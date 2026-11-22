@@ -73,9 +73,13 @@ def _has_make_target(makefile: Path, target: str) -> bool:
     return False
 
 
-def run_tests(path: str = ".") -> str:
-    """跑本项目的测试，返回红绿报告（工具入口，schema 只暴露 path）。"""
-    found = detect_runner(Path.cwd(), path)
+def run_tests(path: str = ".", root: Path | None = None) -> str:
+    """跑本项目的测试，返回红绿报告（工具入口，schema 只暴露 path）。
+
+    root 由装配层注入（= 工作区），不再自己取当前目录：这两者只在"启动时恰好在项目根"
+    这个前提下相等，而那个前提没有任何东西保证。
+    """
+    found = detect_runner(root or Path.cwd(), path)
     if found is None:
         return (
             "没找到测试入口：项目根下没有 pyproject.toml / package.json（含 test 脚本）/ "

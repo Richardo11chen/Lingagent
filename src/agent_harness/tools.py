@@ -26,7 +26,9 @@ DUMP_DIR = ".agent-harness-out"
 DUMP_KEEP_DAYS = 7
 
 
-def cap_result(text: str, limit: int = MAX_RESULT_CHARS) -> str:
+def cap_result(
+    text: str, limit: int = MAX_RESULT_CHARS, root: Path | None = None
+) -> str:
     """把工具结果压到上限内（头 + 尾 + 省略说明）——只用于进 history 的那一份。
 
     为什么保留尾部：命令失败的原因、traceback 结尾、pytest 总结都在最后几行，
@@ -39,7 +41,7 @@ def cap_result(text: str, limit: int = MAX_RESULT_CHARS) -> str:
     if len(text) <= limit:
         return text
     omitted = len(text) - _HEAD_CHARS - _TAIL_CHARS
-    where = _dump_full(text)
+    where = _dump_full(text, root)
     if where:
         hint = f"全文在 {where}（相对项目根）——用 read_file 或 `sed -n '1,200p' {where}` 分段看"
     else:
@@ -51,19 +53,22 @@ def cap_result(text: str, limit: int = MAX_RESULT_CHARS) -> str:
     )
 
 
-def _dump_full(text: str) -> str:
-    """把全文写到工作目录的 `.agent-harness-out/`，返回相对路径；失败返回 ""。
+def _dump_full(text: str, root: Path | None = None) -> str:
+    """把全文写到工作区的 `.agent-harness-out/`，返回相对路径；失败返回 ""。
+
+    root 由调用方给（装配层传工作区）。None 只在没接装配层的单测里出现——
+    那里退回当前目录，是为了不让一个便利功能把测试逼成必须造 Workspace。
 
     落盘只是便利，不该让一次工具调用失败——写不进去就退回"重新取"那句提示。
     """
     try:
-        root = Path.cwd()
-        d = root / DUMP_DIR
+        base = root or Path.cwd()
+        d = base / DUMP_DIR
         d.mkdir(exist_ok=True)
         _prune_dumps(d)
         p = d / f"{time.strftime('%Y%m%d-%H%M%S')}-{os.urandom(3).hex()}.txt"
         p.write_text(text, encoding="utf-8")
-        return p.relative_to(root).as_posix()
+        return p.relative_to(base).as_posix()
     except OSError:
         return ""
 

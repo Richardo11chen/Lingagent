@@ -18,6 +18,12 @@ const WS_URL = DEV_PORT
   ? `ws://${location.hostname || '127.0.0.1'}:${DEV_PORT}/ws`
   : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
 
+// 每次启动后端都会换一个 token，页面得先问一次。同源 fetch（dev 是跨端口，
+// 靠服务端回显 ACAO），非浏览器拿不到——所以这不算"把钥匙挂在门口"。
+const TOKEN_URL = DEV_PORT
+  ? `http://${location.hostname || '127.0.0.1'}:${DEV_PORT}/api/token`
+  : `${location.origin}/api/token`
+
 export default function App() {
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [input, setInput] = useState('')
@@ -42,6 +48,7 @@ export default function App() {
 
   const wsRef = useRef<WebSocket | null>(null)
   const sidRef = useRef('') // 当前会话 id：重连时用它 resume，否则后端会悄悄开一个空会话
+  const tokenRef = useRef('') // 本次启动的 WS token（后端重启会换，断线时清掉重取）
 
   useEffect(() => {
     let sock: WebSocket | null = null
@@ -184,8 +191,19 @@ export default function App() {
       }
     }
 
-    const connect = () => {
-      const ws = new WebSocket(WS_URL)
+    const connect = async () => {
+      if (!tokenRef.current) {
+        try {
+          const r = await fetch(TOKEN_URL)
+          if (r.ok) tokenRef.current = (await r.json()).token
+        } catch {
+          // 后端还没起来——下面不拼 token，连不上就走 onclose 的 1.5s 重试
+        }
+      }
+      const url = tokenRef.current
+        ? `${WS_URL}?token=${encodeURIComponent(tokenRef.current)}`
+        : WS_URL
+      const ws = new WebSocket(url)
       sock = ws
       wsRef.current = ws
       ws.onopen = () => {
@@ -204,6 +222,7 @@ export default function App() {
         setApproval(null)
         setRunning(false)
         setPending(false)
+        tokenRef.current = '' // 后端可能重启过，token 会换——重连前重新问
         if (!unmounted) retry = window.setTimeout(connect, 1500)
       }
       ws.onmessage = onMessage

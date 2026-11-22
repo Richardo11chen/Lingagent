@@ -15,6 +15,12 @@ from agent_harness.llm import Action
 from agent_harness.settings import Settings
 
 
+def connect(client, **kw):
+    """握手必须带 token——除了专门测 token 的用例，其他都不该被它挡住。"""
+    return client.websocket_connect(f"/ws?token={server.SESSION_TOKEN}", **kw)
+
+
+
 @pytest.fixture(autouse=True)
 def _isolate_archive_root(tmp_path, monkeypatch):
     """存档根重定向到临时目录——WS 连接会造占位会话，别污染 ~/.agent_harness_sessions。"""
@@ -53,7 +59,7 @@ def test_ws_streaming_and_done(monkeypatch, tmp_path):  # 基本流：session �
     monkeypatch.setattr(server, "save_messages", _no_save)
     monkeypatch.setattr(server, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
     c = TestClient(server.app)
-    with c.websocket_connect("/ws") as ws:
+    with connect(c) as ws:
         assert ws.receive_json()["type"] == "session"
         ws.send_json({"type": "user", "text": "干活"})
         types = []
@@ -82,7 +88,7 @@ def test_ws_approval_approved(monkeypatch, tmp_path):  # 批准路径：命令�
 
     monkeypatch.setitem(assembly.tools, "run_shell", fake_run_shell)  # 会话工具表从注册表拷贝（S10）
     c = TestClient(server.app)
-    with c.websocket_connect("/ws") as ws:
+    with connect(c) as ws:
         ws.receive_json()
         ws.send_json({"type": "user", "text": "干活"})
         while True:
@@ -129,7 +135,7 @@ def test_ws_remember_survives_to_the_next_turn(monkeypatch, tmp_path):
 
     c = TestClient(server.app)
     asked = 0
-    with c.websocket_connect("/ws") as ws:
+    with connect(c) as ws:
         ws.receive_json()  # session
         ws.receive_json()  # status
         for turn in (1, 2):
@@ -435,7 +441,7 @@ def test_busy_is_one_while_a_web_turn_runs(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "save_messages", _no_save)
     monkeypatch.setattr(server, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
     c = TestClient(server.app)
-    with c.websocket_connect("/ws") as ws:
+    with connect(c) as ws:
         ws.receive_json()  # session
         ws.receive_json()  # status
         ws.send_json({"type": "user", "text": "慢慢来"})
@@ -486,7 +492,7 @@ def test_ws_hook_denied_event(monkeypatch, tmp_path):  # 策略拦下 → WS 推
     monkeypatch.setattr(server, "save_messages", _no_save)
     monkeypatch.setattr(server, "trace_path", lambda w, s: tmp_path / f"{s}.trace.jsonl")
     c = TestClient(server.app)
-    with c.websocket_connect("/ws") as ws:
+    with connect(c) as ws:
         ws.receive_json()  # session
         ws.send_json({"type": "user", "text": "干活"})
         hook_ev = None
@@ -506,7 +512,7 @@ def test_ws_trace_request(monkeypatch, tmp_path):  # 轨迹时间线：trace_req
     tf.write_text('{"kind": "model", "step": 1, "n_actions": 0}\n', encoding="utf-8")
     monkeypatch.setattr(server, "trace_path", lambda w, s: tf)
     c = TestClient(server.app)
-    with c.websocket_connect("/ws") as ws:
+    with connect(c) as ws:
         assert ws.receive_json()["type"] == "session"
         assert ws.receive_json()["type"] == "status"  # 连上就报一次：审批模式 + 上下文用量
         ws.send_json({"type": "trace_request"})
@@ -518,7 +524,7 @@ def test_ws_trace_request(monkeypatch, tmp_path):  # 轨迹时间线：trace_req
 def test_ws_auto_approve_toggle(monkeypatch):  # 网页版自动批准：开关状态由服务端回执，别只在前端记
     monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings()))
     c = TestClient(server.app)
-    with c.websocket_connect("/ws") as ws:
+    with connect(c) as ws:
         ws.receive_json()  # session
         assert ws.receive_json()["auto"] is False
 
@@ -535,7 +541,7 @@ def test_ws_auto_approve_toggle(monkeypatch):  # 网页版自动批准：开关�
 def test_ws_new_session_switches_id_without_reconnect(monkeypatch):
     monkeypatch.setattr(server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings()))
     c = TestClient(server.app)
-    with c.websocket_connect("/ws") as ws:
+    with connect(c) as ws:
         first = ws.receive_json()["id"]
         ws.receive_json()  # status
 
@@ -570,7 +576,7 @@ def test_ws_lists_and_switches_models(monkeypatch):
     )
     monkeypatch.setattr(server, "save_session_model", lambda w, s, n: None)
     c = TestClient(server.app)
-    with c.websocket_connect("/ws") as ws:
+    with connect(c) as ws:
         ws.receive_json()  # session
         ws.receive_json()  # status
 
@@ -597,7 +603,7 @@ def test_ws_lists_sessions_for_the_picker(monkeypatch):
         lambda: [{"id": "s1", "first_user_msg": "旧会话"}],
     )
     c = TestClient(server.app)
-    with c.websocket_connect("/ws") as ws:
+    with connect(c) as ws:
         ws.receive_json()  # session
         ws.receive_json()  # status
         ws.send_json({"type": "sessions_request"})
@@ -615,7 +621,7 @@ def test_ws_tasks_requests_are_routed(monkeypatch):
     monkeypatch.setattr(server, "list_tasks", lambda: [{"id": "t1", "alive": True}])
     monkeypatch.setattr(server, "task_stop", lambda tid: stopped.append(tid))
     c = TestClient(server.app)
-    with c.websocket_connect("/ws") as ws:
+    with connect(c) as ws:
         ws.receive_json()  # session
         ws.receive_json()  # status
 
@@ -652,7 +658,7 @@ def test_resume_renders_tool_detail_and_body(monkeypatch):
     )
 
     c = TestClient(server.app)
-    with c.websocket_connect("/ws") as ws:
+    with connect(c) as ws:
         ws.receive_json()  # session
         ws.receive_json()  # status
         ws.send_json({"type": "resume", "id": "whatever"})
@@ -886,7 +892,7 @@ def test_ws_refuses_a_foreign_origin(monkeypatch):
     c = TestClient(server.app)
 
     with pytest.raises(WebSocketDisconnect):
-        with c.websocket_connect("/ws", headers={"origin": "https://evil.com"}) as ws:
+        with connect(c, headers={"origin": "https://evil.com"}) as ws:
             ws.receive_json()
 
 
@@ -897,5 +903,35 @@ def test_ws_still_accepts_no_origin(monkeypatch):
         server, "load_settings_and_llm", lambda sp, m=None, **kw: (FakeLLM(), Settings())
     )
     c = TestClient(server.app)
-    with c.websocket_connect("/ws") as ws:
+    with connect(c) as ws:
         assert ws.receive_json()["type"] == "session"
+
+
+# ---- token：Origin 挡浏览器，token 挡局域网里的 curl ----
+
+
+def test_ws_rejects_missing_or_wrong_token(monkeypatch):
+    """没有 Origin 的客户端放行是刻意的——所以它必须交出 token，否则 0.0.0.0 就等于开门。"""
+    from starlette.websockets import WebSocketDisconnect
+
+    monkeypatch.setattr(server, "load_settings", lambda: Settings())
+    c = TestClient(server.app)
+
+    for query in ("", "?token=wrong-token-value", "?token="):
+        with pytest.raises(WebSocketDisconnect):
+            with c.websocket_connect(f"/ws{query}") as ws:
+                ws.receive_json()
+
+
+def test_token_endpoint_needs_an_allowed_origin(monkeypatch):
+    """这条是 token 的命门：无 Origin 一律拒，否则一条 curl 就把钥匙拿走了。"""
+    c = TestClient(server.app)
+
+    assert c.get("/api/token").status_code == 403                      # curl / 脚本
+    assert c.get("/api/token", headers={"origin": "https://evil.com"}).status_code == 403
+
+    r = c.get("/api/token", headers={"origin": "http://localhost:5173"})
+    assert r.status_code == 200
+    assert r.json()["token"] == server.SESSION_TOKEN
+    # dev server 跨端口要读得到，所以回显 ACAO——但只回显放行的那个来源
+    assert r.headers["access-control-allow-origin"] == "http://localhost:5173"

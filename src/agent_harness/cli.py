@@ -118,7 +118,7 @@ def _trace_nudge(settings) -> None:
         return
     days = days_since_viewed()
     if days is None:  # 从没看过：拿最早的轨迹文件当基准，别对新项目唠叨
-        files = list_trace_files(WORKSPACE)
+        files = list_trace_files(WORKSPACE.root)
         if not files:
             return
         try:
@@ -237,10 +237,10 @@ def main() -> None:
 
     web = WebRun()
     if settings.web_autostart and tui.interactive():  # 管道/脚本模式不拉网页端
-        web = ensure_web(settings.server_port, WORKSPACE)
+        web = ensure_web(settings.server_port, WORKSPACE.root)
 
-    prune_empty_sessions(WORKSPACE)  # 打扫：清掉「开了没聊」的空占位（不阻塞——顺手的事）
-    session_id, history = choose_session(WORKSPACE, settings.default_model)
+    prune_empty_sessions(WORKSPACE.root)  # 打扫：清掉「开了没聊」的空占位（不阻塞——顺手的事）
+    session_id, history = choose_session(WORKSPACE.root, settings.default_model)
 
     # 底部显示上下文占比：分母是压缩阈值（同一个数，模型撞上去就会被压），
     # 分子是「系统提示 + 历史」的字符当量。history 每轮会被替换成新列表，
@@ -249,20 +249,20 @@ def main() -> None:
         lambda: (estimate_tokens(history) + len(base_prompt), settings.compact_threshold)
     )
     # 会话级模型（用户定）：打开哪个会话用它上次用的模型；--model 显式指定优先
-    saved = load_session_model(WORKSPACE, session_id)
+    saved = load_session_model(WORKSPACE.root, session_id)
     if saved and saved not in settings.models:
         tui.show_note(f"会话原用模型 {saved} 已不在配置里，回退默认", "warn")
     target = args.model or (saved if saved in settings.models else None)
     if target and target != llm.current_profile:
         llm.switch(target)
     if args.model:  # 显式指定 → 落账（这个会话从此认它）
-        save_session_model(WORKSPACE, session_id, llm.current_profile)
+        save_session_model(WORKSPACE.root, session_id, llm.current_profile)
     # S8：轨迹与 session 同目录同 id；关掉 [trace] enabled 就给空对象（不写盘）
-    tracer = Tracer(trace_path(WORKSPACE, session_id)) if settings.trace_enabled else Tracer()
+    tracer = Tracer(trace_path(WORKSPACE.root, session_id)) if settings.trace_enabled else Tracer()
     # 会话级装配建一次：模型、审批、轨迹、工作区、历史。每轮只把 goal 和回调递进去。
     session = Session(
         llm=llm, settings=settings, approver=approver,
-        workspace=WORKSPACE, tracer=tracer, history=history,
+        workspace=WORKSPACE.root, tracer=tracer, history=history,
     )
 
     tui.show_banner(session_id, len(history), llm.current, detect_shell().name)
@@ -279,7 +279,7 @@ def main() -> None:
             if goal in ("exit", "quit"):
                 break
             if goal == "/trace" or goal.startswith("/trace "):  # S8：轨迹时间线（只读投影）
-                recs = load_trace(trace_path(WORKSPACE, session_id))
+                recs = load_trace(trace_path(WORKSPACE.root, session_id))
                 mark_viewed()  # 体温计：这个功能还有人在用吗
                 arg = goal[len("/trace"):].strip()
                 if not arg:
@@ -295,7 +295,7 @@ def main() -> None:
                 if pick.isdigit() and 1 <= int(pick) <= len(llm.profiles):
                     name = llm.profiles[int(pick) - 1]
                     tui.show_note(f"已切换到 {llm.switch(name)}")
-                    save_session_model(WORKSPACE, session_id, name)  # 记在会话上，下次打开还认
+                    save_session_model(WORKSPACE.root, session_id, name)  # 记在会话上，下次打开还认
                 elif pick:  # 空输入 = 取消（面板上写了）；打了别的东西 = 说清楚，别静默吞
                     tui.show_note("没这个序号——按提示来", "warn")
                 continue
@@ -341,7 +341,7 @@ def main() -> None:
             finally:
                 signal.signal(signal.SIGINT, prev_sigint)
             tui.end_stream()
-            save_messages(WORKSPACE, session_id, history[old_len:])
+            save_messages(WORKSPACE.root, session_id, history[old_len:])
     finally:
         # 关 TUI 就连带收掉网页端：留着它们会变成孤儿，下次启动按端口判断会复用旧代码
         # （2026-10-24 就是这么卡住的：新按钮点了没反应，8000 上还是上个世纪的进程）。

@@ -7,11 +7,13 @@
 `server.py` 会把这些名字重新导出（`server.app` 等），调用方不用改 import。
 """
 
+import secrets
 import threading
 from pathlib import Path
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
@@ -47,6 +49,62 @@ def health() -> dict:
 # 打包形态：前端构建产物跟着包走（src/agent_harness/web_dist），后端一个端口全包
 # ——装完不用 Node、不用 vite，直接开 http://127.0.0.1:8000。
 WEB_DIST = Path(__file__).parent / "web_dist"
+
+
+# ---- 连接鉴权：Origin 挡浏览器，token 挡局域网里的 curl ----
+
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+# 每次启动都换。放进 webapp 而不是 server：它属于"这个 HTTP 面"，而且 token 端点必须
+# 注册在 SPA 通配路由**之前**——通配路由一匹配，后面的端点就轮不上了。
+SESSION_TOKEN = secrets.token_urlsafe(32)
+
+
+def origin_allowed(origin: str | None, extra: tuple[str, ...] = ()) -> bool:
+    """浏览器发起的 WebSocket 一定带 `Origin`，而且**页面无法伪造它**（由浏览器按实际来源填）。
+
+    所以"只接受本机来源"就足以挡住任意网页连 `ws://127.0.0.1:8000/ws`——
+    那些页面的 Origin 是 `https://evil.com`，连不上。这也是 WS 唯一的守门手段：
+    它不受同源策略和 CORS 约束，服务端不验 Origin 就等于对全网开放。
+
+    三种放行/拒绝的边界：
+    - **没有 Origin**（curl / 脚本 / 测试客户端）→ 放行。既然它已经能在本机执行代码，
+      多这道门没有意义；挡住它只会让调试变难。**但 WS 还要 token**，那条才是门闩。
+    - **`Origin: null`** → 拒绝。sandbox iframe、`file://` 页面的 Origin 就是字符串 "null"，
+      那正是最需要挡的来源。
+    - **端口不校验**：前端 dev server 是 5173、生产同端口是 8000，都可能；而端口不提供
+      额外安全性——攻击者换不了 Origin 里的 hostname。
+    """
+    if not origin:
+        return True
+    if origin == "null":
+        return False
+    try:
+        parsed = urlparse(origin)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    if (parsed.hostname or "").lower() in _LOCAL_HOSTS:
+        return True
+    return any(origin.rstrip("/") == e.rstrip("/") for e in extra)
+
+
+@app.get("/api/token")
+async def api_token(request: Request):
+    """把本次启动的 token 交给**同源页面**。
+
+    没有 Origin（curl / 脚本）一律 403：否则局域网里一条 curl 就把钥匙拿走了，
+    token 也就白设了。跨站页面读不到响应体（没有 ACAO 头时浏览器拦住）；
+    dev 模式下前端在 5173、后端在 8000，是跨端口，所以对白名单来源回显 ACAO。
+    """
+    origin = request.headers.get("origin")
+    if not origin or not origin_allowed(origin):
+        raise HTTPException(status_code=403, detail="origin not allowed")
+    resp = JSONResponse({"token": SESSION_TOKEN})
+    resp.headers["Access-Control-Allow-Origin"] = origin
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 def _web_dist_response(path: Path):

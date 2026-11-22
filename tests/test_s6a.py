@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from agent_harness import tui
+from agent_harness.workspace import Workspace
 
 
 def test_approval_eof_denies(monkeypatch):  # 审批时输入读尽（管道/流末尾）→ 无声即驳回
@@ -134,7 +135,8 @@ def test_exit_closes_the_web_it_started(tmp_path):
     script = (
         "import pathlib\n"
         "import agent_harness.cli as ah\n"
-        f"ah.WORKSPACE = pathlib.Path(r'{tmp_path}')\n"  # 会话/轨迹落临时目录，不污染真工作区
+        "from agent_harness.workspace import Workspace\n"
+        f"ah.WORKSPACE = Workspace(pathlib.Path(r'{tmp_path}'))\n"  # 会话/轨迹落临时目录，不污染真工作区
         "import agent_harness.tui as t\n"
         "t.interactive = lambda: True\n"
         "def _eof():\n"
@@ -371,7 +373,7 @@ def test_cli_repl_runs_one_turn_through_the_shared_orchestrator(monkeypatch, tmp
 
     monkeypatch.setattr(sys, "argv", ["lingan"])
     monkeypatch.setattr(session_mod, "SESSION_ROOT", tmp_path / "_archives")
-    monkeypatch.setattr(cli, "WORKSPACE", tmp_path)
+    monkeypatch.setattr(cli, "WORKSPACE", Workspace(tmp_path))
     monkeypatch.setattr(turn_mod, "run_turn", spy)
     monkeypatch.setattr(
         cli, "load_settings_and_llm",

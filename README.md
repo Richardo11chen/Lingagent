@@ -7,7 +7,7 @@
 - 终端界面（TUI）+ 网页界面（React，实时流 + 网页审批）
 - 危险动作走风险分级：只读放行 / 改动静默问人 / 极危险直拒
 - 每步动作留轨迹（trace），会话可恢复（session）
-- 硬标准：**移除真 LLM 后核心机制仍能用确定性单测验证**（319 条测试）
+- 硬标准：**移除真 LLM 后核心机制仍能用确定性单测验证**（323 条测试）
 
 ## 环境要求
 
@@ -157,7 +157,7 @@ cd web && npm install && npm run dev
 ## 测试
 
 ```bash
-uv run pytest                  # 全量（319 条）
+uv run pytest                  # 全量（323 条）
 uv run ruff check src tests    # 静态检查（E/F/W + import 排序 + pyupgrade + bugbear）
 cd web && npx tsc --noEmit     # 前端类型检查
 ```
@@ -235,9 +235,14 @@ agent 自己的 `run_tests` 工具按项目根的标记文件认测试入口，�
 
 窄屏（≤1180px 收右栏、≤900px 收左栏宽度）都能用，不做手机版——它不是给手机用的。
 
-**只接受本机来源的连接。** WebSocket 不受同源策略约束（没有预检、没有 CORS），所以任何一个网页都能对 `ws://127.0.0.1:8000/ws` 发起连接——能不能连上，取决于**服务端**验不验 `Origin`。这里在握手前就验：只放行 `localhost` / `127.0.0.1` / `::1` 的页面，`Origin: null`（sandbox iframe、`file://`）直接拒。
+**只接受本机来源的连接，而且要出示 token。** 两道门，各管一类对手：
 
-没有 `Origin` 的客户端（curl、脚本、测试）照常能用——那种情况下它已经能在本机执行代码，多一道门只是让调试变难。从局域网或手机访问时，把地址写进 `[server] extra_origins`：
+- **Origin 挡浏览器。** WebSocket 不受同源策略约束（没有预检、没有 CORS），任何网页都能对 `ws://127.0.0.1:8000/ws` 发起连接——能不能连上，取决于**服务端**验不验 `Origin`。这里只放行 `localhost` / `127.0.0.1` / `::1` 的页面，`Origin: null`（sandbox iframe、`file://`）直接拒。
+- **token 挡非浏览器。** 每次启动生成一个随机 token，WS 必须带 `?token=…`。页面通过 `GET /api/token` 取——**这条端点没有 Origin 就 403**，所以局域网里一条 `curl` 拿不到钥匙。
+
+两道都要，缺一不可：只有 Origin 的话，`server_host` 改成 `0.0.0.0` 之后，局域网里的 curl 不带 Origin，照样能连；只有 token 的话，token 得放在页面能读到的地方，而那地方正好是浏览器能访问的。
+
+从局域网或手机访问时，还要把地址写进 `[server] extra_origins`：
 
 ```toml
 [server]
@@ -488,11 +493,12 @@ src/agent_harness/
   subagent.py   子 agent（上下文隔离）
   settings.py   多 profile 配置
   paths.py      应用目录（~/.agent-harness）
+  workspace.py  工作区（项目根）——一个显式的值，不是各处 Path.cwd()
   assembly.py   公共装配 + SwitchableLLM
   tui.py        终端界面
   server.py     WebSocket 会话协议（一个连接 = 一个会话）
   webapp.py     HTTP 面：探活、静态界面托管
   weblaunch.py  TUI 启动时拉起网页端
-tests/          test_s1 ~ test_s11（含 s4b/s4c/s6a/s6b）+ tools / contract / package / turn / approval 等（319 条）
+tests/          test_s1 ~ test_s11（含 s4b/s4c/s6a/s6b）+ tools / contract / package / turn / approval 等（323 条）
 web/            React + TS + Vite 前端
 ```

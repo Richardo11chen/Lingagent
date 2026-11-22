@@ -179,7 +179,7 @@ def agent_loop(
 
             # 回灌历史的那一份要截断：history 会进下一次请求、也会落进 session 存档，
             # 一次 `find /c` 就能灌进 90MB（2026-10-19 真机撞过）——trace 那份保持完整。
-            fed = cap_result(result)
+            fed = cap_result(result, root=workspace)
             if action.tool_call_id:
                 # 回灌 tool 消息：模型发出的原始 tool_calls → 解析成 Action → 执行 → 回灌结果
                 history.append(Msg("tool", fed, tool_name=action.tool, tool_call_id=action.tool_call_id))  # 只回灌一次

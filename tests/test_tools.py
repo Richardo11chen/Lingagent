@@ -366,3 +366,22 @@ def test_read_file_refuses_oversized_files(tmp_path):
 
     assert "太大" in out and "sed -n" in out  # 拒绝的同时给一条出路
     assert "echo" not in out  # 没读内容
+
+
+def test_dump_follows_the_given_workspace(tmp_path):
+    """溢出落盘要听工作区的，而不是"进程恰好在哪"——否则 cd 过之后全文就写错地方。"""
+    from agent_harness.tools import MAX_RESULT_CHARS, cap_result
+
+    out = cap_result("x" * (MAX_RESULT_CHARS + 100), root=tmp_path)
+
+    assert (tmp_path / ".agent-harness-out").is_dir()
+    assert "全文在" in out and ".agent-harness-out" in out
+
+
+def test_workspace_exposes_dump_dir(tmp_path):
+    from agent_harness.workspace import Workspace
+
+    ws = Workspace(tmp_path)
+    assert ws.dump_dir == tmp_path / ".agent-harness-out"
+    assert ws.relative(tmp_path / "a" / "b.py") == "a/b.py"
+    assert ws.relative(tmp_path.parent / "outside.py") == str(tmp_path.parent / "outside.py")
