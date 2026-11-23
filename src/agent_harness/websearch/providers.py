@@ -164,104 +164,6 @@ class SearXNG:
         raise NotSupported("SearXNG 不提供抓取。")
 
 
-class AnthropicServerTool:
-    """借 Anthropic Messages 协议的 server tool 搜索（官方、或会说这套协议的网关都行）。
-
-    为什么不是"调 Anthropic 的搜索接口"：**这个协议里没有那个接口**。
-    `web_search_20250305` 是 `tools` 数组里的一个**类型名**——声明了它，服务端就自己执行搜索，
-    再按 `server_tool_use → web_search_tool_result → text` 的顺序把结果塞回响应流。
-    谁实现了这个类型名，谁就是服务端，和 host 无关。
-
-    于是同一个 base_url，换一种协议去问，本地网关（magpie 这类中转）也能给出搜索结果，
-    不用额外 key、不用直连官方。这也是这个类存在的唯一理由：**有些中转只认这个协议**。
-
-    已知边界（实测）：`encrypted_content` 基本是空的，所以做不了"引用上一轮的结果编号"
-    那种多轮校验——想要就每轮重搜。
-    """
-
-    name = "anthropic"
-    supports_fetch = False  # 正文交给内置抓取器
-
-    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 60.0):
-        # OpenAI 兼容配置里的 base_url 一般已经带 /v1，追加 /messages 正好。
-        # 别再补一层 /v1——那会变成 /v1/v1/messages（这个项目在 deepseek 那个 provider 上踩过）。
-        self._url = base_url.rstrip("/") + "/messages"
-        self._key = api_key
-        self._model = model
-        self._timeout = timeout
-
-    def search(self, query: str, n: int) -> list[Hit]:
-        payload = {
-            # 必须是配置里的模型名。网关只认它自己那套名字，写别的直接 404。
-            "model": self._model,
-            "max_tokens": 512,  # 只要结果块，正文是白花的
-            "tools": [{
-                "type": "web_search_20250305",
-                "name": "web_search",
-                "max_uses": max(1, n),
-            }],
-            "messages": [{
-                "role": "user",
-                "content": [{"type": "text", "text": f"Perform a web search for the query: {query}"}],
-            }],
-        }
-        headers = {
-            "anthropic-version": "2023-06-01",
-            "x-api-key": self._key,
-            "Authorization": f"Bearer {self._key}",  # 网关普遍只认这个，两个都带
-        }
-        try:
-            resp = httpx.post(self._url, json=payload, headers=headers, timeout=self._timeout)
-        except Exception as e:
-            raise SearchError(f"搜索失败：连不上 {self._url}（{type(e).__name__}）。") from e
-        if resp.status_code == 404:
-            raise SearchError(
-                f"搜索失败：{self._url} 不存在（HTTP 404）——"
-                "这个端点大概不是 Anthropic 协议的，改用 [search] provider = \"tavily\"。"
-            )
-        raise_for(resp, "搜索")
-
-        hits = _parse_server_tool(resp.json(), n)
-        if hits is None:
-            # 这类网关会**静默忽略**不认识的工具类型：200 但响应里什么都没有。
-            # 光看配置看不出来，所以这里必须说清楚，别让它表现成"搜到了 0 条"。
-            raise SearchError(
-                f"{self._url} 没有执行 web_search_20250305（响应里没有结果块）。"
-                "常见原因：这个端点不支持 server tool，或者 model 名不是网关认的那个。"
-                '退路：把 [search] provider 换成 "tavily"（需要 TAVILY_API_KEY）。'
-            )
-        return hits
-
-    def fetch(self, url: str) -> str:
-        raise NotSupported("Anthropic server tool 只负责搜索，正文用内置抓取器。")
-
-
-def _parse_server_tool(data: dict, n: int) -> list[Hit] | None:
-    """从 Messages 响应里挑出 `web_search_tool_result`，翻成 `Hit`。
-
-    返回 None = **没有这个块**（端点不支持）；返回 [] = 有块但真的没结果。
-    这两种必须分开：合成一个就等于把"配置错了"伪装成"网上没有"。
-    """
-    blocks = data.get("content")
-    if not isinstance(blocks, list):
-        return None
-    found = False
-    hits: list[Hit] = []
-    for block in blocks:
-        if not isinstance(block, dict) or block.get("type") != "web_search_tool_result":
-            continue
-        found = True
-        rows = block.get("content")
-        if isinstance(rows, dict):  # 出错时这里是个对象，不是数组
-            code = _s(rows.get("error_code") or rows.get("type"))
-            raise SearchError(f"搜索被服务端拒绝：{code}")
-        for r in rows if isinstance(rows, list) else []:
-            if not isinstance(r, dict):
-                continue
-            hits.append(Hit(_s(r.get("title")), _s(r.get("url")), _s(r.get("snippet"))))
-    return hits[:n] if found else None
-
-
 def pick_key(api_key_env: str, default_env: str) -> str:
     """按「显式指定的环境变量 → provider 的约定变量」取 key。"""
     env = api_key_env or default_env
@@ -270,18 +172,14 @@ def pick_key(api_key_env: str, default_env: str) -> str:
 
 def make(kind: str, *, base_url: str, api_key: str, searxng_url: str, api_key_env: str,
          model: str = ""):
-    """按名字造 provider；缺配置就抛 SearchError（调用方决定降级还是报错）。"""
+    """按名字造 provider；缺配置就抛 SearchError（调用方决定降级还是报错）。
+
+    `model` 目前没有 provider 用（留在这里是因为调用方统一传，省得改签名）。
+    """
     if kind == "deepseek":
         if not api_key:
             raise SearchError("搜索没启用：缺 DeepSeek 的 API key。")
         return DeepSeek(base_url, api_key)
-    if kind == "anthropic":
-        # 复用当前模型那把 key 和那个模型名——server tool 不需要另配
-        if not api_key:
-            raise SearchError("搜索没启用：缺 API key（这个 provider 复用当前模型的 key）。")
-        if not model:
-            raise SearchError("搜索没启用：不知道用哪个模型名（[models.*] 的 name 是空的）。")
-        return AnthropicServerTool(base_url, api_key, model)
     if kind == "tavily":
         key = pick_key(api_key_env, "TAVILY_API_KEY")
         if not key:
