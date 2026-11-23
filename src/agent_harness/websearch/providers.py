@@ -48,7 +48,15 @@ class DeepSeek:
 
     def search(self, query: str, n: int) -> list[Hit]:
         data = self._post("/v1/tools/search", {"query": query, "count": n}, "搜索")
-        rows = data.get("results") or data.get("items") or []
+        rows = data.get("results")
+        if rows is None:
+            rows = data.get("items")
+        if rows is None:
+            # 200 但没有结果字段：这个端点没有 /v1/tools/search，或者回的完全是别的东西。
+            # 不能当成"没搜到"——那会把"这条路走不通"伪装成"网上没有"。
+            raise NotSupported(
+                f"{self._base}/v1/tools/search 没有返回搜索结果（可能是中转站不提供这个接口）。"
+            )
         return [
             Hit(
                 title=_s(r.get("title")),

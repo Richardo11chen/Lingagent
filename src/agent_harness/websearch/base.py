@@ -17,12 +17,16 @@ class Hit:
     snippet: str = ""
 
 
-class NotSupported(Exception):
-    """该 provider 不提供这项能力（目前只有 fetch 会出现）。"""
-
-
 class SearchError(Exception):
     """给人看的失败。消息本身就是最终文案——工具层直接回灌给模型，不再加工。"""
+
+
+class NotSupported(SearchError):
+    """该端点不提供这项能力（目前只有 fetch 会出现）。
+
+    继承 `SearchError` 是有意的：工具层只需要一个 except 分支，而它的消息本身
+    就已经是给人看的话。**但探测要能区分它和"网络炸了"**——见 `__init__._works`。
+    """
 
 
 class SearchProvider(Protocol):

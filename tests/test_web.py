@@ -113,14 +113,90 @@ class _Profile:
         self.name = name
 
 
-def test_auto_prefers_deepseek_then_tavily(monkeypatch):
+def _offline(monkeypatch):
+    """把 HTTP 换成"一律 404"，并清掉自动探测的缓存。
+
+    `auto` 现在是**真发请求**去问端点会什么，测试里必须挡掉——否则每跑一次测试
+    就在打 api.openai.com（每条 3 秒超时，还会失败）。
+    """
+    import agent_harness.websearch as w
+    import agent_harness.websearch.providers as p
+
+    w._AUTO_CACHE.clear()
+    monkeypatch.setattr(p.httpx, "post", lambda *a, **kw: _resp({}, status=404))
+    monkeypatch.setattr(p.httpx, "get", lambda *a, **kw: _resp({}, status=404))
+
+
+def test_auto_trusts_the_official_deepseek_domain_without_probing(monkeypatch):
+    """官方域名直接认，不发探测请求——省一次，也别往真金白银的接口上打试探。"""
+    import agent_harness.websearch as w
+    import agent_harness.websearch.providers as p
+
+    w._AUTO_CACHE.clear()
+    calls = []
+    monkeypatch.setattr(p.httpx, "post", lambda *a, **kw: calls.append(1) or _resp({}, 404))
+
     assert build_provider(SearchConfig(), _Profile()).name == "deepseek"
+    assert calls == []
 
-    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+def test_auto_probes_the_endpoint_and_gives_up(monkeypatch):
+    """两条路都不通 → 当作没有搜索源（工具不出现），而不是装一个必然失败的。"""
+    _offline(monkeypatch)
     other = _Profile(base_url="https://api.openai.com", api_key="", api_key_env="")
-    assert build_provider(SearchConfig(), other) is None  # 没有可用搜索源 → 工具不出现
+    assert build_provider(SearchConfig(), other) is None
 
+
+def test_auto_does_not_enable_the_server_tool_path(monkeypatch):
+    """`auto` 不自动开 anthropic 那条路——**实测它给的可能是垃圾**。
+
+    一个"能通"的网关：换三种措辞、中英文都试，返回结果和查询毫无关系
+    （问 CPython 回来知乎气囊/虎扑）。工具层没法判断结果相不相关，所以宁可
+    没有这个工具，也不要装一个会拿垃圾当真、还被模型引用的搜索工具。
+
+    想要它，就显式配 provider = "anthropic"——那是用户在为自己的网关负责。
+    """
+    import agent_harness.websearch as w
+    import agent_harness.websearch.providers as p
+
+    w._AUTO_CACHE.clear()
+
+    def fake_post(url, **kw):
+        if url.endswith("/tools/search"):
+            return _resp({}, status=404)
+        return _resp({"content": [{"type": "web_search_tool_result", "content": [
+            {"type": "web_search_result", "title": "t", "url": "u"}]}]})
+
+    monkeypatch.setattr(p.httpx, "post", fake_post)
+    prof = _Profile(base_url="http://127.0.0.1:3425/v1", name="workbuddy/x")
+    assert build_provider(SearchConfig(), prof) is None
+
+    # 显式点名就照办（协议本身是通的）
+    picked = build_provider(SearchConfig(provider="anthropic"), prof)
+    assert picked is not None and picked.name == "anthropic"
+
+
+def test_auto_probe_is_cached(monkeypatch):
+    """装配每轮都会调 build_provider——不缓存就是每轮两次空请求。"""
+    import agent_harness.websearch as w
+    import agent_harness.websearch.providers as p
+
+    w._AUTO_CACHE.clear()
+    n = []
+    monkeypatch.setattr(p.httpx, "post", lambda *a, **kw: n.append(1) or _resp({}, 404))
+
+    prof = _Profile(base_url="https://api.openai.com", api_key="k")
+    build_provider(SearchConfig(), prof)
+    first = len(n)
+    build_provider(SearchConfig(), prof)
+    assert first >= 1 and len(n) == first  # 第二次没再发请求
+
+
+def test_tavily_key_wins_over_probing(monkeypatch):
+    """有 tavily key 就直接用：用户既然配了，就该按它算。"""
+    _offline(monkeypatch)
     monkeypatch.setenv("TAVILY_API_KEY", "t")
+    other = _Profile(base_url="https://api.openai.com", api_key="")
     assert build_provider(SearchConfig(), other).name == "tavily"
 
 
