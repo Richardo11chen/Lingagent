@@ -25,6 +25,10 @@ def build_provider(cfg, profile) -> SearchProvider | None:
 
     `auto` 的顺序：当前 profile 是 deepseek → 用它；否则环境里有 TAVILY_API_KEY → tavily；
     都没有就不开。不配也能用，是默认值该有的样子。
+
+    `anthropic` 必须**显式**配：它借的是 Anthropic Messages 协议的 server tool
+    （`web_search_20250305`），只对"会说这套协议的端点"有效。URL 上看不出来，所以不猜——
+    猜错的代价是每轮搜索都失败，比不出现更糟（见 `providers.AnthropicServerTool`）。
     """
     kind = (getattr(cfg, "provider", "auto") or "auto").strip().lower()
     if kind == "off":
@@ -42,6 +46,8 @@ def build_provider(cfg, profile) -> SearchProvider | None:
             base_url=getattr(profile, "base_url", ""),
             api_key=getattr(profile, "api_key", "")
             or os.environ.get(getattr(profile, "api_key_env", ""), ""),
+            # anthropic server tool 要用"配置里那个模型名"（网关只认它），其余 provider 忽略
+            model=str(getattr(profile, "name", "") or ""),
             searxng_url=getattr(cfg, "searxng_url", ""),
             api_key_env=getattr(cfg, "api_key_env", ""),
         )

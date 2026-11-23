@@ -69,7 +69,10 @@ allow = []
 [search]
 # 联网搜索。auto = 当前 profile 是 DeepSeek 就用 DeepSeek 的 Search API（复用模型那把 key），
 # 否则看环境里有没有 TAVILY_API_KEY，都没有就不开（工具不会出现在菜单里）。
-provider = "auto"           # auto | deepseek | tavily | brave | searxng | off
+provider = "auto"           # auto | deepseek | anthropic | tavily | brave | searxng | off
+                            # anthropic：自定义一个"会说 Anthropic 协议"的端点（如本地中转）
+                            #   时用——它把 web_search_20250305 当 server tool 自己执行搜索。
+                            #   复用当前模型的 base_url / key / name，不需要另配。
 max_results = 5
 snippet_budget = 1500       # 摘要总预算（字符），按条数均分：5 条 → 每条 300
 # api_key_env = "TAVILY_API_KEY"   # 空 = 按 provider 约定（tavily→TAVILY_API_KEY，brave→BRAVE_API_KEY）

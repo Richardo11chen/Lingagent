@@ -10,7 +10,14 @@ from agent_harness.settings import SearchConfig
 from agent_harness.websearch import build_provider, make_tools
 from agent_harness.websearch.base import Hit
 from agent_harness.websearch.fetch import SSRFBlocked, assert_public, html_to_text
-from agent_harness.websearch.providers import Brave, DeepSeek, SearXNG, Tavily
+from agent_harness.websearch.providers import (
+    AnthropicServerTool,
+    Brave,
+    DeepSeek,
+    SearchError,
+    SearXNG,
+    Tavily,
+)
 
 # ---- 内置抓取器 ----
 
@@ -98,10 +105,12 @@ def test_searxng_reads_results_array(monkeypatch):
 
 
 class _Profile:
-    def __init__(self, base_url="https://api.deepseek.com", api_key="k", api_key_env=""):
+    def __init__(self, base_url="https://api.deepseek.com", api_key="k", api_key_env="",
+                 name="deepseek-flash"):
         self.base_url = base_url
         self.api_key = api_key
         self.api_key_env = api_key_env
+        self.name = name
 
 
 def test_auto_prefers_deepseek_then_tavily(monkeypatch):
@@ -202,3 +211,92 @@ def test_snippet_squashes_markdown_noise():
 
     raw = "## 标题\n\n![图](x.png) 正文 [链接](http://a) 继续  还有\t空格"
     assert _squash(raw) == "标题 正文 链接 继续 还有 空格"
+
+
+# ---- anthropic：借 Messages 协议的 server tool ----
+
+
+def _resp(payload, status=200):
+    class R:
+        status_code = status
+        text = ""
+
+        def json(self):
+            return payload
+
+    return R()
+
+
+def test_anthropic_reads_the_server_tool_block(monkeypatch):
+    """把 web_search_20250305 塞进 tools，从响应里挑 web_search_tool_result。
+
+    这条路的核心是"声明一个类型名"，不是调某个搜索接口——所以断言落在请求体上。
+    """
+    import agent_harness.websearch.providers as p
+
+    seen = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        seen.update(url=url, body=json, headers=headers)
+        return _resp({"content": [
+            {"type": "server_tool_use", "id": "x", "name": "web_search", "input": {"query": "q"}},
+            {"type": "web_search_tool_result", "content": [
+                {"type": "web_search_result", "title": "标题", "url": "https://a", "snippet": "摘要"},
+                {"type": "web_search_result", "title": "二号", "url": "https://b"},  # 没有 snippet
+            ]},
+            {"type": "text", "text": "根据搜索结果……"},
+        ]})
+
+    monkeypatch.setattr(p.httpx, "post", fake_post)
+    hits = AnthropicServerTool("http://127.0.0.1:3425/v1", "k", "workbuddy/x").search("怎么装", 5)
+
+    assert seen["url"] == "http://127.0.0.1:3425/v1/messages"  # 不再拼一层 /v1
+    assert seen["body"]["tools"][0]["type"] == "web_search_20250305"
+    assert seen["body"]["model"] == "workbuddy/x"  # 用配置里那个名字，网关只认它
+    assert [h.title for h in hits] == ["标题", "二号"]
+    assert hits[1].snippet == ""  # 缺字段要容错，不能崩
+
+
+def test_anthropic_says_so_when_the_endpoint_ignores_the_tool(monkeypatch):
+    """网关静默忽略不认识的类型：200 但没有结果块。
+
+    必须和"搜到了 0 条"分开——否则配置错了会表现成"网上没有"，人永远查不出来。
+    """
+    import agent_harness.websearch.providers as p
+
+    monkeypatch.setattr(
+        p.httpx, "post", lambda *a, **kw: _resp({"content": [{"type": "text", "text": "好的"}]})
+    )
+    with pytest.raises(SearchError) as exc:
+        AnthropicServerTool("http://x/v1", "k", "m").search("q", 3)
+    assert "web_search_20250305" in str(exc.value)
+
+
+def test_anthropic_404_points_at_the_wrong_protocol(monkeypatch):
+    """端点没有 /messages：说清是协议不对，别让人去找 key 的问题。"""
+    import agent_harness.websearch.providers as p
+
+    monkeypatch.setattr(p.httpx, "post", lambda *a, **kw: _resp({}, status=404))
+    with pytest.raises(SearchError) as exc:
+        AnthropicServerTool("http://x/v1", "k", "m").search("q", 3)
+    assert "404" in str(exc.value) and "tavily" in str(exc.value)
+
+
+def test_anthropic_needs_the_model_name_from_config():
+    """没有模型名就不装——网关会 404 掉随便写的名字。"""
+    from agent_harness.websearch.providers import make
+
+    with pytest.raises(SearchError):
+        make("anthropic", base_url="http://x/v1", api_key="k",
+             searxng_url="", api_key_env="", model="")
+
+
+def test_provider_anthropic_is_explicit_only(monkeypatch):
+    """auto 不会自己挑 anthropic：URL 上看不出端点会不会这套协议。"""
+    other = _Profile(base_url="http://127.0.0.1:3425/v1", name="workbuddy/x")
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    assert build_provider(SearchConfig(), other) is None
+
+    picked = build_provider(SearchConfig(provider="anthropic"), other)
+    assert picked is not None and picked.name == "anthropic"
+    assert picked.supports_fetch is False  # 正文交给内置抓取器

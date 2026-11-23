@@ -436,11 +436,13 @@ fetch_url("https://…")            → 该页正文，转成纯文本，截断 
 view_image("shot.png", "有没有报错？") → 文字描述
 ```
 
-**搜索源不绑定厂商**。`[search] provider` 支持 `deepseek`（复用模型那把 key）、`tavily`、`brave`、`searxng`（自建），`auto` 的默认顺序是：当前 profile 是 DeepSeek 就用它 → 否则看环境里有没有 `TAVILY_API_KEY` → 都没有就不开。
+**搜索源不绑定厂商**。`[search] provider` 支持 `deepseek`（复用模型那把 key）、`anthropic`、`tavily`、`brave`、`searxng`（自建），`auto` 的默认顺序是：当前 profile 是 DeepSeek 就用它 → 否则看环境里有没有 `TAVILY_API_KEY` → 都没有就不开。
+
+`anthropic` 是个特殊的一项：它不调任何搜索接口，而是**借 Anthropic Messages 协议的 server tool**——请求里放一个 `web_search_20250305`，会说这套协议的端点（官方、或 magpie 这类本地中转）就会自己执行搜索并把结果塞回响应流。所以如果你用中转网关、且它有搜索能力却没给 REST 接口，把 `provider` 设成 `"anthropic"` 就能直接白拿，不用额外 key。**它必须显式配**：URL 上看不出端点会不会这套协议，猜错的代价是每次搜索都失败。
 
 ```toml
 [search]
-provider = "auto"        # auto | deepseek | tavily | brave | searxng | off
+provider = "auto"        # auto | deepseek | anthropic | tavily | brave | searxng | off
 max_results = 5
 snippet_budget = 1500    # 所有摘要加起来的字符预算，按条数均分（5 条 → 每条 300）
 # api_key_env = "TAVILY_API_KEY"   # 空 = 按 provider 约定

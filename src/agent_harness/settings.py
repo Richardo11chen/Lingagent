@@ -51,9 +51,14 @@ class ModelProfile:
 
 @dataclass
 class SearchConfig:
-    """联网搜索。`auto` = 当前 profile 是 deepseek 就用它，否则看有没有 TAVILY_API_KEY。"""
+    """联网搜索。
 
-    provider: str = "auto"  # auto | deepseek | tavily | brave | searxng | off
+    `auto` = 当前 profile 是 deepseek 就用它，否则看有没有 TAVILY_API_KEY。
+    `anthropic` 必须显式配：它借的是 Anthropic Messages 协议的 server tool，只对会说
+    这套协议的端点（含 magpie 这类中转）有效，光看 base_url 看不出来。
+    """
+
+    provider: str = "auto"  # auto | deepseek | anthropic | tavily | brave | searxng | off
     max_results: int = 5
     # 所有摘要加起来的字符预算，按结果条数均分（5 条 → 每条 300；2 条 → 每条 750）
     snippet_budget: int = 1_500
