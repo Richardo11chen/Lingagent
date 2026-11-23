@@ -300,3 +300,25 @@ def test_provider_anthropic_is_explicit_only(monkeypatch):
     picked = build_provider(SearchConfig(provider="anthropic"), other)
     assert picked is not None and picked.name == "anthropic"
     assert picked.supports_fetch is False  # 正文交给内置抓取器
+
+
+def test_deepseek_tolerates_a_base_url_ending_with_v1(monkeypatch):
+    """配置里写不写 /v1 都该落到同一个路径。
+
+    OpenAI 的习惯是把 /v1 写进 base_url，而路径是死拼的 /v1/tools/search——
+    不削掉就会变成 /v1/v1/tools/search，对着网关就是 404。
+    """
+    import agent_harness.websearch.providers as p
+
+    seen = {}
+
+    def fake_post(url, **kw):
+        seen["url"] = url
+        return _resp({"results": []})
+
+    monkeypatch.setattr(p.httpx, "post", fake_post)
+    for base in ("https://api.deepseek.com", "https://api.deepseek.com/",
+                 "https://api.deepseek.com/v1", "https://api.deepseek.com/v1/"):
+        seen.clear()
+        DeepSeek(base, "k").search("q", 3)
+        assert seen["url"] == "https://api.deepseek.com/v1/tools/search", base

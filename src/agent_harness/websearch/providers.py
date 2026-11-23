@@ -27,7 +27,12 @@ class DeepSeek:
     supports_fetch = True
 
     def __init__(self, base_url: str, api_key: str, timeout: float = _TIMEOUT):
-        self._base = base_url.rstrip("/")
+        # base_url 在配置里既可能写成 https://api.deepseek.com，也可能按 OpenAI 习惯带 /v1。
+        # 路径是死拼的 /v1/tools/search，所以先把尾部的 /v1 削掉——否则会变成 /v1/v1/tools/search。
+        base = base_url.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[: -len("/v1")]
+        self._base = base
         self._key = api_key
         self._timeout = timeout
 
