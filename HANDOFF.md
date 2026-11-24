@@ -115,6 +115,7 @@ uv run lingan -web               # 只起后端（http://127.0.0.1:8000）
 | 精确 token 计数（tiktoken） | 那是 OpenAI 的 BPE，中文误差 30%。真正的问题是"哪段该丢" |
 | mypy | 8k 行一次性严格检查只产出噪音，先把 ruff 用起来 |
 | **同一会话并发跑两轮** | **永不支持**，不是"还没做"（别当 backlog）。history 是整份替换（`turn.py` 的 `history[:] = result.history`），两轮都从同一份快照出发，后完成的把前一轮整个覆盖；`tool_calls` 要 N 调用 ↔ N 回应且紧邻，交错就 400 且 `_repair_tool_pairs` 只补不排，会话永久坏掉；审批槽只有一格，第二轮会覆盖第一轮的 Event，第一轮卡到超时；trace 同一文件、落盘切片会重。排队串行是另一回事，也没做——跑着的时候再敲一句，多半是"我改主意了" |
+| **搜索不借任何一家的 server tool** | 试过 Anthropic 的 `web_search_20250305`（2026-11-23 加、11-24 撤）。协议本身是通的，但**它把"搜什么"交给端点那边的模型**：实测一个"能通"的网关，三种措辞、中英文都试，返回结果和查询毫无关系（问 CPython 回来知乎气囊/虎扑）。工具层判断不了相关性，装了等于让模型引用垃圾。只做框架内置的 `web_search` / `fetch_url`，跟 opencode 同一个取舍。DeepSeek 的 `deepseek_web_search` 那条同理且更贵（要改 LLM 层、搜索变成模型行为、失去结构化结果） |
 
 ### 5.10 写盘只走 `apply_change`
 
@@ -191,10 +192,12 @@ WS 握手一定带——这三条不能靠"我觉得"。测试里那个 `assert 
 
 ## 7. 当前状态
 
-- 已发布：**`0.2.0`**（PyPI，`uvx --from lingagent==0.2.0 lingan --help` 验过）
-- 这一版含：P0 diff 意图化 → P1 会话运行时 → P2 阶段一/二 → 提示词精简（430→65 字）→
+- 已发布：**`0.2.2`**（PyPI）。`0.2.1` 修的是"网页登不上"（`/api/token` 要求 Origin，
+  而同源 fetch 不带），`0.2.2` 修的是搜索：`auto` 改成问端点能力（给透传反代留路）、
+  `deepseek` 容忍 `base_url` 带 `/v1`、`NotSupported` 归一进 `SearchError`
+- 0.2.0 那一版含：P0 diff 意图化 → P1 会话运行时 → P2 阶段一/二 → 提示词精简（430→65 字）→
   子 agent 继承会话工具表 → schema 描述收紧；行为变化见 §6
-- 测试：349 passed + 1 skipped（skipped 是仅 POSIX 有效的进程树测试）
+- 测试：354 passed + 1 skipped（skipped 是仅 POSIX 有效的进程树测试）
 - CI：`.github/workflows/publish.yml`，4 个 test job（windows/ubuntu × 3.11/3.14）+ 1 个 publish
 
 ## 8. 待做项
